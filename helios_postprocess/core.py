@@ -223,20 +223,37 @@ def get_burn_diagnostics_corrected(times, neutron_rate=None, temp=None, dens=Non
     results = {}
     diagnostic = {}
     
-    # Get neutron production rate (or proxy)
-    if neutron_rate is not None:
-        rate_spatial = neutron_rate
-    elif temp is not None:
-        warnings.warn("Neutron rate not found, using T² as proxy")
-        rate_spatial = temp**2
-    else:
-        raise ValueError("Must provide either neutron_rate or temp")
+    # Get neutron rate - prefer DT fusion rate from Helios
+    fusion_var = None
+    for var in ['FusionRate_DT_nHe4', 'neutron_rate', 'fusion_power']:
+        if var in self.list_variables():
+            fusion_var = var
+            break
     
-    # Integrate over space to get time history
-    if rate_spatial.ndim == 2:
-        rate_time = np.sum(rate_spatial, axis=-1)
+    if fusion_var:
+        # Build global rate vs time by summing over zones at each step
+        rate_vs_time = np.zeros(len(self.times))
+        for i in range(len(self.times)):
+            spatial_rate = self.get_variable(fusion_var, time_idx=i)
+            rate_vs_time[i] = np.sum(spatial_rate)
+        rate = rate_vs_time
     else:
-        rate_time = rate_spatial
+        # Fallback: use temperature as proxy
+        temp_var = None
+        for var in ['ion_temperature', 'temp', 'temperature']:
+            if var in self.list_variables():
+                temp_var = var
+                break
+            
+        if temp_var:
+            rate_vs_time = np.zeros(len(self.times))
+            for i in range(len(self.times)):
+                temp = self.get_variable(temp_var, time_idx=i)
+                rate_vs_time[i] = np.sum(temp**2)
+            rate = rate_vs_time
+            warnings.warn(f"Neutron rate not found, using {temp_var}² as proxy")
+        else:
+            raise ValueError("Cannot find FusionRate_DT_nHe4, neutron_rate, fusion_power, or temperature")
     
     diagnostic['rate_time'] = rate_time
     diagnostic['times'] = times
@@ -845,65 +862,37 @@ class HeliosRun:
     # AREAL DENSITY METHODS
     # ========================================================================
     
-    def calculate_areal_density(
+	 def calculate_areal_density(
         self,
         time_idx: int = -1,
-        region: str = 'hot_spot',
-        method: str = 'integrated'
-    ) -> float:
+        region: str = 'total'
+    ) -> dict:
         """
         Calculate fuel areal density (ρR).
         
         Parameters
         ----------
         time_idx : int, optional
-            Time index. Default: -1 (peak burn)
+            Time index. Default: -1 (last step)
         region : str, optional
-            Region to analyze: 'hot_spot', 'fuel', or 'total'
-            Default: 'hot_spot'
-        method : str, optional
-            Calculation method: 'integrated' or 'line_average'
-            Default: 'integrated'
+            Region to analyze: 'total' for full target
             
         Returns
         -------
-        float
-            Areal density in g/cm²
-            
-        Examples
-        --------
-        >>> rho_R = run.calculate_areal_density()
-        >>> print(f"Hot spot ρR = {rho_R:.2f} g/cm²")
-        >>> 
-        >>> # Check ignition criterion
-        >>> if rho_R > 0.3:
-        ...     print("✓ Meets ρR ignition criterion")
+        dict with 'rhoR' in g/cm², 'density', 'r', 'dr'
         """
-        try:
-            from .physics.areal_density import calculate_areal_density_integrated
-            
-            density = self.get_variable('dens', time_idx=time_idx)
-            
-            # Get radial coordinate
-            if 'coordr' in self.coords:
-                r = self.coords['coordr']
-            elif 'coordx' in self.coords:
-                r = np.sqrt(self.coords['coordx']**2 + 
-                           self.coords['coordy']**2 + 
-                           self.coords['coordz']**2)
-            else:
-                raise ValueError("Could not determine radial coordinates")
-                
-            return calculate_areal_density_integrated(density, r)
-            
-        except ImportError:
-            # Fallback simple calculation
-            density = self.get_variable('dens', time_idx=time_idx)
-            if 'coordr' in self.coords:
-                dr = np.diff(self.coords['coordr']).mean()
-            else:
-                dr = 1e-4  # Default 1 μm spacing
-            return np.sum(density) * dr
+        density = self.get_variable('mass_density', time_idx=time_idx)
+        r = self.get_variable('zone_boundaries', time_idx=time_idx)
+        dr = np.diff(r)
+        
+        rhoR = np.sum(density * dr[:len(density)])
+        
+        return {
+            'rhoR': rhoR,
+            'density': density,
+            'r': r,
+            'dr': dr
+        }
     
     # ========================================================================
     # HOT SPOT & IGNITION METHODS
