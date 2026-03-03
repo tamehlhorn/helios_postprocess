@@ -402,7 +402,7 @@ class HeliosRun:
         verbose: bool = False
     ):
         """Initialize HeliosRun with ExodusII file."""
-        self.filepath = Path(exo_file).expanduser()
+        self.filepath = Path(exo_file).expanduser().expanduser()
         if not self.filepath.exists():
             raise FileNotFoundError(f"ExodusII file not found: {self.filepath}")
             
