@@ -203,3 +203,4 @@ def print_ignition_criteria():
     print(f"  Areal Density:    > {LINDL_CRITERIA['areal_density_gcm2']:.1f} g/cm²")
     print(f"  Convergence Ratio: > {LINDL_CRITERIA['convergence_ratio']:.0f}")
     print("=" * 70)
+from .data_builder import build_run_data, ICFRunData
