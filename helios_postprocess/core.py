@@ -862,7 +862,7 @@ class HeliosRun:
     # AREAL DENSITY METHODS
     # ========================================================================
     
-	 def calculate_areal_density(
+    def calculate_areal_density(
         self,
         time_idx: int = -1,
         region: str = 'total'
