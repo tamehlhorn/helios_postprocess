@@ -470,20 +470,16 @@ class ICFAnalyzer:
             logger.warning("Cannot find stagnation time: missing density data")
             return
         
-        # Find time of maximum mass-averaged density
-        mass_avg_density = np.zeros(len(self.data.time))
-        for t in range(len(self.data.time)):
-            mass_avg_density[t] = np.average(
-                self.data.mass_density[t],
-                weights=self.data.zone_mass[t]
-            )
+        # Peak density in any zone at each time step
+        peak_density_vs_time = np.max(self.data.mass_density, axis=1)
         
-        stag_idx = np.argmax(mass_avg_density)
+        # Stagnation = time of peak spatial-max density
+        stag_idx = np.argmax(peak_density_vs_time)
         self.data.stag_time = self.data.time[stag_idx]
-        self.data.max_density = mass_avg_density[stag_idx]
+        self.data.max_density = peak_density_vs_time[stag_idx]
         
         logger.info(f"Stagnation time: {self.data.stag_time:.3f} ns")
-        logger.info(f"Maximum density: {self.data.max_density:.2f} g/cc")
+        logger.info(f"Peak density: {self.data.max_density:.2f} g/cc")
     
     def _find_bang_time(self):
         """Find bang time from peak fusion power."""
@@ -705,159 +701,169 @@ class ICFAnalyzer:
             logger.warning("No fusion data available for yield calculation")
     
     def _compute_burn_width(self):
-        """Compute burn width (FWHM of fusion power)."""
+        """
+        Compute burn width (FWHM of fusion rate pulse).
+
+        Uses interpolation for sub-timestep accuracy, with RMS fallback
+        if FWHM cannot be determined (mirrors corrected logic in core.py).
+        """
         total_fusion = np.sum(self.data.fusion_power, axis=1)
         peak_power = np.max(total_fusion)
-        
-        threshold = self.config.get('burn_width_threshold', 0.5) * peak_power
-        
-        above_threshold = total_fusion > threshold
-        if np.any(above_threshold):
-            indices = np.where(above_threshold)[0]
-            t_start = self.data.time[indices[0]]
-            t_end = self.data.time[indices[-1]]
-            self.data.burn_width = t_end - t_start
-            
-            logger.info(f"Burn width (FWHM): {self.data.burn_width:.3f} ns")
+
+        if peak_power == 0:
+            logger.warning("Peak fusion rate is zero — cannot compute burn width")
+            return
+
+        half_max = peak_power / 2.0
+        above_half = total_fusion >= half_max
+
+        if np.sum(above_half) >= 2:
+            crossings = np.where(above_half)[0]
+
+            # Interpolate left crossing
+            if crossings[0] > 0:
+                idx_l = crossings[0] - 1
+                t_left = np.interp(
+                    half_max,
+                    [total_fusion[idx_l], total_fusion[idx_l + 1]],
+                    [self.data.time[idx_l], self.data.time[idx_l + 1]]
+                )
+            else:
+                t_left = self.data.time[crossings[0]]
+
+            # Interpolate right crossing
+            if crossings[-1] < len(self.data.time) - 1:
+                idx_r = crossings[-1]
+                t_right = np.interp(
+                    half_max,
+                    [total_fusion[idx_r + 1], total_fusion[idx_r]],
+                    [self.data.time[idx_r + 1], self.data.time[idx_r]]
+                )
+            else:
+                t_right = self.data.time[crossings[-1]]
+
+            fwhm = t_right - t_left
+
+            if fwhm > 0:
+                self.data.burn_width = fwhm
+                logger.info(f"Burn width (FWHM, interpolated): {fwhm:.4f} ns")
+                return
+
+        # ------- RMS fallback -------
+        time = self.data.time
+        rate = total_fusion
+        total_rate = np.sum(rate)
+        if total_rate > 0:
+            t_mean = np.sum(time * rate) / total_rate
+            t_sq_mean = np.sum(time**2 * rate) / total_rate
+            rms_width = np.sqrt(t_sq_mean - t_mean**2)
+            fwhm_from_rms = 2.355 * rms_width          # Gaussian relation
+
+            self.data.burn_width = fwhm_from_rms
+            logger.info(f"Burn width (RMS × 2.355 fallback): {fwhm_from_rms:.4f} ns")
+        else:
+            logger.warning("Cannot compute burn width — zero total fusion rate")
     
     def _compute_neutron_averaged_quantities(self):
         """
-        Compute neutron-weighted average quantities using the original notebook algorithm.
-        
-        These quantities are averaged over time AND space, weighted by:
-        - Fusion rate in each zone (neutrons produced per zone)
-        - Zone mass (for temperature and pressure)
-        
-        Normalization: divide by total neutron yield
-        
-        Key differences from simple time averaging:
-        - Weights by WHERE and WHEN fusion occurs
-        - Gives conditions during actual fusion reactions
+        Compute neutron-weighted average quantities.
+
+        These are averaged over time AND space, weighted by the DT fusion
+        reaction rate in each zone.  Gives the conditions "seen" by the
+        average neutron produced during the implosion.
+
+        FusionRate_DT_nHe4 from Helios is already a reaction rate
+        (reactions/s per zone, volume-integrated), NOT power in Watts.
+        Do NOT divide by energy_per_reaction.
+
+        Proper neutron-weighted average of quantity Q:
+            <Q>_n  =  Σ_t Σ_z  Q[t,z] · R[t,z] · Δt
+                      ─────────────────────────────────
+                       Σ_t Σ_z  R[t,z] · Δt
+
+        where R[t,z] is the zone-level DT fusion rate.
         """
         logger.info("Computing neutron-averaged quantities...")
-        
-        # Check if we have fusion power data (used as fusion rate)
+
         if self.data.fusion_power is None:
-            logger.warning("No fusion power data available for neutron averaging")
-            logger.info("Neutron-averaged quantities will be zero")
+            logger.warning("No fusion rate data available for neutron averaging")
             return
-        
-        # fusion_power is in Watts, but we need it as a rate (neutrons/s per zone)
-        # For DT fusion: each reaction produces 1 neutron and 17.6 MeV energy
-        # So: N_neutrons/s = Power(W) / (17.6 MeV * 1.602e-13 J/MeV)
-        MeV_per_reaction = 17.6
-        J_per_MeV = 1.602e-13
-        energy_per_reaction = MeV_per_reaction * J_per_MeV
-        
-        # Fusion rate array: neutrons/s per zone
-        fusion_rate = self.data.fusion_power / energy_per_reaction  # [time, space]
-        
-        # Total fusion rate vs time (sum over all zones)
-        fusion_rate_vec = np.sum(fusion_rate, axis=1)  # [time]
-        
-        # Check if there's any fusion
-        if np.max(fusion_rate_vec) == 0:
-            logger.warning("Fusion rate is zero at all times")
-            logger.info("Neutron-averaged quantities cannot be computed")
-            return
-        
-        # Compute total neutron yield
-        time_seconds = self.data.time * 1e-9  # Convert ns to s
-        dt_array = np.diff(time_seconds)
-        
-        # Neutron yield = integral of fusion rate over time
+
+        # fusion_power is FusionRate_DT_nHe4 — already reactions/s per zone
+        fusion_rate = self.data.fusion_power                     # (n_times, n_zones)
+        time_seconds = self.data.time * 1e-9                     # ns → s
+        dt_array = np.diff(time_seconds)                         # (n_times - 1,)
+
+        # Total neutron yield  (double sum: zones × time)
         neutron_yield = 0.0
         for t in range(len(dt_array)):
-            neutron_yield += fusion_rate_vec[t] * dt_array[t]
-        
+            neutron_yield += np.sum(fusion_rate[t]) * dt_array[t]
+
         if neutron_yield == 0:
-            logger.warning("Total neutron yield is zero")
+            logger.warning("Fusion rate is zero — cannot compute neutron-averaged quantities")
             return
-        
-        logger.info(f"Total neutron yield: {neutron_yield:.3e} neutrons")
-        
-        # 1. Neutron-averaged FUEL areal density
-        # Fuel includes first two layers: DT vapor + DT Ice (or DT vapor + wetted foam)
+
+        logger.info(f"Total neutron yield: {neutron_yield:.3e} reactions")
+
+        # ---- Neutron-averaged FUEL areal density ----
         if self.data.region_interfaces_indices is not None:
-            # Outer spatial index of the second zone at beginning time
             fuel_index = int(self.data.region_interfaces_indices[0, 1])
-            
-            # Need areal density array - compute if not available
-            if not hasattr(self.data, 'areal_density_vs_time'):
-                logger.warning("Areal density array not computed - will compute simplified version")
-                # Simplified: use bang_time value as proxy
-                if self.data.bang_time_fuel_areal_density > 0:
-                    self.data.neutron_ave_fuel_areal_density = self.data.bang_time_fuel_areal_density
-                    logger.info(f"Neutron-averaged fuel areal density (approximated): "
-                              f"{self.data.neutron_ave_fuel_areal_density:.4f} g/cm²")
-            else:
-                # Use time-resolved areal density at fuel boundary
+
+            if self.data.areal_density_vs_time is not None:
                 areal_density_fuel = self.data.areal_density_vs_time[:, fuel_index]
-                
                 areal_sum = 0.0
                 for t in range(len(dt_array)):
-                    areal_sum += areal_density_fuel[t] * fusion_rate_vec[t] * dt_array[t]
-                
+                    areal_sum += areal_density_fuel[t] * np.sum(fusion_rate[t]) * dt_array[t]
                 self.data.neutron_ave_fuel_areal_density = areal_sum / neutron_yield
                 logger.info(f"Neutron-averaged fuel areal density: "
-                          f"{self.data.neutron_ave_fuel_areal_density:.4f} g/cm²")
+                            f"{self.data.neutron_ave_fuel_areal_density:.4f} g/cm²")
+            elif self.data.bang_time_fuel_areal_density > 0:
+                self.data.neutron_ave_fuel_areal_density = self.data.bang_time_fuel_areal_density
+                logger.info(f"Neutron-averaged fuel ρR (approximated from bang time): "
+                            f"{self.data.neutron_ave_fuel_areal_density:.4f} g/cm²")
         else:
-            logger.warning("Region interfaces not identified - cannot compute fuel areal density")
-        
-        # 2. Neutron-averaged ion temperature
-        # Double loop over time and space, weighted by fusion_rate and zone_mass
-        if self.data.ion_temperature is not None and self.data.zone_mass is not None:
-            ion_temp_sum = 0.0
-            
+            logger.warning("Region interfaces not identified — cannot compute fuel areal density")
+
+        # ---- Neutron-averaged ion temperature ----
+        if self.data.ion_temperature is not None:
             n_times = len(dt_array)
+            n_zones = min(self.data.ion_temperature.shape[1], fusion_rate.shape[1])
+
+            temp_sum = 0.0
             for t in range(n_times):
                 dt = dt_array[t]
-                n_zones = self.data.ion_temperature.shape[1]
-                
-                # Handle variable zone counts
-                n_zones = min(n_zones, fusion_rate.shape[1], self.data.zone_mass.shape[1])
-                
                 for z in range(n_zones):
-                    ion_temp_sum += (self.data.ion_temperature[t, z] * 
-                                    fusion_rate[t, z] * 
-                                    dt * 
-                                    self.data.zone_mass[t, z])
-            
-            self.data.neutron_ave_ion_temperature = ion_temp_sum / neutron_yield
+                    temp_sum += self.data.ion_temperature[t, z] * fusion_rate[t, z] * dt
+
+            self.data.neutron_ave_ion_temperature = temp_sum / neutron_yield
             logger.info(f"Neutron-averaged ion temperature: "
-                       f"{self.data.neutron_ave_ion_temperature:.2f} eV")
+                        f"{self.data.neutron_ave_ion_temperature:.2f} eV")
         else:
-            logger.warning("Ion temperature or zone mass not available")
-        
-        # 3. Neutron-averaged pressure
-        # Same double loop, weighted by fusion_rate and zone_mass
-        if self.data.ion_pressure is not None and self.data.zone_mass is not None:
-            pressure_sum = 0.0
-            
+            logger.warning("Ion temperature not available for neutron averaging")
+
+        # ---- Neutron-averaged pressure ----
+        if self.data.ion_pressure is not None:
             n_times = len(dt_array)
+            n_zones = min(self.data.ion_pressure.shape[1], fusion_rate.shape[1])
+
+            pressure_sum = 0.0
             for t in range(n_times):
                 dt = dt_array[t]
-                n_zones = self.data.ion_pressure.shape[1]
-                
-                # Handle variable zone counts
-                n_zones = min(n_zones, fusion_rate.shape[1], self.data.zone_mass.shape[1])
-                
                 for z in range(n_zones):
-                    pressure_sum += (self.data.ion_pressure[t, z] * 
-                                    fusion_rate[t, z] * 
-                                    dt * 
-                                    self.data.zone_mass[t, z])
-            
+                    # Include electron (rad) pressure for total pressure
+                    p_total = self.data.ion_pressure[t, z]
+                    if self.data.rad_pressure is not None:
+                        p_total += self.data.rad_pressure[t, z]
+                    pressure_sum += p_total * fusion_rate[t, z] * dt
+
             neutron_ave_pressure = pressure_sum / neutron_yield
-            
-            # Convert units: Helios pressure is in J/cm³
-            # 1 Mbar = 1e5 J/cm³  →  P_Mbar = P_Jcm3 × 1e-5
+            # Convert: Helios J/cm³ → Mbar  (1 Mbar = 1e5 J/cm³)
+            # But CLAUDE.md says 1 Gbar = 1e8 J/cm³,  so 1 Mbar = 1e5 J/cm³ — ✓
             self.data.neutron_ave_pressure = neutron_ave_pressure * 1e-5
-            
             logger.info(f"Neutron-averaged pressure: "
-                       f"{self.data.neutron_ave_pressure:.2f} Mbar")
+                        f"{self.data.neutron_ave_pressure:.2f} Mbar")
         else:
-            logger.warning("Ion pressure or zone mass not available")
+            logger.warning("Ion pressure not available for neutron averaging")
     
     def compute_performance_metrics(self):
         """Compute overall performance metrics."""
