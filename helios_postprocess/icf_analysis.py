@@ -19,8 +19,13 @@ Date: 2025
 
 import numpy as np
 from scipy.signal import find_peaks
-from sklearn.linear_model import RANSACRegressor
 import logging
+
+try:
+    from sklearn.linear_model import RANSACRegressor
+    _HAS_SKLEARN = True
+except ImportError:
+    _HAS_SKLEARN = False
 
 logger = logging.getLogger(__name__)
 
