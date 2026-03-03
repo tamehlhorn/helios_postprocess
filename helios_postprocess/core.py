@@ -866,7 +866,7 @@ class HeliosRun:
         
         return {
             'rhoR': rhoR,
-            'density': density,220
+            'density': density
             'r': r,
             'dr': dr
         }
