@@ -73,6 +73,8 @@ class ICFRunData:
         self.electron_density: Optional[np.ndarray] = None        # (n_times, n_zones) cm⁻³
         self.neutron_production_rate: Optional[np.ndarray] = None # (n_times, n_zones)
         self.alpha_heating_power: Optional[np.ndarray] = None     # (n_times, n_zones)
+        self.dt_neutron_count: Optional[np.ndarray] = None        # time-integrated DT neutron yield
+        self.dd_neutron_count: Optional[np.ndarray] = None        # time-integrated DD neutron yield
         self.scale_length: Optional[np.ndarray] = None            # (n_times, n_zones) cm — derived
         self.region_interfaces_indices: Optional[np.ndarray] = None  # (n_times, n_regions)
         self.areal_density_vs_time: Optional[np.ndarray] = None  # (n_times, n_zones+1)
@@ -181,6 +183,10 @@ _VARIABLE_MAP = [
                                  "FusionRate_DD_nHe3"],                           False),
     ("alpha_heating_power",   ["alpha_heating_power", "alpha_power",
                                "alpha_heating"],                                  False),
+    ("dt_neutron_count",      ["TimeIntFusionProd_n_1406",
+                               "dt_neutron_count"],                               False),
+    ("dd_neutron_count",      ["TimeIntFusProd_n_0245",
+                               "dd_neutron_count"],                               False),
 ]
 
 
