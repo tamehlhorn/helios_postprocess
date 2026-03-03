@@ -58,7 +58,11 @@ class ICFRunData:
         self.elec_temperature: Optional[np.ndarray] = None    # (n_times, n_zones) eV
         self.ion_pressure: Optional[np.ndarray] = None        # (n_times, n_zones) J/cm³
         self.elec_pressure: Optional[np.ndarray] = None       # (n_times, n_zones) J/cm³
-        self.rad_pressure: Optional[np.ndarray] = None        # (n_times, n_zones) J/cm³ — alias, see note below
+        self.rad_pressure: Optional[np.ndarray] = None        # (n_times, n_zones) J/cm³
+        # NOTE: rad_pressure stores the "non-ion" component so that
+        # total_pressure = ion_pressure + rad_pressure works everywhere.
+        # If the EXODUS file has a true rad_pressure variable, this is
+        # elec_pressure + rad_pressure.  Otherwise it's elec_pressure alone.
         self.velocity: Optional[np.ndarray] = None            # (n_times, n_nodes) cm/s — node-centered
         self.zone_boundaries: Optional[np.ndarray] = None     # (n_times, n_nodes) cm — node-centered
         self.zone_mass: Optional[np.ndarray] = None           # (n_times, n_zones) g
@@ -73,10 +77,15 @@ class ICFRunData:
         self.electron_density: Optional[np.ndarray] = None        # (n_times, n_zones) cm⁻³
         self.neutron_production_rate: Optional[np.ndarray] = None # (n_times, n_zones)
         self.alpha_heating_power: Optional[np.ndarray] = None     # (n_times, n_zones)
+        self.alpha_heating_ion: Optional[np.ndarray] = None       # (n_times, n_zones) particle → ion
+        self.alpha_heating_ele: Optional[np.ndarray] = None       # (n_times, n_zones) particle → elec
         self.dt_neutron_count: Optional[np.ndarray] = None        # time-integrated DT neutron yield
         self.dd_neutron_count: Optional[np.ndarray] = None        # time-integrated DD neutron yield
+        self.dt_neutron_count_zone: Optional[np.ndarray] = None   # (n_times, n_zones) zone-resolved
         self.scale_length: Optional[np.ndarray] = None            # (n_times, n_zones) cm — derived
         self.region_interfaces_indices: Optional[np.ndarray] = None  # (n_times, n_regions)
+        self.material_index: Optional[np.ndarray] = None          # (n_zones,) material ID per zone
+        self.region_names: Optional[list] = None                   # list of region name strings
         self.areal_density_vs_time: Optional[np.ndarray] = None  # (n_times, n_zones+1)
 
         # ------------------------------------------------------------------
@@ -183,11 +192,33 @@ _VARIABLE_MAP = [
                                  "FusionRate_DD_nHe3"],                           False),
     ("alpha_heating_power",   ["alpha_heating_power", "alpha_power",
                                "alpha_heating"],                                  False),
+    ("alpha_heating_ion",     ["pt_particle_heating_ion"],                         False),
+    ("alpha_heating_ele",     ["pt_particle_heating_ele"],                         False),
     ("dt_neutron_count",      ["TimeIntFusionProd_n_1406",
                                "dt_neutron_count"],                               False),
     ("dd_neutron_count",      ["TimeIntFusProd_n_0245",
                                "dd_neutron_count"],                               False),
+    ("dt_neutron_count_zone", ["TimeIntFusionProd_n_1406_zone"],                  False),
 ]
+
+
+# ============================================================================
+# netCDF direct-load helper (for variables with non-standard names)
+# ============================================================================
+
+def _try_load_nc(ds, data, attr_name, nc_var_name, verbose=True):
+    """Try to load a variable directly from a netCDF4 Dataset."""
+    if nc_var_name in ds.variables:
+        try:
+            arr = np.asarray(ds.variables[nc_var_name][:], dtype=np.float64)
+            setattr(data, attr_name, arr)
+            if verbose:
+                logger.info(f"  ✓ {attr_name:30s} ← '{nc_var_name}' {arr.shape}")
+        except Exception as exc:
+            logger.warning(f"  ✗ Failed to load '{nc_var_name}' → {attr_name}: {exc}")
+    else:
+        if verbose:
+            logger.debug(f"  – '{nc_var_name}' not in EXODUS file")
 
 
 # ============================================================================
@@ -285,28 +316,81 @@ def build_run_data(
                 logger.debug(f"  – Optional '{attr_name}' not available")
 
     # ------------------------------------------------------------------
-    # rad_pressure alias
+    # rad_pressure: non-ion pressure component
     # ------------------------------------------------------------------
-    # The legacy modules reference ``data.rad_pressure`` (ion + rad) for
-    # total-pressure calculations.  In Helios, the physically meaningful
-    # second component is *electron* pressure (CLAUDE.md: "Total pressure:
-    # ion_pressure + elec_pressure").  We map elec_pressure → rad_pressure
-    # so existing downstream code works without modification.
+    # Downstream code computes total_pressure = ion_pressure + rad_pressure
+    # everywhere.  We set rad_pressure = (everything that isn't ion):
     #
-    # If a true radiation-pressure variable is ever added to the EXODUS
-    # file, a more explicit split should be introduced.
+    #   - If EXODUS has *both* elec_pressure and rad_pressure:
+    #       data.rad_pressure = elec_pressure + exodus_rad_pressure
+    #   - If EXODUS has only elec_pressure:
+    #       data.rad_pressure = elec_pressure      (PDD 8 path)
+    #   - If neither:
+    #       data.rad_pressure = zeros
     # ------------------------------------------------------------------
-    if data.elec_pressure is not None:
+    actual_rad = None
+    if "rad_pressure" in available_vars:
+        try:
+            actual_rad = np.asarray(run.get_variable("rad_pressure"), dtype=np.float64)
+            if verbose:
+                logger.info(f"  ✓ {'actual rad_pressure':30s} ← 'rad_pressure' {actual_rad.shape}")
+        except Exception as exc:
+            logger.warning(f"  ✗ Failed to load rad_pressure: {exc}")
+
+    if data.elec_pressure is not None and actual_rad is not None:
+        data.rad_pressure = data.elec_pressure + actual_rad
+        if verbose:
+            logger.info("  ✓ rad_pressure              ← elec_pressure + rad_pressure (3-component)")
+    elif data.elec_pressure is not None:
         data.rad_pressure = data.elec_pressure
         if verbose:
-            logger.info("  ✓ rad_pressure              ← elec_pressure (alias)")
+            logger.info("  ✓ rad_pressure              ← elec_pressure (2-component)")
+    elif actual_rad is not None:
+        data.rad_pressure = actual_rad
+        if verbose:
+            logger.info("  ✓ rad_pressure              ← rad_pressure only")
     else:
-        # Fallback: zero array so (ion + rad) == ion-only and nothing crashes
         if data.ion_pressure is not None:
             data.rad_pressure = np.zeros_like(data.ion_pressure)
-            logger.warning("  ⚠ elec_pressure not found — rad_pressure set to zeros")
+            logger.warning("  ⚠ No elec/rad pressure found — rad_pressure set to zeros")
         else:
             data.rad_pressure = None
+
+    # ------------------------------------------------------------------
+    # Region interfaces, material index, region names
+    # ------------------------------------------------------------------
+    # These EXODUS variables have non-standard names (spaces, long labels)
+    # so we load them directly from the underlying netCDF dataset.
+    # ------------------------------------------------------------------
+    ds = run.dataset if hasattr(run, 'dataset') else None
+    if ds is None and hasattr(run, 'ds'):
+        ds = run.ds
+
+    if ds is not None:
+        # Region interface indices: (n_times, n_regions)
+        _try_load_nc(ds, data, "region_interfaces_indices",
+                     "Indices at region interfaces", verbose)
+
+        # Material index: (n_zones,) — static, maps each zone to a material
+        _try_load_nc(ds, data, "material_index",
+                     "Material index", verbose)
+
+        # Region names: (n_regions, 100) char array → list of strings
+        if "name_spatial_regn" in ds.variables:
+            try:
+                raw = ds.variables["name_spatial_regn"][:]
+                names = []
+                for row in raw:
+                    name = b"".join(row).decode("utf-8", errors="ignore").strip()
+                    if name:
+                        names.append(name)
+                data.region_names = names if names else None
+                if verbose and data.region_names:
+                    logger.info(f"  ✓ {'region_names':30s} ← {data.region_names}")
+            except Exception as exc:
+                logger.warning(f"  ✗ Could not read region names: {exc}")
+    else:
+        logger.warning("  ⚠ No netCDF dataset handle — region/material info unavailable")
 
     # ------------------------------------------------------------------
     # Derived arrays
@@ -428,6 +512,22 @@ def _log_summary(data: ICFRunData) -> None:
         derived.append("scale_length")
     if derived:
         lines.append(f"  Derived arrays:  {', '.join(derived)}")
+
+    # Region / material info
+    if data.region_interfaces_indices is not None:
+        ri = data.region_interfaces_indices[0].astype(int)
+        n_regions = len(ri)
+        lines.append(f"  Regions:         {n_regions}")
+        # Build zone range description
+        prev = 0
+        for i, boundary in enumerate(ri):
+            name = data.region_names[i] if data.region_names and i < len(data.region_names) else f"Region {i+1}"
+            lines.append(f"    {i+1}. {name:20s}  zones {prev:3d}–{int(boundary)-1:3d}  ({int(boundary)-prev:3d} zones)")
+            prev = int(boundary)
+
+    if data.material_index is not None:
+        unique_mats = np.unique(data.material_index.astype(int))
+        lines.append(f"  Materials:       {len(unique_mats)} ({', '.join(str(m) for m in unique_mats)})")
 
     lines.append("═" * 60)
 
