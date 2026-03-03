@@ -8,8 +8,11 @@ Adapted for HeliosRun / data_builder pipeline.  Key changes from legacy version:
   - Accepts ICFRunData from helios_postprocess.data_builder
   - Laser energy units: J → MJ  (× 1e-6, not × 1e-13 for ergs)
   - Handles laser_energy_deposited as 1-D (scalar/time) or 2-D (zone-resolved)
-  - Neutron-averaged pressure: J/cm³ → Mbar  (× 1e-5, not erg/cm³ path)
+  - Pressures stored/reported in Gbar (× 1e-8 from J/cm³) per CLAUDE.md
+  - Temperatures stored/reported in keV (÷ 1000 from eV) per ICF convention
+  - Neutron-averaged pressure: J/cm³ → Gbar  (× 1e-8)
   - Fusion yield: prefers TimeIntFusionProd_n_1406 when available
+  - FusionRate_DT_nHe4 treated as reaction rate (not power) for neutron weighting
   - rad_pressure is aliased from elec_pressure by data_builder
     (total pressure = ion + elec per CLAUDE.md conventions)
 
@@ -519,12 +522,13 @@ class ICFAnalyzer:
                 self.data.stagnation_hot_spot_radius = np.max(hot_radii)
                 
                 # Hot spot pressure (mass-averaged)
-                pressure = (self.data.ion_pressure[stag_idx] + 
-                           self.data.rad_pressure[stag_idx]) * 1e-5  # Mbar
+                # CLAUDE.md: report pressure in Gbar.  1 Gbar = 1e8 J/cm³
+                pressure_Gbar = (self.data.ion_pressure[stag_idx] + 
+                           self.data.rad_pressure[stag_idx]) * 1e-8  # J/cm³ → Gbar
                 mass = self.data.zone_mass[stag_idx]
                 
                 self.data.hot_spot_pressure = np.average(
-                    pressure[hot_spot_mask],
+                    pressure_Gbar[hot_spot_mask],
                     weights=mass[hot_spot_mask]
                 )
                 
@@ -536,7 +540,7 @@ class ICFAnalyzer:
                 )
                 
                 logger.info(f"Hot spot radius: {self.data.stagnation_hot_spot_radius:.4f} cm")
-                logger.info(f"Hot spot pressure: {self.data.hot_spot_pressure:.2f} Mbar")
+                logger.info(f"Hot spot pressure: {self.data.hot_spot_pressure:.2f} Gbar")
                 
         except Exception as e:
             logger.warning(f"Could not compute hot spot properties: {e}")
@@ -639,8 +643,8 @@ class ICFAnalyzer:
         
         # Maximum DT temperature
         if self.data.ion_temperature is not None:
-            self.data.max_dt_temp = np.max(self.data.ion_temperature)
-            logger.info(f"Maximum DT temperature: {self.data.max_dt_temp:.2f} eV")
+            self.data.max_dt_temp = np.max(self.data.ion_temperature) / 1000.0  # eV → keV
+            logger.info(f"Maximum DT temperature: {self.data.max_dt_temp:.2f} keV")
     
     def _compute_fusion_yield(self):
         """
@@ -836,8 +840,10 @@ class ICFAnalyzer:
                     temp_sum += self.data.ion_temperature[t, z] * fusion_rate[t, z] * dt
 
             self.data.neutron_ave_ion_temperature = temp_sum / neutron_yield
+            # Convert eV → keV for reporting (CLAUDE.md convention)
+            self.data.neutron_ave_ion_temperature /= 1000.0
             logger.info(f"Neutron-averaged ion temperature: "
-                        f"{self.data.neutron_ave_ion_temperature:.2f} eV")
+                        f"{self.data.neutron_ave_ion_temperature:.2f} keV")
         else:
             logger.warning("Ion temperature not available for neutron averaging")
 
@@ -857,11 +863,10 @@ class ICFAnalyzer:
                     pressure_sum += p_total * fusion_rate[t, z] * dt
 
             neutron_ave_pressure = pressure_sum / neutron_yield
-            # Convert: Helios J/cm³ → Mbar  (1 Mbar = 1e5 J/cm³)
-            # But CLAUDE.md says 1 Gbar = 1e8 J/cm³,  so 1 Mbar = 1e5 J/cm³ — ✓
-            self.data.neutron_ave_pressure = neutron_ave_pressure * 1e-5
+            # Convert: Helios J/cm³ → Gbar  (1 Gbar = 1e8 J/cm³)
+            self.data.neutron_ave_pressure = neutron_ave_pressure * 1e-8
             logger.info(f"Neutron-averaged pressure: "
-                        f"{self.data.neutron_ave_pressure:.2f} Mbar")
+                        f"{self.data.neutron_ave_pressure:.2f} Gbar")
         else:
             logger.warning("Ion pressure not available for neutron averaging")
     
