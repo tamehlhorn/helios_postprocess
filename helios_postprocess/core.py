@@ -223,37 +223,14 @@ def get_burn_diagnostics_corrected(times, neutron_rate=None, temp=None, dens=Non
     results = {}
     diagnostic = {}
     
-    # Get neutron rate - prefer DT fusion rate from Helios
-    fusion_var = None
-    for var in ['FusionRate_DT_nHe4', 'neutron_rate', 'fusion_power']:
-        if var in self.list_variables():
-            fusion_var = var
-            break
-    
-    if fusion_var:
-        # Build global rate vs time by summing over zones at each step
-        rate_vs_time = np.zeros(len(self.times))
-        for i in range(len(self.times)):
-            spatial_rate = self.get_variable(fusion_var, time_idx=i)
-            rate_vs_time[i] = np.sum(spatial_rate)
-        rate = rate_vs_time
+ # Use provided neutron rate, or fall back to temperature proxy
+    if neutron_rate is not None:
+        rate_time = neutron_rate
+    elif temp is not None:
+        rate_time = np.array([np.sum(t**2) for t in temp]) if temp.ndim > 1 else temp**2
+        warnings.warn("Using temperature² as proxy for neutron rate")
     else:
-        # Fallback: use temperature as proxy
-        temp_var = None
-        for var in ['ion_temperature', 'temp', 'temperature']:
-            if var in self.list_variables():
-                temp_var = var
-                break
-            
-        if temp_var:
-            rate_vs_time = np.zeros(len(self.times))
-            for i in range(len(self.times)):
-                temp = self.get_variable(temp_var, time_idx=i)
-                rate_vs_time[i] = np.sum(temp**2)
-            rate = rate_vs_time
-            warnings.warn(f"Neutron rate not found, using {temp_var}² as proxy")
-        else:
-            raise ValueError("Cannot find FusionRate_DT_nHe4, neutron_rate, fusion_power, or temperature")
+        raise ValueError("Must provide either neutron_rate or temp")
     
     diagnostic['rate_time'] = rate_time
     diagnostic['times'] = times
@@ -889,7 +866,7 @@ class HeliosRun:
         
         return {
             'rhoR': rhoR,
-            'density': density,
+            'density': density,220
             'r': r,
             'dr': dr
         }
@@ -993,15 +970,21 @@ class HeliosRun:
         - Provides RMS width as robust alternative
         - Never returns zero width
         """
-        # Get neutron rate or use temperature as proxy
-        if 'neutron_rate' in self.list_variables():
-            rate = self.get_variable('neutron_rate')
-            warnings.warn("Using neutron_rate for burn analysis")
-        elif 'fusion_power' in self.list_variables():
-            rate = self.get_variable('fusion_power')
-            warnings.warn("Using fusion_power for burn analysis")
+     # Get neutron rate - prefer DT fusion rate from Helios
+        fusion_var = None
+        for var in ['FusionRate_DT_nHe4', 'neutron_rate', 'fusion_power']:
+            if var in self.list_variables():
+                fusion_var = var
+                break
+        
+        if fusion_var:
+            # Build global rate vs time by summing over zones at each step
+            rate = np.zeros(len(self.times))
+            for i in range(len(self.times)):
+                spatial_rate = self.get_variable(fusion_var, time_idx=i)
+                rate[i] = np.sum(spatial_rate)
         else:
-            # Use temperature as proxy
+            # Fallback: use temperature as proxy
             temp_var = None
             for var in ['ion_temperature', 'temp', 'temperature']:
                 if var in self.list_variables():
@@ -1009,11 +992,13 @@ class HeliosRun:
                     break
             
             if temp_var:
-                temp = self.get_variable(temp_var)
-                rate = temp**2  # Fusion rate ∝ T²
+                rate = np.zeros(len(self.times))
+                for i in range(len(self.times)):
+                    temp = self.get_variable(temp_var, time_idx=i)
+                    rate[i] = np.sum(temp**2)
                 warnings.warn(f"Neutron rate not found, using {temp_var}² as proxy")
             else:
-                raise ValueError("Cannot find neutron_rate, fusion_power, or temperature variable")
+                raise ValueError("Cannot find FusionRate_DT_nHe4, neutron_rate, or temperature")
         
         # Get density and mass for burn fraction calculation
         dens = None
