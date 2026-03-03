@@ -548,70 +548,73 @@ class ICFAnalyzer:
     def _compute_areal_densities(self):
         """
         Compute areal density (ρR) for different regions vs time.
-        
-        Areal density at radius r: ∫[r to R_outer] ρ(r') dr'
-        This is the column density from r outward to the outer boundary.
+
+        ICF convention: ρR = ∫ ρ(r) dr  (line integral of density).
+
+        We store a cumulative ρR array so that ρR from zone i to zone j
+        is simply  cumulative[j+1] - cumulative[i].
+
+        Region mapping (generalised):
+          - Hot spot          = innermost region  (zones 0 .. hs_bnd-1)
+          - Cold fuel         = middle regions    (zones hs_bnd .. fuel_bnd-1)
+          - Ablator           = outermost region  (zones fuel_bnd .. end)
+          - "Fuel" (total DT) = hot spot + cold fuel
         """
         logger.info("Computing areal densities...")
-        
+
         if self.data.zone_boundaries is None or self.data.mass_density is None:
             logger.warning("Cannot compute areal densities: missing boundary or density data")
             return
-        
+
         n_times, n_zones = self.data.mass_density.shape
-        
-        # Compute areal density at each zone boundary vs time
-        areal_density_array = np.zeros((n_times, n_zones + 1))
-        
+
+        # Cumulative ρR array:  cumulative[t, i] = ∫_0^{r_i} ρ dr
+        # Shape (n_times, n_zones+1) — index 0 is at the centre (=0), index n_zones at the outer edge.
+        cumulative = np.zeros((n_times, n_zones + 1))
         for t in range(n_times):
-            boundaries = self.data.zone_boundaries[t]
-            density = self.data.mass_density[t]
-            zone_masses = self.data.zone_mass[t]
-            
-            # For each boundary position, sum mass outward divided by area at that position
-            for i in range(len(boundaries)):
-                r_i = boundaries[i]
-                area_i = 4 * np.pi * r_i**2 if r_i > 0 else 1e-30
-                
-                # Sum mass from this radius outward
-                mass_outward = np.sum(zone_masses[i:])
-                areal_density_array[t, i] = mass_outward / area_i
-        
-        # Store for later use
-        self.data.areal_density_vs_time = areal_density_array
-        
-        # Compute key values at specific times
-        # Bang time areal density
+            dr = np.diff(self.data.zone_boundaries[t])          # Δr per zone
+            rho_dr = self.data.mass_density[t] * dr              # ρ Δr per zone
+            cumulative[t, 1:] = np.cumsum(rho_dr)
+
+        self.data.areal_density_vs_time = cumulative             # store for neutron averaging
+
+        # ---- Identify region boundaries ----
+        ri = self.data.region_interfaces_indices                  # (n_times, n_regions)
+        has_regions = ri is not None and ri.shape[1] >= 2
+
+        # ---- Values at bang time ----
         if self.data.bang_time > 0:
-            bang_idx = np.argmin(np.abs(self.data.time - self.data.bang_time))
-            
-            # Total areal density (at center)
-            self.data.bang_time_areal_density = areal_density_array[bang_idx, 0]
-            
-            # Fuel areal density (at fuel boundary)
-            if self.data.region_interfaces_indices is not None:
-                fuel_idx = int(self.data.region_interfaces_indices[bang_idx, 1])
-                self.data.bang_time_fuel_areal_density = areal_density_array[bang_idx, fuel_idx]
-                
-                # Hot spot areal density (at hot spot boundary)
-                hs_idx = int(self.data.region_interfaces_indices[bang_idx, 0])
-                self.data.bang_time_hs_areal_density = areal_density_array[bang_idx, hs_idx]
-                
-                logger.info(f"Bang time areal densities:")
-                logger.info(f"  Total (center):  {self.data.bang_time_areal_density:.4f} g/cm²")
-                logger.info(f"  Fuel (boundary): {self.data.bang_time_fuel_areal_density:.4f} g/cm²")
-                logger.info(f"  Hot spot:        {self.data.bang_time_hs_areal_density:.4f} g/cm²")
-        
-        # Time-averaged areal density (simple average over burn period)
+            bt = np.argmin(np.abs(self.data.time - self.data.bang_time))
+
+            # Total ρR (centre to outer edge)
+            self.data.bang_time_areal_density = cumulative[bt, -1]
+
+            if has_regions:
+                hs_bnd   = int(ri[bt, 0])                        # hot-spot outer node
+                fuel_bnd = int(ri[bt, -2])                        # fuel / ablator interface
+                n_total  = n_zones                                # outer edge index
+
+                self.data.bang_time_hs_areal_density   = cumulative[bt, hs_bnd]
+                self.data.bang_time_fuel_areal_density  = cumulative[bt, fuel_bnd] - cumulative[bt, hs_bnd]
+                self.data.bang_time_HDC_areal_density   = cumulative[bt, n_total]  - cumulative[bt, fuel_bnd]
+
+                logger.info("Bang time areal densities:")
+                logger.info(f"  Total:          {self.data.bang_time_areal_density:.4f} g/cm²")
+                logger.info(f"  Hot spot:       {self.data.bang_time_hs_areal_density:.4f} g/cm²")
+                logger.info(f"  Cold fuel:      {self.data.bang_time_fuel_areal_density:.4f} g/cm²")
+                logger.info(f"  Ablator (CH):   {self.data.bang_time_HDC_areal_density:.4f} g/cm²")
+            else:
+                logger.info(f"Total bang-time ρR: {self.data.bang_time_areal_density:.4f} g/cm²")
+
+        # ---- Time-averaged ρR over burn period ----
         if self.data.bang_time > 0 and self.data.burn_width > 0:
             t_start = self.data.bang_time - self.data.burn_width / 2
-            t_end = self.data.bang_time + self.data.burn_width / 2
-            
+            t_end   = self.data.bang_time + self.data.burn_width / 2
             mask = (self.data.time >= t_start) & (self.data.time <= t_end)
             if np.any(mask):
-                self.data.time_ave_areal_density = np.mean(areal_density_array[mask, 0])
-                logger.info(f"Time-averaged areal density (burn period): "
-                          f"{self.data.time_ave_areal_density:.4f} g/cm²")
+                self.data.time_ave_areal_density = np.mean(cumulative[mask, -1])
+                logger.info(f"Time-averaged ρR (burn period): "
+                            f"{self.data.time_ave_areal_density:.4f} g/cm²")
     
     def analyze_burn_phase(self):
         """Analyze burn: fusion yield, burn width, neutron-weighted quantities."""
@@ -810,21 +813,23 @@ class ICFAnalyzer:
         logger.info(f"Total neutron yield: {neutron_yield:.3e} reactions")
 
         # ---- Neutron-averaged FUEL areal density ----
-        if self.data.region_interfaces_indices is not None:
-            fuel_index = int(self.data.region_interfaces_indices[0, 1])
+        # Cold-fuel ρR = cumulative[fuel_bnd] - cumulative[hs_bnd]
+        # This is what DT neutrons born in the hot spot traverse.
+        if (self.data.region_interfaces_indices is not None and
+                self.data.areal_density_vs_time is not None):
+            ri = self.data.region_interfaces_indices
+            cumul = self.data.areal_density_vs_time
 
-            if self.data.areal_density_vs_time is not None:
-                areal_density_fuel = self.data.areal_density_vs_time[:, fuel_index]
-                areal_sum = 0.0
-                for t in range(len(dt_array)):
-                    areal_sum += areal_density_fuel[t] * np.sum(fusion_rate[t]) * dt_array[t]
-                self.data.neutron_ave_fuel_areal_density = areal_sum / neutron_yield
-                logger.info(f"Neutron-averaged fuel areal density: "
-                            f"{self.data.neutron_ave_fuel_areal_density:.4f} g/cm²")
-            elif self.data.bang_time_fuel_areal_density > 0:
-                self.data.neutron_ave_fuel_areal_density = self.data.bang_time_fuel_areal_density
-                logger.info(f"Neutron-averaged fuel ρR (approximated from bang time): "
-                            f"{self.data.neutron_ave_fuel_areal_density:.4f} g/cm²")
+            areal_sum = 0.0
+            for t in range(len(dt_array)):
+                hs_bnd   = int(ri[t, 0])
+                fuel_bnd = int(ri[t, -2])
+                fuel_rhoR = cumul[t, fuel_bnd] - cumul[t, hs_bnd]
+                areal_sum += fuel_rhoR * np.sum(fusion_rate[t]) * dt_array[t]
+
+            self.data.neutron_ave_fuel_areal_density = areal_sum / neutron_yield
+            logger.info(f"Neutron-averaged fuel areal density: "
+                        f"{self.data.neutron_ave_fuel_areal_density:.4f} g/cm²")
         else:
             logger.warning("Region interfaces not identified — cannot compute fuel areal density")
 

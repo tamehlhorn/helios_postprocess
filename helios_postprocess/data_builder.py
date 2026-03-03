@@ -103,28 +103,28 @@ class ICFRunData:
 
         # Hot spot (at stagnation)
         self.stagnation_hot_spot_radius: float = 0.0  # cm
-        self.hot_spot_pressure: float = 0.0            # Mbar
+        self.hot_spot_pressure: float = 0.0            # Gbar
         self.hot_spot_areal_density: float = 0.0       # g/cm²
         self.hot_spot_internal_energy: float = 0.0     # kJ
 
-        # Areal densities
+        # Areal densities (ρR = ∫ρ dr)
         self.time_ave_areal_density: float = 0.0       # g/cm²
-        self.bang_time_areal_density: float = 0.0      # g/cm²
-        self.bang_time_fuel_areal_density: float = 0.0 # g/cm²
-        self.bang_time_HDC_areal_density: float = 0.0  # g/cm²
-        self.bang_time_hs_areal_density: float = 0.0   # g/cm²
+        self.bang_time_areal_density: float = 0.0      # g/cm² — total
+        self.bang_time_fuel_areal_density: float = 0.0 # g/cm² — cold fuel (hs_bnd to fuel_bnd)
+        self.bang_time_HDC_areal_density: float = 0.0  # g/cm² — ablator
+        self.bang_time_hs_areal_density: float = 0.0   # g/cm² — hot spot
 
         # Neutron-averaged quantities
         self.neutron_ave_fuel_areal_density: float = 0.0  # g/cm²
-        self.neutron_ave_ion_temperature: float = 0.0     # eV
-        self.neutron_ave_pressure: float = 0.0            # Mbar
+        self.neutron_ave_ion_temperature: float = 0.0     # keV
+        self.neutron_ave_pressure: float = 0.0            # Gbar
 
         # Energy / performance
         self.energy_output: float = 0.0    # MJ  (fusion yield)
         self.laser_energy: float = 0.0     # MJ
         self.rad_energy: float = 0.0       # MJ  (radiation / IDD deposited)
         self.target_gain: float = 0.0
-        self.max_dt_temp: float = 0.0      # eV
+        self.max_dt_temp: float = 0.0      # keV
 
         # Mass fractions
         self.unablated_ablatar_mass: float = 0.0
@@ -381,7 +381,7 @@ def build_run_data(
                 raw = ds.variables["name_spatial_regn"][:]
                 names = []
                 for row in raw:
-                    name = b"".join(row).decode("utf-8", errors="ignore").strip()
+                    name = b"".join(row).decode("utf-8", errors="ignore").rstrip("\x00").strip()
                     if name:
                         names.append(name)
                 data.region_names = names if names else None
