@@ -1012,26 +1012,45 @@ class ICFAnalyzer:
             initial_fuel_mass    = np.sum(self.data.zone_mass[0, :fuel_bnd])
             initial_ablator_mass = np.sum(self.data.zone_mass[0, fuel_bnd:])
 
-            # ---- Ablation front at stagnation ----
-            # Use tracked ablation front if available; else fall back to density threshold.
-            if (self.data.ablation_front_radius is not None
-                    and self.data.ablation_front_radius[stag_idx] > 0):
-                abl_r = self.data.ablation_front_radius[stag_idx]
-            else:
-                # Fallback: outermost zone (outside HS) with ρ > 1 g/cc
+            # ---- Determine "inside the shell" mask at stagnation ----
+            #
+            # In a Lagrangian code the zone INDEX is a mass coordinate that
+            # never changes.  Zones with index <= ablation-front index are
+            # by definition unablated (inside the shell).
+            #
+            # Previous approach used a *radius* comparison
+            #   inside_shell = zone_outer <= abl_r
+            # which fails when the smoothed ablation-front radius is
+            # inflated by plateau-averaging with large pre-stagnation values,
+            # causing every zone to be classified as "inside."
+            #
+            # Primary method: use the raw (unsmoothed) ablation-front ZONE
+            # INDEX.  Fallback: density-based scan outward from hot spot.
+
+            abl_idx = None   # ablation-front zone index at stagnation
+
+            # Method 1 — tracked ablation-front zone index
+            if (self.data.ablation_front_indices is not None
+                    and self.data.ablation_front_indices[stag_idx] > 0):
+                abl_idx = int(self.data.ablation_front_indices[stag_idx])
+
+            # Method 2 — density fallback: outermost zone (outside HS)
+            # whose density exceeds 1 g/cc is the last unablated zone.
+            if abl_idx is None or abl_idx <= hs_bnd:
                 rho_stag = self.data.mass_density[stag_idx]
-                bnd_stag = self.data.zone_boundaries[stag_idx]
-                abl_r = bnd_stag[0]
+                abl_idx = hs_bnd  # default: nothing outside HS is unablated
                 for z in range(n_zones - 1, hs_bnd, -1):
                     if rho_stag[z] > 1.0:
-                        abl_r = bnd_stag[z + 1]
+                        abl_idx = z
                         break
 
-            bnd_stag = self.data.zone_boundaries[stag_idx]
-            zone_outer = bnd_stag[1:]  # outer boundary of each zone
+            # Build the mask using Lagrangian zone index
+            zone_indices = np.arange(n_zones)
+            inside_shell = zone_indices <= abl_idx
 
-            # A zone is "inside the shell" if its outer boundary ≤ ablation front
-            inside_shell = zone_outer <= abl_r
+            # Also store the ablation-front radius for diagnostics / plotting
+            bnd_stag = self.data.zone_boundaries[stag_idx]
+            abl_r = bnd_stag[min(abl_idx + 1, len(bnd_stag) - 1)]
 
             # ---- Unablated ablator fraction ----
             # Ablator zones (fuel_bnd .. end) that remain inside the shell
@@ -1052,21 +1071,29 @@ class ICFAnalyzer:
                 self.data.unablated_fuel_mass = unablated_fuel_mass / initial_fuel_mass
 
             # ---- Stagnated fuel fraction ----
-            # Cold (T < hot-spot threshold), dense fuel assembled around the hot spot.
+            # Cold, dense fuel assembled around the hot spot at stagnation.
             # Excludes the hot spot itself and any ablated fuel.
+            # Threshold is in eV (ion_temperature is stored in eV from Helios).
             temp_threshold = self.config.get('hot_spot_temp_threshold', 1000.0)  # eV
             temperatures = self.data.ion_temperature[stag_idx]
             cold_mask = temperatures < temp_threshold
-            # Between hot-spot boundary and ablation front
-            zone_inner = bnd_stag[:-1]
-            outside_hs = zone_inner >= bnd_stag[hs_bnd]
+            outside_hs = zone_indices >= hs_bnd
 
             stagnated_mask = fuel_mask & inside_shell & cold_mask & outside_hs
             stag_fuel_mass = np.sum(self.data.zone_mass[stag_idx, stagnated_mask])
             if initial_fuel_mass > 0:
                 self.data.stagnated_fuel_mass = stag_fuel_mass / initial_fuel_mass
 
-            logger.info(f"Ablation front at stagnation: {abl_r:.4f} cm")
+            # ---- Diagnostics ----
+            n_inside   = int(np.sum(inside_shell))
+            n_abl_in   = int(np.sum(ablator_mask & inside_shell))
+            n_fuel_in  = int(np.sum(fuel_mask & inside_shell))
+            logger.info(f"Ablation front at stagnation: zone {abl_idx}, "
+                        f"r = {abl_r:.4f} cm  "
+                        f"(HS bnd = zone {hs_bnd}, fuel/abl bnd = zone {fuel_bnd})")
+            logger.info(f"Inside shell: {n_inside}/{n_zones} zones  "
+                        f"(fuel: {n_fuel_in}/{fuel_bnd}, "
+                        f"ablator: {n_abl_in}/{n_zones - fuel_bnd})")
             logger.info(f"Mass fractions — unablated fuel: {self.data.unablated_fuel_mass:.4f}, "
                         f"unablated ablator: {self.data.unablated_ablatar_mass:.4f}, "
                         f"stagnated fuel: {self.data.stagnated_fuel_mass:.4f}")
