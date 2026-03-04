@@ -265,17 +265,17 @@ class ICFAnalyzer:
             
         logger.info("Tracking shock fronts...")
         
-        # Compute total pressure
+        # Compute total pressure in Gbar
         if self.data.rad_pressure is not None:
-            pressure = (self.data.ion_pressure + self.data.rad_pressure) * 1e-5  # Convert to Mbar
+            pressure = (self.data.ion_pressure + self.data.rad_pressure) * 1e-8  # J/cm³ → Gbar
         else:
-            pressure = self.data.ion_pressure * 1e-5
+            pressure = self.data.ion_pressure * 1e-8
         
         shock_positions = []
         shock_times = []
         shock_velocities = []
         
-        threshold = self.config.get('shock_detection_threshold', 50.0)  # Mbar/cm
+        threshold = self.config.get('shock_detection_threshold', 0.05)  # Gbar/cm
         
         for t_idx in range(len(self.data.time)):
             try:
@@ -503,21 +503,49 @@ class ICFAnalyzer:
         self._compute_areal_densities()
     
     def _find_stagnation_time(self):
-        """Find stagnation time from maximum density."""
+        """
+        Find stagnation time = minimum hot-spot volume (before alpha heating).
+
+        For a burning capsule, peak density can occur AFTER significant alpha
+        deposition.  True stagnation is when the implosion stalls:
+          - If region interfaces available: minimise hot-spot outer radius
+          - Fallback: minimise minimum zone boundary > 0 (innermost shell)
+
+        Peak density is recorded separately as max_density (may differ in time).
+        """
         if self.data.mass_density is None:
             logger.warning("Cannot find stagnation time: missing density data")
             return
-        
-        # Peak density in any zone at each time step
+
+        # Peak density (may not coincide with stagnation for igniting targets)
         peak_density_vs_time = np.max(self.data.mass_density, axis=1)
-        
-        # Stagnation = time of peak spatial-max density
-        stag_idx = np.argmax(peak_density_vs_time)
+        peak_idx = np.argmax(peak_density_vs_time)
+        self.data.max_density = peak_density_vs_time[peak_idx]
+
+        # Stagnation: minimum hot-spot outer radius
+        ri = self.data.region_interfaces_indices
+        if ri is not None and self.data.zone_boundaries is not None:
+            # Hot-spot outer boundary = zone_boundaries[:, hs_bnd]
+            hs_bnd = ri[:, 0].astype(int)
+            hs_radius = np.array([
+                self.data.zone_boundaries[t, hs_bnd[t]]
+                for t in range(len(self.data.time))
+            ])
+            stag_idx = np.argmin(hs_radius)
+        else:
+            # Fallback: peak density time
+            stag_idx = peak_idx
+
         self.data.stag_time = self.data.time[stag_idx]
-        self.data.max_density = peak_density_vs_time[stag_idx]
-        
-        logger.info(f"Stagnation time: {self.data.stag_time:.3f} ns")
-        logger.info(f"Peak density: {self.data.max_density:.2f} g/cc")
+
+        if ri is not None:
+            hs_r = self.data.zone_boundaries[stag_idx, int(ri[stag_idx, 0])]
+            logger.info(f"Stagnation time: {self.data.stag_time:.3f} ns  "
+                        f"(min HS radius = {hs_r:.4f} cm)")
+        else:
+            logger.info(f"Stagnation time: {self.data.stag_time:.3f} ns  (from peak density)")
+        logger.info(f"Peak density: {self.data.max_density:.2f} g/cc  "
+                    f"(at t = {self.data.time[peak_idx]:.3f} ns)")
     
     def _find_bang_time(self):
         """Find bang time from peak fusion power."""
@@ -534,13 +562,20 @@ class ICFAnalyzer:
         logger.info(f"Bang time: {self.data.bang_time:.3f} ns")
     
     def _compute_hot_spot_properties(self):
-        """Compute hot spot properties at stagnation."""
+        """
+        Compute hot spot properties at stagnation (minimum HS volume).
+
+        All quantities here use stag_time, which is the moment the
+        implosion stalls — BEFORE significant alpha-heating runaway.
+        """
         if self.data.stag_time == 0.0:
             logger.warning("Cannot compute hot spot properties: stagnation time not determined")
             return
         
         # Find timestep closest to stagnation
         stag_idx = np.argmin(np.abs(self.data.time - self.data.stag_time))
+        logger.info(f"Computing hot spot properties at stagnation "
+                    f"(t = {self.data.time[stag_idx]:.3f} ns, index {stag_idx})")
         
         temp_threshold = self.config.get('hot_spot_temp_threshold', 1000.0)  # eV
         

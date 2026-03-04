@@ -941,16 +941,12 @@ class ICFPlotter:
         plt.close(fig)
 
     def _plot_laser_power(self, pdf):
-        """Plot laser power delivered as a histogram (step plot)."""
+        """Plot laser power delivered."""
         fig, ax = plt.subplots(figsize=self.default_figsize)
 
         power_TW = self.data.laser_power_delivered * 1e-12   # W → TW
 
-        # Step plot gives the histogram look
-        ax.fill_between(self.data.time, power_TW, step='mid',
-                        color='orange', alpha=0.4)
-        ax.step(self.data.time, power_TW, where='mid',
-                color='darkorange', linewidth=1.5)
+        ax.plot(self.data.time, power_TW, color='darkorange', linewidth=1.5)
 
         ax.set_xlabel('Time (ns)')
         ax.set_ylabel('Laser Power (TW)')
@@ -1000,9 +996,9 @@ class ICFPlotter:
         """Create density contour plot."""
         try:
             self._create_contour_plot(
-                np.log10(self.data.mass_density),
+                np.log10(np.maximum(self.data.mass_density, 1e-30)),
                 "Log Density",
-                "log₁₀(g/cc)",
+                "log10(g/cc)",
                 "viridis",
                 pdf
             )
@@ -1019,9 +1015,9 @@ class ICFPlotter:
         try:
             total_pressure = self.data.ion_pressure + self.data.rad_pressure
             self._create_contour_plot(
-                np.log10(total_pressure * 1e-8),
+                np.log10(np.maximum(total_pressure * 1e-8, 1e-30)),
                 "Log Pressure",
-                "log₁₀(Gbar)",
+                "log10(Gbar)",
                 "turbo",
                 pdf
             )
@@ -1070,9 +1066,9 @@ class ICFPlotter:
         """Create temperature contour plot."""
         try:
             self._create_contour_plot(
-                np.log10(self.data.ion_temperature / 1e3),
+                np.log10(np.maximum(self.data.ion_temperature / 1e3, 1e-30)),
                 "Log Temperature",
-                "log₁₀(keV)",
+                "log10(keV)",
                 "hot",
                 pdf
             )
@@ -1217,7 +1213,7 @@ class ICFPlotter:
             ax.legend()
             
             cbar = plt.colorbar(contour, ax=ax)
-            cbar.set_label('log₁₀(|dP/dr|) [Gbar/cm]', fontsize=11)
+            cbar.set_label('log10(|dP/dr|) [Gbar/cm]', fontsize=11)
             
             plt.tight_layout()
             pdf.savefig(fig)
