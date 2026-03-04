@@ -143,7 +143,7 @@ class ICFRunData:
 
         # Ablation front (populated by ICFAnalyzer)
         self.ablation_front_radius: Optional[np.ndarray] = None
-        self.min_scale_length: Optional[np.ndarray] = None
+        self.ablation_front_indices: Optional[np.ndarray] = None
 
         # Shock tracking (populated by ICFAnalyzer)
         self.shock_times: list = []

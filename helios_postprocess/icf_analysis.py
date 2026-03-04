@@ -382,61 +382,68 @@ class ICFAnalyzer:
     def _track_ablation_front(self):
         """
         Track ablation front position over time.
-        
-        The ablation front is defined as the location with the minimum (most negative)
-        density scale length. This represents the steepest density gradient.
-        
-        Based on algorithm from original notebook.
+
+        The ablation front is the boundary between the hot, expanding corona
+        (low density) and the cold, unablated dense shell.
+
+        Algorithm: at each timestep, find the steepest *negative* density
+        gradient  (-dρ/dr  maximised) in the outer portion of the target
+        (outside the hot-spot region).  The zone outer boundary at that
+        location is the ablation front radius.
         """
-        if self.data.scale_length is None:
-            logger.warning("Cannot track ablation front: scale length not computed")
+        if self.data.mass_density is None or self.data.zone_boundaries is None:
+            logger.warning("Cannot track ablation front: missing density or boundary data")
             return
-        
+
         logger.info("Tracking ablation front position...")
-        
-        n_times, n_zones = self.data.scale_length.shape
-        
-        # Find minimum scale length at each time step
-        ablation_front_indices = np.zeros(n_times, dtype=int)
-        min_scale_length = np.zeros(n_times)
-        
-        for t in range(n_times):
-            # Initialize with first zone (take absolute value as starting point)
-            min_scale_length[t] = -np.abs(self.data.scale_length[t, 0])
-            ablation_front_indices[t] = 0
-            
-            # Find most negative scale length
-            for i in range(n_zones):
-                scale_len = self.data.scale_length[t, i]
-                
-                # Look for negative scale lengths that are more negative than current min
-                if scale_len > min_scale_length[t] and scale_len < 0:
-                    ablation_front_indices[t] = i
-                    min_scale_length[t] = scale_len
-        
-        # Convert indices to radii
+
+        n_times, n_zones = self.data.mass_density.shape
+        ri = self.data.region_interfaces_indices
+
         ablation_front_radius = np.zeros(n_times)
+        ablation_front_indices = np.zeros(n_times, dtype=int)
+
         for t in range(n_times):
-            idx = int(ablation_front_indices[t])
-            if idx < len(self.data.zone_boundaries[t]) - 1:
-                # Use zone center
-                ablation_front_radius[t] = (self.data.zone_boundaries[t, idx] + 
-                                           self.data.zone_boundaries[t, idx + 1]) / 2
-        
-        # Smooth the ablation front profile
+            rho = self.data.mass_density[t]
+            boundaries = self.data.zone_boundaries[t]
+            zone_centers = 0.5 * (boundaries[:-1] + boundaries[1:])
+
+            # Only search outside the hot-spot region
+            if ri is not None:
+                search_start = int(ri[t, 0])          # outer edge of hot spot
+            else:
+                search_start = n_zones // 4           # fallback: skip inner quarter
+
+            if search_start >= n_zones - 2:
+                continue
+
+            # Compute dρ/dr on the search range
+            r_search   = zone_centers[search_start:]
+            rho_search = rho[search_start:]
+            drho_dr = np.gradient(rho_search, r_search)
+
+            # Ablation front = steepest density drop (most negative dρ/dr)
+            idx_in_search = np.argmin(drho_dr)
+            ablation_idx = search_start + idx_in_search
+
+            # Require a meaningful negative gradient (not just flat noise)
+            if drho_dr[idx_in_search] < 0:
+                ablation_front_indices[t] = ablation_idx
+                # Use outer boundary of that zone
+                ablation_front_radius[t] = boundaries[ablation_idx + 1]
+
+        # Smooth the profile
         ablation_front_radius = self._smooth_ablation_front(ablation_front_radius)
-        
+
         # Store results
         self.data.ablation_front_radius = ablation_front_radius
-        self.data.min_scale_length = min_scale_length
-        
-        # Calculate some statistics
+        self.data.ablation_front_indices = ablation_front_indices
+
         valid_radii = ablation_front_radius[ablation_front_radius > 0]
         if len(valid_radii) > 0:
             logger.info(f"Ablation front tracked: {len(valid_radii)}/{n_times} timesteps")
-            logger.info(f"Initial radius: {valid_radii[0]:.4f} cm")
-            if len(valid_radii) > 1:
-                logger.info(f"Final radius: {valid_radii[-1]:.4f} cm")
+            logger.info(f"Initial radius: {valid_radii[0]:.4f} cm, "
+                        f"min radius: {np.min(valid_radii):.4f} cm")
         else:
             logger.warning("No valid ablation front positions found")
     
@@ -487,10 +494,10 @@ class ICFAnalyzer:
         return smoothed
     
     def analyze_stagnation_phase(self):
-        """Analyze stagnation: bang time, max compression, hot spot."""
+        """Analyze stagnation: bang time, max compression, hot spot, implosion."""
         logger.info("Analyzing stagnation phase...")
         
-        # Determine stagnation time (max density)
+        # Determine stagnation time (min hot-spot volume)
         self._find_stagnation_time()
         
         # Determine bang time (peak fusion power)
@@ -501,6 +508,10 @@ class ICFAnalyzer:
         
         # Compute areal densities
         self._compute_areal_densities()
+        
+        # Implosion diagnostics (velocity, shocks, adiabat, ablation front)
+        # — needs bang_time and stag_time from above
+        self.analyze_implosion_phase()
     
     def _find_stagnation_time(self):
         """
@@ -984,38 +995,78 @@ class ICFAnalyzer:
                 self.data.comp_ratio = self.data.max_density / initial_density
                 logger.info(f"Compression ratio: {self.data.comp_ratio:.2f}")
 
-        # ---- Mass fractions (require region interfaces) ----
+        # ---- Mass fractions (require region interfaces + ablation front) ----
         ri = self.data.region_interfaces_indices
-        if ri is not None and ri.shape[1] >= 2 and self.data.zone_mass is not None:
+        if (ri is not None and ri.shape[1] >= 2
+                and self.data.zone_mass is not None
+                and self.data.zone_boundaries is not None):
+
             stag_idx = np.argmin(np.abs(self.data.time - self.data.stag_time)) \
                        if self.data.stag_time > 0 else 0
 
-            # Region boundary indices (node indices)
-            fuel_bnd = int(ri[0, -2])     # initial fuel/ablator interface
-            n_zones  = self.data.zone_mass.shape[1]
+            n_zones = self.data.zone_mass.shape[1]
+            fuel_bnd = int(ri[0, -2])      # fuel / ablator interface (Lagrangian)
+            hs_bnd   = int(ri[stag_idx, 0])  # hot-spot outer boundary at stagnation
 
-            # Initial masses (t=0)
+            # Initial masses
             initial_fuel_mass    = np.sum(self.data.zone_mass[0, :fuel_bnd])
             initial_ablator_mass = np.sum(self.data.zone_mass[0, fuel_bnd:])
 
-            # Stagnation masses (same zones — Lagrangian)
-            stag_fuel_mass    = np.sum(self.data.zone_mass[stag_idx, :fuel_bnd])
-            stag_ablator_mass = np.sum(self.data.zone_mass[stag_idx, fuel_bnd:])
+            # ---- Ablation front at stagnation ----
+            # Use tracked ablation front if available; else fall back to density threshold.
+            if (self.data.ablation_front_radius is not None
+                    and self.data.ablation_front_radius[stag_idx] > 0):
+                abl_r = self.data.ablation_front_radius[stag_idx]
+            else:
+                # Fallback: outermost zone (outside HS) with ρ > 1 g/cc
+                rho_stag = self.data.mass_density[stag_idx]
+                bnd_stag = self.data.zone_boundaries[stag_idx]
+                abl_r = bnd_stag[0]
+                for z in range(n_zones - 1, hs_bnd, -1):
+                    if rho_stag[z] > 1.0:
+                        abl_r = bnd_stag[z + 1]
+                        break
 
-            if initial_fuel_mass > 0:
-                self.data.unablated_fuel_mass = stag_fuel_mass / initial_fuel_mass
+            bnd_stag = self.data.zone_boundaries[stag_idx]
+            zone_outer = bnd_stag[1:]  # outer boundary of each zone
+
+            # A zone is "inside the shell" if its outer boundary ≤ ablation front
+            inside_shell = zone_outer <= abl_r
+
+            # ---- Unablated ablator fraction ----
+            # Ablator zones (fuel_bnd .. end) that remain inside the shell
+            ablator_mask = np.zeros(n_zones, dtype=bool)
+            ablator_mask[fuel_bnd:] = True
+            unablated_abl_mass = np.sum(
+                self.data.zone_mass[stag_idx, ablator_mask & inside_shell])
             if initial_ablator_mass > 0:
-                self.data.unablated_ablatar_mass = stag_ablator_mass / initial_ablator_mass
+                self.data.unablated_ablatar_mass = unablated_abl_mass / initial_ablator_mass
 
-            # Stagnated fuel mass fraction: fuel mass inside core_radius at stagnation
-            if self.data.core_radius > 0:
-                boundaries_stag = self.data.zone_boundaries[stag_idx]
-                zone_centers = 0.5 * (boundaries_stag[:-1] + boundaries_stag[1:])
-                inside = zone_centers <= self.data.core_radius
-                stag_core_mass = np.sum(self.data.zone_mass[stag_idx, inside & (np.arange(n_zones) < fuel_bnd)])
-                if initial_fuel_mass > 0:
-                    self.data.stagnated_fuel_mass = stag_core_mass / initial_fuel_mass
+            # ---- Unablated fuel fraction ----
+            # Fuel zones (0 .. fuel_bnd-1) that are inside the shell
+            fuel_mask = np.zeros(n_zones, dtype=bool)
+            fuel_mask[:fuel_bnd] = True
+            unablated_fuel_mass = np.sum(
+                self.data.zone_mass[stag_idx, fuel_mask & inside_shell])
+            if initial_fuel_mass > 0:
+                self.data.unablated_fuel_mass = unablated_fuel_mass / initial_fuel_mass
 
-            logger.info(f"Mass fractions — fuel: {self.data.unablated_fuel_mass:.4f}, "
-                        f"ablator: {self.data.unablated_ablatar_mass:.4f}, "
+            # ---- Stagnated fuel fraction ----
+            # Cold (T < hot-spot threshold), dense fuel assembled around the hot spot.
+            # Excludes the hot spot itself and any ablated fuel.
+            temp_threshold = self.config.get('hot_spot_temp_threshold', 1000.0)  # eV
+            temperatures = self.data.ion_temperature[stag_idx]
+            cold_mask = temperatures < temp_threshold
+            # Between hot-spot boundary and ablation front
+            zone_inner = bnd_stag[:-1]
+            outside_hs = zone_inner >= bnd_stag[hs_bnd]
+
+            stagnated_mask = fuel_mask & inside_shell & cold_mask & outside_hs
+            stag_fuel_mass = np.sum(self.data.zone_mass[stag_idx, stagnated_mask])
+            if initial_fuel_mass > 0:
+                self.data.stagnated_fuel_mass = stag_fuel_mass / initial_fuel_mass
+
+            logger.info(f"Ablation front at stagnation: {abl_r:.4f} cm")
+            logger.info(f"Mass fractions — unablated fuel: {self.data.unablated_fuel_mass:.4f}, "
+                        f"unablated ablator: {self.data.unablated_ablatar_mass:.4f}, "
                         f"stagnated fuel: {self.data.stagnated_fuel_mass:.4f}")
