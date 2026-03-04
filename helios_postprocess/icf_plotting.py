@@ -74,7 +74,9 @@ class ICFPlotter:
             
             # Performance summary
             self._create_summary_page(pdf)
-            
+
+            # Lagrangian zone trajectory (R vs t, color-coded by region)
+            self._plot_zone_trajectories(pdf)            
             # Time history plots
             self._plot_density_history(pdf)
             self._plot_temperature_history(pdf)
@@ -276,7 +278,99 @@ class ICFPlotter:
         
         pdf.savefig(fig, bbox_inches='tight')
         plt.close(fig)
-        
+
+    def _plot_zone_trajectories(self, pdf):
+        """
+        Lagrangian zone trajectory plot: node radius vs time, color-coded
+        by material region.  Every Nth node is plotted to keep the figure
+        readable while preserving the visual structure.
+        """
+        if (self.data.zone_boundaries is None
+                or self.data.region_interfaces_indices is None):
+            logger.info("Skipping zone trajectory plot: missing boundary or region data")
+            return
+
+        fig, ax = plt.subplots(figsize=(12, 8))
+
+        time = self.data.time                         # (n_times,)
+        boundaries = self.data.zone_boundaries        # (n_times, n_nodes)
+        n_times, n_nodes = boundaries.shape
+        n_zones = n_nodes - 1
+
+        # ---- Assign each zone to a region (Lagrangian → use t=0) ----
+        ri0 = self.data.region_interfaces_indices[0].astype(int)
+        zone_region = np.zeros(n_zones, dtype=int)
+        prev = 0
+        for reg_idx, bnd in enumerate(ri0):
+            zone_region[prev:int(bnd)] = reg_idx
+            prev = int(bnd)
+
+        # ---- Colour palette: one per region ----
+        default_colors = ['#00CC00', '#0066FF', '#00BBDD', '#FF2200',
+                          '#FF8800', '#AA00FF', '#888888', '#FFCC00']
+        region_names = self.data.region_names or [
+            f'Region {i+1}' for i in range(len(ri0))]
+        n_regions = len(ri0)
+        colors = default_colors[:n_regions]
+
+        # ---- Determine stride (aim for ~120–180 visible lines) ----
+        target_lines = 150
+        stride = max(1, n_zones // target_lines)
+
+        # Always include region boundaries in the plotted set
+        boundary_nodes = set()
+        boundary_nodes.add(0)
+        boundary_nodes.add(n_nodes - 1)
+        for bnd in ri0:
+            boundary_nodes.add(int(bnd))
+
+        # ---- Convert to μm for display ----
+        bnd_um = boundaries * 1e4    # cm → μm
+
+        # ---- Plot zone trajectories ----
+        # For each zone, plot its outer boundary (node i+1) in the zone's colour.
+        # Track which regions we've added to the legend.
+        legend_added = set()
+        for z in range(n_zones):
+            node = z + 1  # outer boundary of zone z
+            if node not in boundary_nodes and z % stride != 0:
+                continue
+
+            reg = zone_region[z]
+            label = region_names[reg] if reg not in legend_added else None
+            legend_added.add(reg)
+
+            ax.plot(time, bnd_um[:, node], color=colors[reg],
+                    linewidth=0.4, alpha=0.85, label=label)
+
+        # Also plot the innermost node (r=0 boundary)
+        ax.plot(time, bnd_um[:, 0], color=colors[0],
+                linewidth=0.4, alpha=0.85)
+
+        # ---- Mark key times ----
+        if self.data.stag_time > 0:
+            ax.axvline(self.data.stag_time, color='black', linestyle='--',
+                       linewidth=2, alpha=0.9, label=f'Stagnation ({self.data.stag_time:.2f} ns)',
+                       zorder=10)
+        if self.data.bang_time > 0:
+            ax.axvline(self.data.bang_time, color='darkred', linestyle='--',
+                       linewidth=2, alpha=0.9, label=f'Bang time ({self.data.bang_time:.2f} ns)',
+                       zorder=10)
+
+        ax.set_xlabel('Time (ns)', fontsize=12)
+        ax.set_ylabel('Radius (μm)', fontsize=12)
+        title = 'Helios'
+        if self.data.filename:
+            title = self.data.filename
+        ax.set_title(title, fontsize=14, weight='bold')
+        ax.legend(fontsize=9, loc='upper right')
+        ax.set_xlim(time[0], time[-1])
+        ax.set_ylim(0, None)
+        ax.grid(True, alpha=0.15)
+
+        pdf.savefig(fig, bbox_inches='tight')
+        plt.close(fig)
+
     def _plot_density_history(self, pdf):
         """Plot density evolution over time."""
         fig, (ax1, ax2) = plt.subplots(2, 1, figsize=self.default_figsize)
