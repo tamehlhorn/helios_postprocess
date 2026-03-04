@@ -1071,15 +1071,18 @@ class ICFAnalyzer:
                 self.data.unablated_fuel_mass = unablated_fuel_mass / initial_fuel_mass
 
             # ---- Stagnated fuel fraction ----
-            # Cold, dense fuel assembled around the hot spot at stagnation.
-            # Excludes the hot spot itself and any ablated fuel.
-            # Threshold is in eV (ion_temperature is stored in eV from Helios).
-            temp_threshold = self.config.get('hot_spot_temp_threshold', 1000.0)  # eV
-            temperatures = self.data.ion_temperature[stag_idx]
-            cold_mask = temperatures < temp_threshold
+            # Dense fuel assembled around the hot spot at stagnation — the
+            # confinement shell.  Defined as fuel zones between the hot-spot
+            # boundary (hs_bnd) and the ablation front (abl_idx).
+            #
+            # NOTE: no temperature filter.  For igniting capsules, alpha
+            # heating warms the dense shell above 1 keV well before peak
+            # burn; a temperature cut would incorrectly reject the entire
+            # confinement shell.  The hot spot is already excluded by the
+            # outside_hs mask.
             outside_hs = zone_indices >= hs_bnd
 
-            stagnated_mask = fuel_mask & inside_shell & cold_mask & outside_hs
+            stagnated_mask = fuel_mask & inside_shell & outside_hs
             stag_fuel_mass = np.sum(self.data.zone_mass[stag_idx, stagnated_mask])
             if initial_fuel_mass > 0:
                 self.data.stagnated_fuel_mass = stag_fuel_mass / initial_fuel_mass
