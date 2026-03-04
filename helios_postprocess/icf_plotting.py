@@ -365,7 +365,7 @@ class ICFPlotter:
         ax.set_title(title, fontsize=14, weight='bold')
         ax.legend(fontsize=9, loc='upper right')
         ax.set_xlim(time[0], time[-1])
-        ax.set_ylim(0, None)
+        ax.set_ylim(0, 2500)
         ax.grid(True, alpha=0.15)
 
         pdf.savefig(fig, bbox_inches='tight')
