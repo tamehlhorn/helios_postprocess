@@ -778,6 +778,7 @@ class ICFAnalyzer:
 
             MeV_per_reaction = 17.6
             MJ_per_MeV = 1.602e-19
+            self.data.dt_neutron_yield = total_neutrons
             self.data.energy_output = total_neutrons * MeV_per_reaction * MJ_per_MeV
             logger.info(f"Fusion energy output (from neutron count): "
                         f"{self.data.energy_output:.3f} MJ  "
@@ -805,6 +806,7 @@ class ICFAnalyzer:
             J_per_MeV = 1.602e-13
             energy_J = fusion_energy * MeV_per_reaction * J_per_MeV
             self.data.energy_output = energy_J * 1e-6   # J → MJ
+            self.data.dt_neutron_yield = fusion_energy   # total reactions
             logger.info(f"Fusion energy output (time-integrated): "
                         f"{self.data.energy_output:.3f} MJ")
         else:

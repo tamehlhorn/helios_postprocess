@@ -154,6 +154,8 @@ class ICFPlotter:
         
         if self.data.energy_output > 0:
             metrics_text += f"Fusion Energy: {self.data.energy_output:.3f} MJ\n"
+        if self.data.dt_neutron_yield > 0:
+            metrics_text += f"DT Neutron Yield: {self.data.dt_neutron_yield:.3e}\n"
         if self.data.target_gain > 0:
             metrics_text += f"Target Gain: {self.data.target_gain:.2f}\n"
         
@@ -230,6 +232,7 @@ class ICFPlotter:
             ]),
             ('Energy and Performance', [
                 f"Fusion Energy Output: {self.data.energy_output:.3f} MJ",
+                f"DT Neutron Yield: {self.data.dt_neutron_yield:.3e}",
                 f"Laser Energy Delivered: {self.data.laser_energy:.3f} MJ",
                 f"Target Gain: {self.data.target_gain:.3f}",
                 f"Maximum DT Temperature: {self.data.max_dt_temp:.2f} keV",

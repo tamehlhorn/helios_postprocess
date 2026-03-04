@@ -163,6 +163,7 @@ class ICFOutputGenerator:
         _a('-' * width)
         _a(self._metric('Laser energy',        d.laser_energy,     'MJ',  fmt='.3f'))
         _a(self._metric('Fusion yield',        d.energy_output,    'MJ',  fmt='.3f'))
+        _a(self._metric('DT neutron yield',    d.dt_neutron_yield, '',    fmt='.3e'))
         _a(self._metric('Target gain',         d.target_gain,      '',    fmt='.3f'))
         _a(self._metric('Max DT temperature',  d.max_dt_temp,      'keV', fmt='.2f'))
         _a('')
@@ -210,6 +211,7 @@ class ICFOutputGenerator:
           peak_ion_temp_keV    — peak ion temperature at each time
           ablation_front_r_cm  — ablation front radius
           hs_pressure_Gbar     — mass-averaged hot-spot pressure
+          dt_neutron_count     — cumulative DT neutron yield
         """
         logger.info(f"Writing time histories: {path}")
         d = self.data
@@ -268,6 +270,15 @@ class ICFOutputGenerator:
         # Hot-spot pressure (Gbar, mass-averaged)
         hs_pressure = self._compute_hs_pressure_vs_time()
 
+        # Cumulative DT neutron count
+        if d.dt_neutron_count is not None:
+            dt_neutrons = d.dt_neutron_count.copy()
+            if dt_neutrons.ndim >= 2:
+                # Zone-resolved → sum over zones at each time
+                dt_neutrons = np.sum(dt_neutrons, axis=1)
+        else:
+            dt_neutrons = nan_col.copy()
+
         # ---- Write CSV ----
         columns = [
             ('time_ns',             d.time),
@@ -280,6 +291,7 @@ class ICFOutputGenerator:
             ('peak_ion_temp_keV',   peak_ion_temp),
             ('ablation_front_r_cm', abl_front),
             ('hs_pressure_Gbar',    hs_pressure),
+            ('dt_neutron_count',    dt_neutrons),
         ]
 
         header = [name for name, _ in columns]

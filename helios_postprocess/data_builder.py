@@ -122,6 +122,7 @@ class ICFRunData:
 
         # Energy / performance
         self.energy_output: float = 0.0    # MJ  (fusion yield)
+        self.dt_neutron_yield: float = 0.0 # total DT neutrons produced
         self.laser_energy: float = 0.0     # MJ
         self.rad_energy: float = 0.0       # MJ  (radiation / IDD deposited)
         self.target_gain: float = 0.0
