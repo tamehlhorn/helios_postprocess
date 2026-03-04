@@ -74,6 +74,7 @@ class ICFRunData:
         self.fusion_power: Optional[np.ndarray] = None            # (n_times, n_zones) — zone-level DT fusion rate
         self.laser_energy_deposited: Optional[np.ndarray] = None  # (n_times, n_zones) J  (time-integrated)
         self.laser_power_source: Optional[np.ndarray] = None      # (n_times, n_zones) W/cm³
+        self.laser_power_delivered: Optional[np.ndarray] = None   # (n_times,) W — total laser power on target
         self.electron_density: Optional[np.ndarray] = None        # (n_times, n_zones) cm⁻³
         self.neutron_production_rate: Optional[np.ndarray] = None # (n_times, n_zones)
         self.alpha_heating_power: Optional[np.ndarray] = None     # (n_times, n_zones)
@@ -187,6 +188,8 @@ _VARIABLE_MAP = [
                                 "laser_energy_deposited"],                        False),
     ("laser_power_source",    ["LaserPwrSrc", "laser_power_source",
                                "laser_power"],                                    False),
+    ("laser_power_delivered", ["LaserPwrDeliveredForBeam",
+                               "laser_power_delivered"],                           False),
     ("electron_density",      ["electron_density", "elec_density", "n_e"],        False),
     ("neutron_production_rate", ["neutron_production_rate", "neutron_rate",
                                  "FusionRate_DD_nHe3"],                           False),
@@ -314,6 +317,14 @@ def build_run_data(
                                f"(tried: {candidates})")
             elif verbose:
                 logger.debug(f"  – Optional '{attr_name}' not available")
+
+    # ------------------------------------------------------------------
+    # Post-processing: squeeze beam-indexed arrays to 1-D
+    # ------------------------------------------------------------------
+    if data.laser_power_delivered is not None and data.laser_power_delivered.ndim > 1:
+        data.laser_power_delivered = data.laser_power_delivered.squeeze()
+        if verbose:
+            logger.info(f"  ✓ laser_power_delivered      squeezed → {data.laser_power_delivered.shape}")
 
     # ------------------------------------------------------------------
     # rad_pressure: non-ion pressure component

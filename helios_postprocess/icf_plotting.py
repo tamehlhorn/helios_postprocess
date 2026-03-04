@@ -95,6 +95,8 @@ class ICFPlotter:
             # Laser/drive
             if self.data.laser_energy_deposited is not None:
                 self._plot_laser_deposition(pdf)
+            if self.data.laser_power_delivered is not None:
+                self._plot_laser_power(pdf)
             
             # Drive temperature (from RHW file)
             if self.data.drive_temperature is not None:
@@ -935,6 +937,36 @@ class ICFPlotter:
         ax.set_title('Laser Energy Deposition')
         ax.grid(True, alpha=0.3)
         
+        pdf.savefig(fig)
+        plt.close(fig)
+
+    def _plot_laser_power(self, pdf):
+        """Plot laser power delivered as a histogram (step plot)."""
+        fig, ax = plt.subplots(figsize=self.default_figsize)
+
+        power_TW = self.data.laser_power_delivered * 1e-12   # W → TW
+
+        # Step plot gives the histogram look
+        ax.fill_between(self.data.time, power_TW, step='mid',
+                        color='orange', alpha=0.4)
+        ax.step(self.data.time, power_TW, where='mid',
+                color='darkorange', linewidth=1.5)
+
+        ax.set_xlabel('Time (ns)')
+        ax.set_ylabel('Laser Power (TW)')
+        ax.set_title('Laser Power Delivered')
+        ax.set_xlim(self.data.time[0], self.data.time[-1])
+        ax.set_ylim(bottom=0)
+        ax.grid(True, alpha=0.3)
+
+        # Annotate peak
+        peak_idx = np.argmax(power_TW)
+        ax.annotate(f'{power_TW[peak_idx]:.1f} TW',
+                    xy=(self.data.time[peak_idx], power_TW[peak_idx]),
+                    xytext=(0.7, 0.9), textcoords='axes fraction',
+                    arrowprops=dict(arrowstyle='->', color='black'),
+                    fontsize=11, ha='center')
+
         pdf.savefig(fig)
         plt.close(fig)
     

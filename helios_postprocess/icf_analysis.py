@@ -237,12 +237,16 @@ class ICFAnalyzer:
         """Analyze implosion: velocity, shocks, adiabat."""
         logger.info("Analyzing implosion phase...")
         
-        # Track peak implosion velocity
+        # Track peak implosion velocity (only before bang time)
         if self.data.velocity is not None:
-            # Find maximum inward velocity (most negative)
-            min_velocities = np.min(self.data.velocity, axis=1)
-            self.data.peak_implosion_velocity = np.min(min_velocities) * 1e-5  # Convert to km/s
-            logger.info(f"Peak implosion velocity: {abs(self.data.peak_implosion_velocity):.2f} km/s")
+            if self.data.bang_time > 0:
+                pre_bang = self.data.time <= self.data.bang_time
+            else:
+                pre_bang = np.ones(len(self.data.time), dtype=bool)
+            min_velocities = np.min(self.data.velocity[pre_bang], axis=1)
+            self.data.peak_implosion_velocity = np.min(min_velocities) * 1e-5  # cm/s → km/s
+            logger.info(f"Peak implosion velocity (pre-bang): "
+                        f"{abs(self.data.peak_implosion_velocity):.2f} km/s")
         
         # Detect and track shock fronts
         self._track_shock_fronts()
@@ -314,32 +318,63 @@ class ICFAnalyzer:
             logger.info(f"Tracked {len(shock_times)} shock front points")
     
     def _compute_adiabat(self):
-        """Compute adiabat (entropy parameter) in ice region."""
+        """
+        Compute mass-averaged adiabat (entropy parameter) in cold DT fuel.
+
+        α = P / P_Fermi   where P_Fermi = 2.17 (ρ/ρ₀)^(5/3) Mbar
+        for equimolar DT ice (ρ₀ = 0.205 g/cc, Lindl convention).
+
+        Evaluated at mid-implosion in the cold fuel (DT Solid / liquid DT)
+        region, excluding the hot spot and ablator.
+        """
         if self.data.ion_pressure is None or self.data.mass_density is None:
             logger.warning("Cannot compute adiabat: missing pressure or density data")
             return
-        
+
         logger.info("Computing adiabat...")
-        
-        # Adiabat α = P / P_Fermi where P_Fermi = (ħ²/5m)(3π²)^(2/3) * (ρ/m_u)^(5/3)
-        # Simplified: α ≈ P / (ρ^(5/3))
-        
+
         try:
-            # Use early time (before strong compression)
-            early_idx = min(10, len(self.data.time) // 10)
-            
-            pressure = self.data.ion_pressure[early_idx] * 1e-5  # Mbar
-            density = self.data.mass_density[early_idx]  # g/cc
-            
-            # Mass-weighted average
-            mass = self.data.zone_mass[early_idx]
-            
-            # α = P / (ρ^(5/3)) with appropriate units
-            adiabat_zones = pressure / (density ** (5/3))
-            self.data.adiabat_mass_averaged_ice = np.average(adiabat_zones, weights=mass)
-            
-            logger.info(f"Mass-averaged adiabat: {self.data.adiabat_mass_averaged_ice:.4f}")
-            
+            # Time: mid-implosion = halfway between start-of-motion and stagnation
+            stag_t = self.data.stag_time if self.data.stag_time > 0 else self.data.time[-1] / 2
+            mid_t  = stag_t * 0.5
+            mid_idx = np.argmin(np.abs(self.data.time - mid_t))
+
+            # Zone range: cold fuel = between hot-spot and ablator boundaries
+            ri = self.data.region_interfaces_indices
+            if ri is not None and ri.shape[1] >= 2:
+                z_start = int(ri[mid_idx, 0])           # outer edge of hot spot
+                z_end   = int(ri[mid_idx, -2])           # inner edge of ablator
+            else:
+                # Fallback: inner 50% of zones
+                n_zones = self.data.mass_density.shape[1]
+                z_start = 0
+                z_end   = n_zones // 2
+
+            if z_end <= z_start:
+                logger.warning("Cold fuel region is empty — cannot compute adiabat")
+                return
+
+            # Total pressure in Mbar
+            p_tot = self.data.ion_pressure[mid_idx, z_start:z_end]
+            if self.data.rad_pressure is not None:
+                p_tot = p_tot + self.data.rad_pressure[mid_idx, z_start:z_end]
+            p_Mbar = p_tot * 1e-5                        # J/cm³ → Mbar
+
+            rho   = self.data.mass_density[mid_idx, z_start:z_end]   # g/cc
+            mass  = self.data.zone_mass[mid_idx, z_start:z_end]
+
+            # Fermi pressure for equimolar DT ice
+            rho0 = 0.205                                  # g/cc
+            p_fermi = 2.17 * (rho / rho0) ** (5.0 / 3.0)  # Mbar
+
+            with np.errstate(divide='ignore', invalid='ignore'):
+                alpha = p_Mbar / p_fermi
+                alpha[~np.isfinite(alpha)] = 0.0
+
+            self.data.adiabat_mass_averaged_ice = np.average(alpha, weights=mass)
+            logger.info(f"Mass-averaged adiabat (cold fuel, t={self.data.time[mid_idx]:.2f} ns): "
+                        f"{self.data.adiabat_mass_averaged_ice:.2f}")
+
         except Exception as e:
             logger.warning(f"Could not compute adiabat: {e}")
             self.data.adiabat_mass_averaged_ice = 0.0
@@ -521,6 +556,10 @@ class ICFAnalyzer:
                 hot_radii = radii[hot_spot_mask]
                 self.data.stagnation_hot_spot_radius = np.max(hot_radii)
                 
+                # Core radius = outer boundary of the outermost hot-spot zone
+                hot_zone_indices = np.where(hot_spot_mask)[0]
+                self.data.core_radius = boundaries[hot_zone_indices[-1] + 1]
+                
                 # Hot spot pressure (mass-averaged)
                 # CLAUDE.md: report pressure in Gbar.  1 Gbar = 1e8 J/cm³
                 pressure_Gbar = (self.data.ion_pressure[stag_idx] + 
@@ -539,8 +578,25 @@ class ICFAnalyzer:
                     density[hot_spot_mask] * dr[hot_spot_mask]
                 )
                 
+                # Hot spot internal energy  (ion + electron)
+                # specific_internal_energy × mass, summed over hot-spot zones,
+                # then converted J → kJ.
+                hs_energy_J = 0.0
+                if self.data.ion_pressure is not None:
+                    # E_int = P / (γ-1) × Volume  for ideal gas
+                    # Or directly: e_specific × mass  if we have SIE.
+                    # Use  E = (3/2) n k T × V  ≈ (3/2) P V  for each species
+                    vol = (4.0 / 3.0) * np.pi * (boundaries[1:]**3 - boundaries[:-1]**3)
+                    p_ion  = self.data.ion_pressure[stag_idx]
+                    p_elec = self.data.rad_pressure[stag_idx]  # includes elec + rad
+                    hs_energy_J = np.sum((1.5 * (p_ion[hot_spot_mask] + p_elec[hot_spot_mask]))
+                                         * vol[hot_spot_mask])
+                self.data.hot_spot_internal_energy = hs_energy_J * 1e-3  # J → kJ
+                
+                logger.info(f"Core radius: {self.data.core_radius:.4f} cm")
                 logger.info(f"Hot spot radius: {self.data.stagnation_hot_spot_radius:.4f} cm")
                 logger.info(f"Hot spot pressure: {self.data.hot_spot_pressure:.2f} Gbar")
+                logger.info(f"Hot spot internal energy: {self.data.hot_spot_internal_energy:.2f} kJ")
                 
         except Exception as e:
             logger.warning(f"Could not compute hot spot properties: {e}")
@@ -605,16 +661,6 @@ class ICFAnalyzer:
                 logger.info(f"  Ablator (CH):   {self.data.bang_time_HDC_areal_density:.4f} g/cm²")
             else:
                 logger.info(f"Total bang-time ρR: {self.data.bang_time_areal_density:.4f} g/cm²")
-
-        # ---- Time-averaged ρR over burn period ----
-        if self.data.bang_time > 0 and self.data.burn_width > 0:
-            t_start = self.data.bang_time - self.data.burn_width / 2
-            t_end   = self.data.bang_time + self.data.burn_width / 2
-            mask = (self.data.time >= t_start) & (self.data.time <= t_end)
-            if np.any(mask):
-                self.data.time_ave_areal_density = np.mean(cumulative[mask, -1])
-                logger.info(f"Time-averaged ρR (burn period): "
-                            f"{self.data.time_ave_areal_density:.4f} g/cm²")
     
     def analyze_burn_phase(self):
         """Analyze burn: fusion yield, burn width, neutron-weighted quantities."""
@@ -643,6 +689,18 @@ class ICFAnalyzer:
         
         # Compute neutron-averaged quantities
         self._compute_neutron_averaged_quantities()
+        
+        # Time-averaged ρR over burn period (needs burn_width from above)
+        if (self.data.bang_time > 0 and self.data.burn_width > 0
+                and self.data.areal_density_vs_time is not None):
+            t_start = self.data.bang_time - self.data.burn_width / 2
+            t_end   = self.data.bang_time + self.data.burn_width / 2
+            mask = (self.data.time >= t_start) & (self.data.time <= t_end)
+            if np.any(mask):
+                self.data.time_ave_areal_density = np.mean(
+                    self.data.areal_density_vs_time[mask, -1])
+                logger.info(f"Time-averaged ρR (burn period): "
+                            f"{self.data.time_ave_areal_density:.4f} g/cm²")
         
         # Maximum DT temperature
         if self.data.ion_temperature is not None:
@@ -890,3 +948,39 @@ class ICFAnalyzer:
             if initial_density > 0:
                 self.data.comp_ratio = self.data.max_density / initial_density
                 logger.info(f"Compression ratio: {self.data.comp_ratio:.2f}")
+
+        # ---- Mass fractions (require region interfaces) ----
+        ri = self.data.region_interfaces_indices
+        if ri is not None and ri.shape[1] >= 2 and self.data.zone_mass is not None:
+            stag_idx = np.argmin(np.abs(self.data.time - self.data.stag_time)) \
+                       if self.data.stag_time > 0 else 0
+
+            # Region boundary indices (node indices)
+            fuel_bnd = int(ri[0, -2])     # initial fuel/ablator interface
+            n_zones  = self.data.zone_mass.shape[1]
+
+            # Initial masses (t=0)
+            initial_fuel_mass    = np.sum(self.data.zone_mass[0, :fuel_bnd])
+            initial_ablator_mass = np.sum(self.data.zone_mass[0, fuel_bnd:])
+
+            # Stagnation masses (same zones — Lagrangian)
+            stag_fuel_mass    = np.sum(self.data.zone_mass[stag_idx, :fuel_bnd])
+            stag_ablator_mass = np.sum(self.data.zone_mass[stag_idx, fuel_bnd:])
+
+            if initial_fuel_mass > 0:
+                self.data.unablated_fuel_mass = stag_fuel_mass / initial_fuel_mass
+            if initial_ablator_mass > 0:
+                self.data.unablated_ablatar_mass = stag_ablator_mass / initial_ablator_mass
+
+            # Stagnated fuel mass fraction: fuel mass inside core_radius at stagnation
+            if self.data.core_radius > 0:
+                boundaries_stag = self.data.zone_boundaries[stag_idx]
+                zone_centers = 0.5 * (boundaries_stag[:-1] + boundaries_stag[1:])
+                inside = zone_centers <= self.data.core_radius
+                stag_core_mass = np.sum(self.data.zone_mass[stag_idx, inside & (np.arange(n_zones) < fuel_bnd)])
+                if initial_fuel_mass > 0:
+                    self.data.stagnated_fuel_mass = stag_core_mass / initial_fuel_mass
+
+            logger.info(f"Mass fractions — fuel: {self.data.unablated_fuel_mass:.4f}, "
+                        f"ablator: {self.data.unablated_ablatar_mass:.4f}, "
+                        f"stagnated fuel: {self.data.stagnated_fuel_mass:.4f}")
