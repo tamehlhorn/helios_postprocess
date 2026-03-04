@@ -752,7 +752,111 @@ class ICFAnalyzer:
         if self.data.ion_temperature is not None:
             self.data.max_dt_temp = np.max(self.data.ion_temperature) / 1000.0  # eV → keV
             logger.info(f"Maximum DT temperature: {self.data.max_dt_temp:.2f} keV")
+
+        # Burn propagation: hot-spot ρR (T_ion > 4.5 keV) and ignition time
+        self._compute_burn_propagation()
     
+    def _compute_burn_propagation(self):
+        """
+        Compute burn-propagation diagnostics following Olson et al.
+
+        Hot-spot ρR is defined as the areal density of all zones with
+        T_ion > 4.5 keV at each timestep.  This differs from the region-
+        based hot-spot ρR (which uses region_interfaces_indices).
+
+        Key outputs stored on self.data:
+          - hot_spot_rhoR_vs_time  (n_times,)  g/cm²
+          - total_rhoR_vs_time    (n_times,)  g/cm²
+          - ignition_time         ns  — when HS ρR first crosses 0.3 g/cm²
+          - ignition_hs_radius    cm  — HS radius at ignition
+          - ignition_hs_pressure  Gbar — mass-avg HS pressure at ignition
+          - burn_propagation_time ns  — when HS ρR ≈ total ρR
+        """
+        if (self.data.ion_temperature is None
+                or self.data.mass_density is None
+                or self.data.zone_boundaries is None):
+            logger.warning("Cannot compute burn propagation: missing data")
+            return
+
+        logger.info("Computing burn propagation (T_ion > 4.5 keV hot-spot ρR)...")
+
+        T_THRESHOLD_EV = 4500.0   # 4.5 keV in eV (ion_temperature stored in eV)
+        RHO_R_IGNITION = 0.3      # g/cm² — ignition criterion
+
+        n_times, n_zones = self.data.mass_density.shape
+        hs_rhoR = np.zeros(n_times)
+        total_rhoR = np.zeros(n_times)
+
+        for t in range(n_times):
+            dr = np.diff(self.data.zone_boundaries[t])              # Δr per zone
+            rho_dr = self.data.mass_density[t] * dr                  # ρΔr per zone
+            total_rhoR[t] = np.sum(rho_dr)
+
+            hot_mask = self.data.ion_temperature[t] > T_THRESHOLD_EV
+            hs_rhoR[t] = np.sum(rho_dr[hot_mask])
+
+        self.data.hot_spot_rhoR_vs_time = hs_rhoR
+        self.data.total_rhoR_vs_time = total_rhoR
+
+        # ---- Ignition time: first crossing of ρR_hs = 0.3 g/cm² ----
+        above = hs_rhoR >= RHO_R_IGNITION
+        if np.any(above):
+            ign_idx = np.argmax(above)      # first index where True
+
+            # Linear interpolation for precise crossing time
+            if ign_idx > 0:
+                r0, r1 = hs_rhoR[ign_idx - 1], hs_rhoR[ign_idx]
+                t0, t1 = self.data.time[ign_idx - 1], self.data.time[ign_idx]
+                if r1 != r0:
+                    frac = (RHO_R_IGNITION - r0) / (r1 - r0)
+                    self.data.ignition_time = t0 + frac * (t1 - t0)
+                else:
+                    self.data.ignition_time = self.data.time[ign_idx]
+            else:
+                self.data.ignition_time = self.data.time[ign_idx]
+
+            logger.info(f"Ignition time (ρR_hs ≥ 0.3 g/cm²): "
+                        f"{self.data.ignition_time:.3f} ns")
+
+            # ---- Hot-spot properties at ignition ----
+            # Use the first timestep at or past ignition
+            hot_mask = self.data.ion_temperature[ign_idx] > T_THRESHOLD_EV
+            if np.any(hot_mask):
+                boundaries = self.data.zone_boundaries[ign_idx]
+                # HS radius: outer boundary of outermost hot zone
+                hot_indices = np.where(hot_mask)[0]
+                self.data.ignition_hs_radius = boundaries[hot_indices[-1] + 1]
+                logger.info(f"Hot-spot radius at ignition: "
+                            f"{self.data.ignition_hs_radius * 1e4:.1f} μm")
+
+                # HS pressure: mass-averaged total pressure in Gbar
+                p_total = (self.data.ion_pressure[ign_idx]
+                           + self.data.rad_pressure[ign_idx]) * 1e-8  # Gbar
+                mass = self.data.zone_mass[ign_idx]
+                total_hs_mass = np.sum(mass[hot_mask])
+                if total_hs_mass > 0:
+                    self.data.ignition_hs_pressure = (
+                        np.sum(p_total[hot_mask] * mass[hot_mask]) / total_hs_mass)
+                    logger.info(f"Hot-spot pressure at ignition: "
+                                f"{self.data.ignition_hs_pressure:.1f} Gbar")
+        else:
+            logger.info("No ignition detected (ρR_hs never reached 0.3 g/cm²)")
+
+        # ---- Complete propagation time: when HS ρR ≈ total ρR ----
+        # Defined as the first time after ignition when hs_rhoR >= 0.95 * total_rhoR
+        if self.data.ignition_time > 0:
+            post_ign = self.data.time >= self.data.ignition_time
+            with np.errstate(divide='ignore', invalid='ignore'):
+                ratio = np.where(total_rhoR > 0, hs_rhoR / total_rhoR, 0)
+            propagated = post_ign & (ratio >= 0.95)
+            if np.any(propagated):
+                prop_idx = np.argmax(propagated)
+                self.data.burn_propagation_time = self.data.time[prop_idx]
+                logger.info(f"Complete burn propagation: "
+                            f"{self.data.burn_propagation_time:.3f} ns")
+            else:
+                logger.info("Burn did not fully propagate through fuel")
+
     def _compute_fusion_yield(self):
         """
         Compute total fusion energy output.

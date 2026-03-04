@@ -115,6 +115,14 @@ class ICFRunData:
         self.bang_time_HDC_areal_density: float = 0.0  # g/cm² — ablator
         self.bang_time_hs_areal_density: float = 0.0   # g/cm² — hot spot
 
+        # Burn propagation (hot-spot ρR defined by T_ion > 4.5 keV)
+        self.hot_spot_rhoR_vs_time: Optional[np.ndarray] = None  # (n_times,) g/cm²
+        self.total_rhoR_vs_time: Optional[np.ndarray] = None     # (n_times,) g/cm²
+        self.ignition_time: float = 0.0            # ns  (when HS ρR crosses 0.3 g/cm²)
+        self.ignition_hs_radius: float = 0.0       # cm  (at ignition time)
+        self.ignition_hs_pressure: float = 0.0     # Gbar (at ignition time)
+        self.burn_propagation_time: float = 0.0    # ns  (when HS ρR = total ρR)
+
         # Neutron-averaged quantities
         self.neutron_ave_fuel_areal_density: float = 0.0  # g/cm²
         self.neutron_ave_ion_temperature: float = 0.0     # keV

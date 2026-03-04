@@ -114,6 +114,12 @@ class ICFPlotter:
             
             # Areal density evolution
             self._plot_areal_density_evolution(pdf)
+
+            # Burn propagation: ρR comparison and radial lineout at ignition
+            if self.data.hot_spot_rhoR_vs_time is not None:
+                self._plot_rhoR_burn_propagation(pdf)
+            if self.data.ignition_time > 0:
+                self._plot_radial_lineout_ignition(pdf)
             
         logger.info("PDF report complete")
         
@@ -244,6 +250,12 @@ class ICFPlotter:
             ]),
             ('Additional Metrics', [
                 f"Adiabat (mass-avg, ice): {self.data.adiabat_mass_averaged_ice:.4f}",
+            ]),
+            ('Burn Propagation (T_ion > 4.5 keV)', [
+                f"Ignition Time (ρR_hs = 0.3 g/cm²): {self.data.ignition_time:.3f} ns",
+                f"HS Radius at Ignition: {self.data.ignition_hs_radius * 1e4:.0f} μm",
+                f"HS Pressure at Ignition: {self.data.ignition_hs_pressure:.1f} Gbar",
+                f"Complete Propagation: {self.data.burn_propagation_time:.3f} ns",
             ]),
         ])  # Close the metrics.extend() list
         
@@ -1346,5 +1358,132 @@ class ICFPlotter:
         ax.legend()
         ax.grid(True, alpha=0.3)
         
+        pdf.savefig(fig)
+        plt.close(fig)
+
+    def _plot_rhoR_burn_propagation(self, pdf):
+        """
+        Plot total ρR and hot-spot ρR vs time (Olson et al. Fig 8 style).
+
+        Hot-spot ρR = areal density of zones with T_ion > 4.5 keV.
+        Marks ignition (ρR_hs = 0.3 g/cm²) and complete propagation
+        (HS ρR ≈ total ρR).
+        """
+        fig, ax = plt.subplots(figsize=self.default_figsize)
+
+        time = self.data.time
+        total_rhoR = self.data.total_rhoR_vs_time
+        hs_rhoR = self.data.hot_spot_rhoR_vs_time
+
+        ax.plot(time, total_rhoR, 'k-', linewidth=2, label='Total ρR')
+        ax.plot(time, hs_rhoR, 'r-', linewidth=2, label='Hot-spot ρR (T$_i$ > 4.5 keV)')
+
+        # Mark ignition
+        if self.data.ignition_time > 0:
+            ax.axvline(self.data.ignition_time, color='gray', linestyle='--',
+                       alpha=0.6, label=f'Ignition ({self.data.ignition_time:.3f} ns)')
+
+        # Mark complete propagation
+        if self.data.burn_propagation_time > 0:
+            ax.axvline(self.data.burn_propagation_time, color='blue', linestyle=':',
+                       alpha=0.6, label=f'Complete propagation '
+                       f'({self.data.burn_propagation_time:.3f} ns)')
+
+        # Mark bang time and stagnation
+        if self.data.bang_time > 0:
+            ax.axvline(self.data.bang_time, color='orange', linestyle='--',
+                       alpha=0.5, label=f'Bang time ({self.data.bang_time:.3f} ns)')
+        if self.data.stag_time > 0:
+            ax.axvline(self.data.stag_time, color='green', linestyle='--',
+                       alpha=0.5, label=f'Stagnation ({self.data.stag_time:.3f} ns)')
+
+        # ρR_hs = 0.3 g/cm² reference line
+        ax.axhline(0.3, color='gray', linestyle=':', alpha=0.4,
+                   label='ρR$_{hs}$ = 0.3 g/cm²')
+
+        # Zoom to the interesting region (around bang time)
+        if self.data.bang_time > 0:
+            peak_rhoR = np.max(total_rhoR)
+            active = total_rhoR > 0.05 * peak_rhoR
+            if np.any(active):
+                t_lo = time[np.argmax(active)]
+                t_hi = time[len(time) - 1 - np.argmax(active[::-1])]
+                margin = (t_hi - t_lo) * 0.15
+                ax.set_xlim(t_lo - margin, t_hi + margin)
+
+        ax.set_xlabel('Time (ns)')
+        ax.set_ylabel('ρR (g/cm²)')
+        ax.set_title('Burn Propagation — Total ρR and Hot-Spot ρR')
+        ax.legend(fontsize=8, loc='upper right')
+        ax.grid(True, alpha=0.3)
+
+        pdf.savefig(fig)
+        plt.close(fig)
+
+    def _plot_radial_lineout_ignition(self, pdf):
+        """
+        Plot radial lineouts of ion temperature and density at ignition
+        (Olson et al. Fig 7 style).
+
+        Ignition defined as T_ion > 4.5 keV within ρR_hs = 0.3 g/cm².
+        """
+        fig, ax1 = plt.subplots(figsize=self.default_figsize)
+
+        # Find timestep closest to ignition
+        ign_idx = np.argmin(np.abs(self.data.time - self.data.ignition_time))
+
+        boundaries = self.data.zone_boundaries[ign_idx]
+        zone_centers = 0.5 * (boundaries[:-1] + boundaries[1:])
+        radius_um = zone_centers * 1e4   # cm → μm
+
+        # Ion temperature in keV
+        T_ion_keV = self.data.ion_temperature[ign_idx] / 1000.0
+
+        # Density scaled by 0.1 (to share axis, matching Olson Fig 7)
+        density = self.data.mass_density[ign_idx]
+        density_scaled = 0.1 * density
+
+        # Plot temperature (red) and scaled density (black) on same axis
+        color_T = 'tab:red'
+        ax1.plot(radius_um, T_ion_keV, color=color_T, linewidth=2,
+                 label='T$_{ion}$ (keV)')
+        ax1.plot(radius_um, density_scaled, 'k-', linewidth=2,
+                 label='0.1×ρ (g/cm³)')
+        ax1.set_xlabel('Radius (μm)')
+        ax1.set_ylabel('T$_{ion}$ (keV)  or  0.1×ρ (g/cm³)')
+
+        # Mark hot-spot radius
+        if self.data.ignition_hs_radius > 0:
+            hs_r_um = self.data.ignition_hs_radius * 1e4
+            ax1.axvline(hs_r_um, color='gray', linestyle='--', alpha=0.6)
+            y_max = ax1.get_ylim()[1]
+            ax1.annotate(f'hot spot\nradius = {hs_r_um:.0f} μm',
+                         xy=(hs_r_um, y_max * 0.6),
+                         fontsize=10, ha='center',
+                         arrowprops=dict(arrowstyle='->', color='black'),
+                         xytext=(hs_r_um * 0.6, y_max * 0.75))
+
+        # Annotation box with key metrics
+        if self.data.hot_spot_rhoR_vs_time is not None:
+            hs_rhoR_val = self.data.hot_spot_rhoR_vs_time[ign_idx]
+            ax1.text(0.05, 0.92,
+                     f'ρR$_{{hs}}$ = {hs_rhoR_val:.2f} g/cm²\n'
+                     f'P$_{{hs}}$ = {self.data.ignition_hs_pressure:.1f} Gbar\n'
+                     f't$_{{ign}}$ = {self.data.ignition_time:.3f} ns',
+                     transform=ax1.transAxes, fontsize=10,
+                     verticalalignment='top',
+                     bbox=dict(boxstyle='round', facecolor='lightyellow', alpha=0.8))
+
+        # Zoom to the capsule (exclude coronal plasma)
+        dense = np.where(density > 1.0)[0]
+        if len(dense) > 0:
+            r_max = radius_um[dense[-1]] * 1.3
+            ax1.set_xlim(0, r_max)
+
+        ax1.set_title(f'Radial Profiles at Ignition  '
+                      f'(t = {self.data.time[ign_idx]:.3f} ns) — Helios')
+        ax1.legend(loc='upper right')
+        ax1.grid(True, alpha=0.3)
+
         pdf.savefig(fig)
         plt.close(fig)

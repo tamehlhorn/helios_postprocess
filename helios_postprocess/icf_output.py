@@ -183,6 +183,17 @@ class ICFOutputGenerator:
         _a(self._metric('Mass-avg adiabat (ice)',   d.adiabat_mass_averaged_ice,    '',     fmt='.2f'))
         _a('')
 
+        # ---- Burn propagation (Olson et al. convention) ----
+        _a('BURN PROPAGATION (T_ion > 4.5 keV)')
+        _a('-' * width)
+        _a(self._metric('Ignition time (ρR_hs ≥ 0.3)',  d.ignition_time,          'ns',   fmt='.3f'))
+        _a(self._metric('HS radius at ignition',
+                         d.ignition_hs_radius * 1e4 if d.ignition_hs_radius > 0 else 0.0,
+                         'μm', fmt='.0f'))
+        _a(self._metric('HS pressure at ignition',      d.ignition_hs_pressure,   'Gbar', fmt='.1f'))
+        _a(self._metric('Complete propagation time',     d.burn_propagation_time,  'ns',   fmt='.3f'))
+        _a('')
+
         _a('=' * width)
         _a('  End of summary')
         _a('=' * width)
@@ -207,6 +218,7 @@ class ICFOutputGenerator:
           hs_radius_cm         — hot-spot outer radius
           total_rhoR_gcm2      — total areal density
           fuel_rhoR_gcm2       — cold-fuel areal density
+          hs_rhoR_gcm2         — hot-spot areal density (T_ion > 4.5 keV)
           peak_density_gcc     — peak density (over zones) at each time
           peak_ion_temp_keV    — peak ion temperature at each time
           ablation_front_r_cm  — ablation front radius
@@ -279,6 +291,12 @@ class ICFOutputGenerator:
         else:
             dt_neutrons = nan_col.copy()
 
+        # Hot-spot ρR (T_ion > 4.5 keV definition)
+        if d.hot_spot_rhoR_vs_time is not None:
+            hs_rhoR = d.hot_spot_rhoR_vs_time.copy()
+        else:
+            hs_rhoR = nan_col.copy()
+
         # ---- Write CSV ----
         columns = [
             ('time_ns',             d.time),
@@ -287,6 +305,7 @@ class ICFOutputGenerator:
             ('hs_radius_cm',        hs_radius),
             ('total_rhoR_gcm2',     total_rhoR),
             ('fuel_rhoR_gcm2',      fuel_rhoR),
+            ('hs_rhoR_gcm2',        hs_rhoR),
             ('peak_density_gcc',    peak_density),
             ('peak_ion_temp_keV',   peak_ion_temp),
             ('ablation_front_r_cm', abl_front),
