@@ -321,11 +321,13 @@ class ICFAnalyzer:
         """
         Compute mass-averaged adiabat (entropy parameter) in cold DT fuel.
 
-        α = P / P_Fermi   where P_Fermi = 2.17 (ρ/ρ₀)^(5/3) Mbar
-        for equimolar DT ice (ρ₀ = 0.205 g/cc, Lindl convention).
+        alpha = P / P_Fermi   where P_Fermi = 2.17 (rho/rho_0)^(5/3) Mbar
+        for equimolar DT ice (rho_0 = 0.205 g/cc, Lindl convention).
 
-        Evaluated at mid-implosion in the cold fuel (DT Solid / liquid DT)
-        region, excluding the hot spot and ablator.
+        Evaluated at peak implosion velocity in the cold fuel (DT Solid / DT ice)
+        region, excluding the hot spot and ablator.  At this time the first shock
+        has traversed the fuel and the shell is in-flight, giving a physically
+        meaningful measurement of fuel entropy before stagnation reheating.
         """
         if self.data.ion_pressure is None or self.data.mass_density is None:
             logger.warning("Cannot compute adiabat: missing pressure or density data")
@@ -334,37 +336,68 @@ class ICFAnalyzer:
         logger.info("Computing adiabat...")
 
         try:
-            # Time: mid-implosion = halfway between start-of-motion and stagnation
-            stag_t = self.data.stag_time if self.data.stag_time > 0 else self.data.time[-1] / 2
-            mid_t  = stag_t * 0.5
-            mid_idx = np.argmin(np.abs(self.data.time - mid_t))
-
-            # Zone range: cold fuel = between hot-spot and ablator boundaries
+            # -- Time: peak implosion velocity (most negative shell velocity) --
+            # This is when the shell is in-flight after shock transit but before
+            # stagnation reheating -- the standard time for adiabat evaluation.
             ri = self.data.region_interfaces_indices
-            if ri is not None and ri.shape[1] >= 2:
-                z_start = int(ri[mid_idx, 0])           # outer edge of hot spot
-                z_end   = int(ri[mid_idx, -2])           # inner edge of ablator
+            vel = self.data.velocity
+            n_zones = self.data.mass_density.shape[1]
+
+            if vel is not None:
+                # Zone-center velocities
+                if vel.shape[1] > n_zones:
+                    v_zone = 0.5 * (vel[:, :n_zones] + vel[:, 1:n_zones+1])
+                else:
+                    v_zone = vel[:, :n_zones]
+
+                # Find time of peak inward velocity in fuel zones only
+                if ri is not None and ri.shape[1] >= 2:
+                    fuel_start = int(ri[0, 0])
+                    fuel_end = int(ri[0, -2])
+                    if fuel_end > fuel_start:
+                        min_v_per_time = np.min(v_zone[:, fuel_start:fuel_end], axis=1)
+                    else:
+                        min_v_per_time = np.min(v_zone, axis=1)
+                else:
+                    min_v_per_time = np.min(v_zone, axis=1)
+
+                # Restrict to times before stagnation to avoid post-bounce
+                stag_t = self.data.stag_time if self.data.stag_time > 0 else self.data.time[-1]
+                pre_stag = self.data.time < stag_t
+                if np.any(pre_stag):
+                    masked_v = min_v_per_time.copy()
+                    masked_v[~pre_stag] = 0.0  # zero out post-stagnation
+                    eval_idx = np.argmin(masked_v)
+                else:
+                    eval_idx = np.argmin(min_v_per_time)
             else:
-                # Fallback: inner 50% of zones
-                n_zones = self.data.mass_density.shape[1]
+                # Fallback: mid-implosion
+                stag_t = self.data.stag_time if self.data.stag_time > 0 else self.data.time[-1] / 2
+                eval_idx = np.argmin(np.abs(self.data.time - stag_t * 0.5))
+
+            # -- Zone range: cold fuel = between hot-spot and ablator boundaries --
+            if ri is not None and ri.shape[1] >= 2:
+                z_start = int(ri[eval_idx, 0])           # outer edge of hot spot
+                z_end   = int(ri[eval_idx, -2])           # inner edge of ablator
+            else:
                 z_start = 0
                 z_end   = n_zones // 2
 
             if z_end <= z_start:
-                logger.warning("Cold fuel region is empty — cannot compute adiabat")
+                logger.warning("Cold fuel region is empty -- cannot compute adiabat")
                 return
 
-            # Total pressure in Mbar
-            p_tot = self.data.ion_pressure[mid_idx, z_start:z_end]
+            # -- Total pressure in Mbar --
+            p_tot = self.data.ion_pressure[eval_idx, z_start:z_end]
             if self.data.rad_pressure is not None:
-                p_tot = p_tot + self.data.rad_pressure[mid_idx, z_start:z_end]
-            p_Mbar = p_tot * 1e-5                        # J/cm³ → Mbar
+                p_tot = p_tot + self.data.rad_pressure[eval_idx, z_start:z_end]
+            p_Mbar = p_tot * 1e-5                        # J/cm3 -> Mbar
 
-            rho   = self.data.mass_density[mid_idx, z_start:z_end]   # g/cc
-            mass  = self.data.zone_mass[mid_idx, z_start:z_end]
+            rho  = self.data.mass_density[eval_idx, z_start:z_end]   # g/cc
+            mass = self.data.zone_mass[eval_idx, z_start:z_end]
 
-            # Fermi pressure for equimolar DT ice
-            rho0 = 0.205                                  # g/cc
+            # -- Fermi pressure for equimolar DT --
+            rho0 = 0.205                                  # g/cc (DT ice density)
             p_fermi = 2.17 * (rho / rho0) ** (5.0 / 3.0)  # Mbar
 
             with np.errstate(divide='ignore', invalid='ignore'):
@@ -372,13 +405,13 @@ class ICFAnalyzer:
                 alpha[~np.isfinite(alpha)] = 0.0
 
             self.data.adiabat_mass_averaged_ice = np.average(alpha, weights=mass)
-            logger.info(f"Mass-averaged adiabat (cold fuel, t={self.data.time[mid_idx]:.2f} ns): "
+            logger.info(f"Mass-averaged adiabat (cold fuel, t={self.data.time[eval_idx]:.2f} ns): "
                         f"{self.data.adiabat_mass_averaged_ice:.2f}")
 
         except Exception as e:
             logger.warning(f"Could not compute adiabat: {e}")
             self.data.adiabat_mass_averaged_ice = 0.0
-    
+
     def _track_ablation_front(self):
         """
         Track ablation front position over time.
