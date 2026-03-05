@@ -5,9 +5,9 @@ Burn-Averaged Metrics Module
 Calculates burn-averaged (temporal) quantities for comparison with published
 ICF performance metrics.
 
-This module provides TIME-HISTORY burn-averaging using data already computed
-by the ICFAnalyzer pipeline, complementing the SPATIAL neutron-averaging
-in icf_analysis.py.
+This module provides TIME-HISTORY burn-averaging using the 2D arrays stored
+on ICFRunData (after build_run_data + ICFAnalyzer have run), complementing
+the SPATIAL neutron-averaging in icf_analysis.py.
 
 Workflow
 -------
@@ -17,7 +17,7 @@ Workflow
     >>> from helios_postprocess.burn_averaged_metrics import (
     ...     extract_histories_from_run_data,
     ...     calculate_burn_averaged_metrics,
-    ...     compare_with_published
+    ...     compare_with_published,
     ... )
     >>>
     >>> run = HeliosRun('sim.exo', verbose=True)
@@ -32,13 +32,7 @@ Workflow
     >>>
     >>> histories = extract_histories_from_run_data(data)
     >>> metrics = calculate_burn_averaged_metrics(histories)
-    >>> print(compare_with_published(metrics, published_data))
-
-Key Functions
--------------
-extract_histories_from_run_data : Build histories dict from ICFRunData
-calculate_burn_averaged_metrics : Calculate all burn-averaged quantities
-compare_with_published : Generate comparison tables
+    >>> print(compare_with_published(metrics, published_data, laser_energy_MJ=4.0))
 
 Author: Prof T
 Date: November 2025 (original), March 2026 (refactored for ICFRunData pipeline)
@@ -48,6 +42,9 @@ import numpy as np
 from scipy.integrate import simpson
 from typing import Dict, Optional
 import warnings
+import logging
+
+logger = logging.getLogger(__name__)
 
 try:
     from .core import sigma_v_DT
@@ -63,24 +60,22 @@ def calculate_burn_rate_from_sim(temperature_keV: np.ndarray,
     """
     Calculate DT fusion reaction rate from temperature and density.
 
-    Uses the sigma_v_DT reactivity function from core module.
-
     Parameters
     ----------
     temperature_keV : np.ndarray
-        Ion temperature in keV at each time step
+        Ion temperature in keV at each time step, shape (n_times,)
     density_gcc : np.ndarray
-        Mass density in g/cm³ at each time step
+        Mass density in g/cm³ at each time step, shape (n_times,)
     ion_fraction : float, optional
         Fraction of each ion species (default 0.5 for 50-50 DT)
 
     Returns
     -------
     np.ndarray
-        Fusion reaction rate in reactions/(cm³·s)
+        Fusion reaction rate in reactions/(cm³·s), shape (n_times,)
     """
-    amu_to_g = 1.66054e-24  # g
-    m_DT = 2.5 * amu_to_g   # Average mass for 50-50 DT
+    amu_to_g = 1.66054e-24
+    m_DT = 2.5 * amu_to_g   # Average DT ion mass
 
     n_total = density_gcc / m_DT
     n_D = n_total * ion_fraction
@@ -95,127 +90,144 @@ def calculate_burn_rate_from_sim(temperature_keV: np.ndarray,
 
 def extract_histories_from_run_data(data) -> Dict:
     """
-    Build histories dict from an ICFRunData object (after ICFAnalyzer has run).
+    Compute per-timestep hot-spot averaged quantities from ICFRunData 2D arrays.
+
+    Uses region_interfaces_indices to identify the hot-spot boundary at each
+    timestep, then computes mass-averaged temperature, pressure, and density
+    within the hot spot.  Also extracts cold-fuel areal density from the
+    cumulative areal_density_vs_time array.
 
     This replaces the old extract_hot_spot_histories() which looped over
-    timesteps and called hot_spot/areal_density modules directly.  All the
-    needed arrays are already present on the ICFRunData dataclass after
-    ICFAnalyzer.analyze_stagnation_phase() and analyze_burn_phase().
+    timesteps calling the legacy hot_spot/areal_density modules.
 
     Parameters
     ----------
     data : ICFRunData
-        Populated dataclass — must have had ICFAnalyzer run on it so that
-        attributes like hot_spot_temperature, hot_spot_pressure, etc. exist.
+        Populated dataclass — must have had build_run_data() and
+        ICFAnalyzer (at least analyze_stagnation_phase) run on it.
+        Required attributes:
+            time, ion_temperature, mass_density, ion_pressure, rad_pressure,
+            zone_boundaries, zone_mass, region_interfaces_indices
+        Optional (for areal density):
+            areal_density_vs_time
 
     Returns
     -------
     dict
         Dictionary with keys expected by calculate_burn_averaged_metrics():
-        - 'time_ns'
-        - 'temperature_keV'
-        - 'pressure_Gbar'
-        - 'density_gcc'
-        - 'areal_density_gcm2'
-        - 'radius_um'
-        - 'volume_cm3'
-        - 'mass_mg'
-        - 'initial_radius_um'
+        - 'time_ns'            : (n_times,) time in nanoseconds
+        - 'temperature_keV'    : (n_times,) mass-avg hot-spot ion T in keV
+        - 'pressure_Gbar'      : (n_times,) mass-avg hot-spot total P in Gbar
+        - 'density_gcc'        : (n_times,) mass-avg hot-spot density in g/cm³
+        - 'areal_density_gcm2' : (n_times,) cold-fuel ρR in g/cm²
+        - 'radius_um'          : (n_times,) hot-spot outer radius in μm
+        - 'volume_cm3'         : (n_times,) hot-spot volume in cm³ (sphere)
+        - 'mass_mg'            : (n_times,) hot-spot mass in mg
+        - 'initial_radius_um'  : scalar, radius at first timestep
+
+    Raises
+    ------
+    ValueError
+        If required arrays are missing from ICFRunData.
     """
-    # Time — ICFRunData stores time in ns
+    # ── Validate required data ──
+    _check_required(data, [
+        'time', 'ion_temperature', 'mass_density',
+        'ion_pressure', 'rad_pressure',
+        'zone_boundaries', 'zone_mass',
+        'region_interfaces_indices',
+    ])
+
     time_ns = np.asarray(data.time)
+    n_times = len(time_ns)
 
-    # ── Hot-spot temperature (keV) ──
-    # ICFAnalyzer stores neutron-averaged T in keV on data as a scalar;
-    # for a time history we need the per-timestep ion temperature in the
-    # hot spot.  Several possible attribute names depending on what
-    # ICFAnalyzer has computed.
-    temp_keV = _get_history(data, [
-        'hot_spot_ion_temperature',      # per-timestep array (keV)
-        'neutron_avg_temperature',       # per-timestep array (keV)
-    ], fallback_scalar='neutron_avg_Ti_keV', time_ns=time_ns)
+    ri = data.region_interfaces_indices          # (n_times, n_interfaces)
+    T_ion = data.ion_temperature                 # (n_times, n_zones) eV
+    rho   = data.mass_density                    # (n_times, n_zones) g/cm³
+    P_ion = data.ion_pressure                    # (n_times, n_zones) J/cm³
+    P_rad = data.rad_pressure                    # (n_times, n_zones) J/cm³
+    P_tot = P_ion + P_rad                        # total pressure
+    zmass = data.zone_mass                       # (n_times, n_zones) g
+    zbnd  = data.zone_boundaries                 # (n_times, n_nodes) cm
 
-    # ── Hot-spot pressure (Gbar) ──
-    pres_Gbar = _get_history(data, [
-        'hot_spot_pressure',             # per-timestep array (Gbar)
-        'neutron_avg_pressure',
-    ], fallback_scalar='neutron_avg_P_Gbar', time_ns=time_ns)
+    # Cumulative areal density (optional — for cold fuel ρR)
+    cumul_rhoR = data.areal_density_vs_time      # (n_times, n_zones+1) or None
 
-    # ── Hot-spot density (g/cm³) ──
-    dens_gcc = _get_history(data, [
-        'hot_spot_density',
-        'neutron_avg_density',
-    ], fallback_scalar='neutron_avg_rho', time_ns=time_ns)
+    # Output arrays
+    temperatures = np.zeros(n_times)
+    pressures    = np.zeros(n_times)
+    densities    = np.zeros(n_times)
+    radii_um     = np.zeros(n_times)
+    volumes      = np.zeros(n_times)
+    masses_mg    = np.zeros(n_times)
+    rhoR_cf      = np.zeros(n_times)
 
-    # ── Cold fuel areal density (g/cm²) ──
-    rhoR = _get_history(data, [
-        'fuel_areal_density',
-        'cold_fuel_rhoR',
-        'areal_density',
-    ], fallback_scalar='neutron_avg_rhoR_fuel', time_ns=time_ns)
+    logger.info(f"Extracting hot-spot histories ({n_times} timesteps)...")
 
-    # ── Hot-spot radius (μm) ──
-    radius_um = _get_history(data, [
-        'hot_spot_radius',               # per-timestep (already μm or cm?)
-    ], fallback_scalar=None, time_ns=time_ns)
-    # If it looks like cm (values < 1), convert to μm
-    if radius_um is not None and np.nanmax(radius_um) < 1.0:
-        radius_um = radius_um * 1e4
+    for t in range(n_times):
+        # Hot-spot outer boundary = first region interface (node index)
+        hs_bnd = int(ri[t, 0])
 
-    # ── Hot-spot volume (cm³) ──
-    volume_cm3 = _get_history(data, [
-        'hot_spot_volume',
-    ], fallback_scalar=None, time_ns=time_ns)
-    # If we have radius but no volume, compute assuming sphere
-    if (volume_cm3 is None or np.all(volume_cm3 == 0)) and radius_um is not None:
-        r_cm = radius_um * 1e-4
-        volume_cm3 = (4.0 / 3.0) * np.pi * r_cm ** 3
+        if hs_bnd <= 0:
+            continue   # no hot spot at this timestep
 
-    # ── Hot-spot mass (mg) ──
-    mass_mg = _get_history(data, [
-        'hot_spot_mass',
-    ], fallback_scalar=None, time_ns=time_ns)
+        # Hot-spot zones: 0 to hs_bnd-1
+        hs = slice(0, hs_bnd)
 
-    # ── Initial radius ──
-    initial_radius_um = radius_um[0] if radius_um is not None else 0.0
+        m = zmass[t, hs]                # zone masses in hot spot
+        m_total = np.sum(m)
 
-    # Package into dict
-    n = len(time_ns)
+        if m_total <= 0:
+            continue
+
+        # Mass-averaged ion temperature → keV
+        temperatures[t] = np.sum(T_ion[t, hs] * m) / m_total / 1000.0
+
+        # Mass-averaged total pressure → Gbar
+        pressures[t] = np.sum(P_tot[t, hs] * m) / m_total * 1e-8
+
+        # Mass-averaged density
+        densities[t] = np.sum(rho[t, hs] * m) / m_total
+
+        # Hot-spot outer radius (node position at hs_bnd)
+        r_cm = zbnd[t, hs_bnd]
+        radii_um[t] = r_cm * 1e4            # cm → μm
+
+        # Spherical volume
+        volumes[t] = (4.0 / 3.0) * np.pi * r_cm**3
+
+        # Hot-spot mass
+        masses_mg[t] = m_total * 1e3         # g → mg
+
+        # Cold-fuel areal density
+        if cumul_rhoR is not None:
+            # fuel/ablator boundary is the second-to-last interface
+            fuel_bnd = int(ri[t, -2]) if ri.shape[1] >= 2 else hs_bnd
+            rhoR_cf[t] = cumul_rhoR[t, fuel_bnd] - cumul_rhoR[t, hs_bnd]
+
+    logger.info("Hot-spot history extraction complete")
+
     return {
         'time_ns':            time_ns,
-        'temperature_keV':    _ensure_array(temp_keV, n),
-        'pressure_Gbar':      _ensure_array(pres_Gbar, n),
-        'density_gcc':        _ensure_array(dens_gcc, n),
-        'areal_density_gcm2': _ensure_array(rhoR, n),
-        'radius_um':          _ensure_array(radius_um, n),
-        'volume_cm3':         _ensure_array(volume_cm3, n),
-        'mass_mg':            _ensure_array(mass_mg, n),
-        'initial_radius_um':  initial_radius_um,
+        'temperature_keV':    temperatures,
+        'pressure_Gbar':      pressures,
+        'density_gcc':        densities,
+        'areal_density_gcm2': rhoR_cf,
+        'radius_um':          radii_um,
+        'volume_cm3':         volumes,
+        'mass_mg':            masses_mg,
+        'initial_radius_um':  radii_um[0],
     }
 
 
-def _get_history(data, attr_names, fallback_scalar=None, time_ns=None):
-    """Try multiple attribute names; return the first that exists and is an array."""
-    for name in attr_names:
-        val = getattr(data, name, None)
-        if val is not None:
-            arr = np.asarray(val)
-            if arr.ndim >= 1 and len(arr) > 1:
-                return arr
-    # Try scalar fallback — expand to constant array
-    if fallback_scalar is not None and time_ns is not None:
-        val = getattr(data, fallback_scalar, None)
-        if val is not None and np.isfinite(val):
-            warnings.warn(f"Using scalar {fallback_scalar}={val:.4g} as constant history")
-            return np.full(len(time_ns), float(val))
-    return None
-
-
-def _ensure_array(arr, n):
-    """Return arr if valid, else zeros."""
-    if arr is not None and len(arr) == n:
-        return arr
-    return np.zeros(n)
+def _check_required(data, attr_names):
+    """Raise ValueError if any required attribute is None."""
+    missing = [a for a in attr_names if getattr(data, a, None) is None]
+    if missing:
+        raise ValueError(
+            f"ICFRunData is missing required attributes: {missing}\n"
+            f"Make sure build_run_data() and ICFAnalyzer have been run."
+        )
 
 
 # ── Legacy compatibility wrapper ─────────────────────────────────────────────
@@ -225,9 +237,9 @@ def extract_hot_spot_histories(run_or_data, T_threshold=1000.0,
     """
     Compatibility wrapper — routes to extract_histories_from_run_data().
 
-    If called with an ICFRunData object (has attribute 'time'), extracts
-    histories directly.  If called with a HeliosRun object, raises an
-    informative error directing the caller to use the pipeline.
+    If called with an ICFRunData object (has 'ion_temperature' attribute),
+    extracts histories directly.  If called with a HeliosRun object, raises
+    an informative error directing the caller to use the pipeline.
 
     Parameters
     ----------
@@ -243,11 +255,9 @@ def extract_hot_spot_histories(run_or_data, T_threshold=1000.0,
     dict
         Histories dictionary for calculate_burn_averaged_metrics().
     """
-    # Check if this is an ICFRunData (has 'time' and 'density' arrays)
-    if hasattr(run_or_data, 'time') and hasattr(run_or_data, 'density'):
+    if hasattr(run_or_data, 'ion_temperature') and hasattr(run_or_data, 'zone_mass'):
         return extract_histories_from_run_data(run_or_data)
 
-    # Otherwise assume it's a HeliosRun — guide the user to the new workflow
     raise TypeError(
         "extract_hot_spot_histories() no longer accepts HeliosRun directly.\n"
         "Use the pipeline instead:\n"
@@ -266,42 +276,43 @@ def calculate_burn_averaged_metrics(histories: Dict,
     """
     Calculate burn-averaged metrics from time histories.
 
+    Burn-averaging: <Q> = ∫ Q(t) · Ṙ(t) dt / ∫ Ṙ(t) dt
+    where Ṙ is the volumetric fusion reaction rate ∝ ρ² · <σv>(T).
+
     Parameters
     ----------
     histories : dict
-        Dictionary from extract_histories_from_run_data() or
-        extract_hot_spot_histories().
+        Dictionary from extract_histories_from_run_data().
     ion_fraction : float, optional
-        Ion fraction for burn rate calculation (default 0.5)
+        Ion fraction for burn rate calculation (default 0.5 for 50-50 DT).
 
     Returns
     -------
     dict
-        Dictionary containing:
-        - 'T_burn_avg' : Burn-averaged temperature (keV)
-        - 'P_burn_avg' : Burn-averaged pressure (Gbar)
-        - 'rho_burn_avg' : Burn-averaged density (g/cm³)
-        - 'rhoR_burn_avg' : Burn-averaged areal density (g/cm²)
-        - 'CR_max' : Maximum convergence ratio
-        - 'yield_MJ' : Total fusion yield (MJ)
-        - 'T_peak', 'P_peak', etc. : Peak values
-        - 'burn_fraction' : Normalized burn rate profile
-        - 'burn_rate' : Raw burn rate array
+        - 'T_burn_avg'    : Burn-averaged temperature (keV)
+        - 'P_burn_avg'    : Burn-averaged pressure (Gbar)
+        - 'rho_burn_avg'  : Burn-averaged density (g/cm³)
+        - 'rhoR_burn_avg' : Burn-averaged cold-fuel areal density (g/cm²)
+        - 'CR_max'        : Maximum convergence ratio
+        - 'yield_MJ'      : Total fusion yield (MJ)
+        - 'T_peak', 'P_peak', 'rho_peak', 'rhoR_peak' : Peak values
+        - 'burn_fraction'  : Normalized burn rate profile
+        - 'burn_rate'      : Raw burn rate array
     """
-    time_ns   = histories['time_ns']
-    temp_keV  = histories['temperature_keV']
-    pres_Gbar = histories['pressure_Gbar']
-    dens_gcc  = histories['density_gcc']
-    rhoR_gcm2 = histories['areal_density_gcm2']
-    radius_um = histories['radius_um']
+    time_ns    = histories['time_ns']
+    temp_keV   = histories['temperature_keV']
+    pres_Gbar  = histories['pressure_Gbar']
+    dens_gcc   = histories['density_gcc']
+    rhoR_gcm2  = histories['areal_density_gcm2']
+    radius_um  = histories['radius_um']
     volume_cm3 = histories['volume_cm3']
 
     time_s = time_ns * 1e-9
 
-    # Burn rate at each time step
+    # Burn rate at each timestep
     burn_rate = calculate_burn_rate_from_sim(temp_keV, dens_gcc, ion_fraction)
 
-    # Burn-averaged quantities: <Q> = ∫ Q·R dt / ∫ R dt
+    # Burn-averaged quantities
     def _burn_avg(quantity):
         num = simpson(quantity * burn_rate, x=time_s)
         den = simpson(burn_rate, x=time_s)
@@ -314,9 +325,9 @@ def calculate_burn_averaged_metrics(histories: Dict,
 
     # Convergence ratio
     r0 = histories['initial_radius_um']
-    if r0 > 0:
-        valid = radius_um > 0
-        CR_max = np.max(r0 / radius_um[valid]) if np.any(valid) else 0.0
+    valid = radius_um > 0
+    if r0 > 0 and np.any(valid):
+        CR_max = np.max(r0 / radius_um[valid])
     else:
         CR_max = 0.0
 
@@ -324,7 +335,7 @@ def calculate_burn_averaged_metrics(histories: Dict,
     E_fusion = 17.6 * 1.60218e-13   # MeV → J
     reaction_rate_total = burn_rate * volume_cm3
     total_reactions = simpson(reaction_rate_total, x=time_s)
-    yield_J = total_reactions * E_fusion
+    yield_J  = total_reactions * E_fusion
     yield_MJ = yield_J * 1e-6
 
     # Normalized burn fraction (for plotting)
@@ -336,25 +347,21 @@ def calculate_burn_averaged_metrics(histories: Dict,
     min_radius = np.min(valid_r) if len(valid_r) > 0 else 0.0
 
     return {
-        # Burn-averaged values
-        'T_burn_avg':    T_burn_avg,
-        'P_burn_avg':    P_burn_avg,
-        'rho_burn_avg':  rho_burn_avg,
-        'rhoR_burn_avg': rhoR_burn_avg,
-        # Peak values
-        'T_peak':    np.max(temp_keV),
-        'P_peak':    np.max(pres_Gbar),
-        'rho_peak':  np.max(dens_gcc),
-        'rhoR_peak': np.max(rhoR_gcm2),
-        # Convergence and yield
-        'CR_max':          CR_max,
-        'min_radius_um':   min_radius,
-        'yield_MJ':        yield_MJ,
-        'yield_J':         yield_J,
+        'T_burn_avg':       T_burn_avg,
+        'P_burn_avg':       P_burn_avg,
+        'rho_burn_avg':     rho_burn_avg,
+        'rhoR_burn_avg':    rhoR_burn_avg,
+        'T_peak':           np.max(temp_keV),
+        'P_peak':           np.max(pres_Gbar),
+        'rho_peak':         np.max(dens_gcc),
+        'rhoR_peak':        np.max(rhoR_gcm2),
+        'CR_max':           CR_max,
+        'min_radius_um':    min_radius,
+        'yield_MJ':         yield_MJ,
+        'yield_J':          yield_J,
         'total_reactions':  total_reactions,
-        # Diagnostic
-        'burn_fraction': burn_fraction,
-        'burn_rate':     burn_rate,
+        'burn_fraction':    burn_fraction,
+        'burn_rate':        burn_rate,
     }
 
 
@@ -369,10 +376,9 @@ def compare_with_published(sim_metrics: Dict,
     Parameters
     ----------
     sim_metrics : dict
-        Calculated metrics from calculate_burn_averaged_metrics().
+        From calculate_burn_averaged_metrics().
     published_metrics : dict
-        Published values with uncertainties.
-        Format: {metric_name: (value, uncertainty)}
+        Published values: {key: (value, uncertainty)}.
         Supported keys: 'T_hs', 'P_hs', 'rhoR_cf', 'CR_max', 'yield', 'gain'
     laser_energy_MJ : float
         Laser energy in MJ for gain calculation.
@@ -383,7 +389,6 @@ def compare_with_published(sim_metrics: Dict,
         Formatted comparison table.
     """
     sim_gain = sim_metrics['yield_MJ'] / laser_energy_MJ if laser_energy_MJ > 0 else 0.0
-    pub_gain, pub_gain_unc = published_metrics.get('gain', (0.0, 0.0))
 
     lines = []
     lines.append("=" * 80)
@@ -393,20 +398,20 @@ def compare_with_published(sim_metrics: Dict,
     lines.append("-" * 80)
 
     rows = [
-        ('⟨T_hs⟩ (keV)',    sim_metrics['T_burn_avg'],    'T_hs',   '.1f', '.1f'),
-        ('⟨P_hs⟩ (Gbar)',   sim_metrics['P_burn_avg'],    'P_hs',   '.0f', '.0f'),
-        ('⟨ρR_cf⟩ (g/cm²)', sim_metrics['rhoR_burn_avg'], 'rhoR_cf','.2f', '.2f'),
-        ('CR_max',           sim_metrics['CR_max'],         'CR_max', '.1f', '.1f'),
-        ('Yield (MJ)',       sim_metrics['yield_MJ'],       'yield',  '.1f', '.1f'),
-        ('Fusion Gain',      sim_gain,                      'gain',   '.1f', '.1f'),
+        ('⟨T_hs⟩ (keV)',    sim_metrics['T_burn_avg'],    'T_hs',    '.1f'),
+        ('⟨P_hs⟩ (Gbar)',   sim_metrics['P_burn_avg'],    'P_hs',    '.0f'),
+        ('⟨ρR_cf⟩ (g/cm²)', sim_metrics['rhoR_burn_avg'], 'rhoR_cf', '.2f'),
+        ('CR_max',           sim_metrics['CR_max'],         'CR_max',  '.1f'),
+        ('Yield (MJ)',       sim_metrics['yield_MJ'],       'yield',   '.1f'),
+        ('Fusion Gain',      sim_gain,                      'gain',    '.1f'),
     ]
 
-    for label, sim_val, pub_key, sfmt, pfmt in rows:
+    for label, sim_val, pub_key, fmt in rows:
         pub_val, pub_unc = published_metrics.get(pub_key, (0.0, 0.0))
         if pub_val > 0:
             delta = 100 * (sim_val - pub_val) / pub_val
-            sv = format(sim_val, sfmt)
-            pv = f"{format(pub_val, pfmt)}±{format(pub_unc, pfmt)}"
+            sv = format(sim_val, fmt)
+            pv = f"{format(pub_val, fmt)}±{format(pub_unc, fmt)}"
             lines.append(f"{label:<30} {sv:>19} {pv:>19} {delta:>9.1f}")
 
     lines.append("=" * 80)

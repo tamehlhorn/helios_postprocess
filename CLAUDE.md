@@ -38,10 +38,19 @@ from helios_postprocess.burn_averaged_metrics import (
     compare_with_published,
 )
 
-histories = extract_histories_from_run_data(data)   # pulls from ICFRunData
+histories = extract_histories_from_run_data(data)   # computes from 2D arrays
 metrics = calculate_burn_averaged_metrics(histories)
 print(compare_with_published(metrics, published_data, laser_energy_MJ=4.0))
 ```
+
+`extract_histories_from_run_data()` computes per-timestep hot-spot averages
+from the 2D arrays on ICFRunData using `region_interfaces_indices` to identify
+the hot-spot boundary at each timestep:
+- Mass-averaged ion temperature (keV) over hot-spot zones
+- Mass-averaged total pressure (Gbar) over hot-spot zones
+- Mass-averaged density (g/cm³) over hot-spot zones
+- Hot-spot outer radius from `zone_boundaries[:, ri[:, 0]]`
+- Cold-fuel ρR from `areal_density_vs_time` (requires `analyze_burn_phase()`)
 
 ### Additional Physics Modules (functional style)
 
@@ -67,7 +76,7 @@ burn on/off, drive temperature profile).
 | `icf_plotting.py` | ~1580 | `ICFPlotter` — full PDF report (contours, histories, trajectories, burn propagation, radial lineouts) |
 | `icf_output.py` | ~430 | `ICFOutputGenerator` — summary text + CSV time histories |
 | **Physics modules** | | |
-| `burn_averaged_metrics.py` | ~310 | Temporal burn-averaging, published-data comparison (refactored for ICFRunData) |
+| `burn_averaged_metrics.py` | ~310 | Temporal burn-averaging from 2D arrays, published-data comparison |
 | `energetics.py` | — | Kinetic energy, hydro efficiency, PdV work |
 | `neutron_downscatter.py` | — | Neutron down-scatter ratio diagnostics |
 | `pressure_gradients.py` | — | Pressure gradient analysis, shock ID, RT assessment |
@@ -85,7 +94,8 @@ is fully incorporated into `icf_analysis.py`:
 - `hot_spot.py` — superseded by `ICFAnalyzer._compute_hot_spot_properties()`
 
 Note: `burn_averaged_metrics.py` formerly imported these three modules. It was
-refactored in v3.0 to read from `ICFRunData` instead, eliminating those dependencies.
+refactored in v3.0 to compute directly from ICFRunData 2D arrays using
+`region_interfaces_indices`, eliminating those dependencies.
 
 ## Unit Conventions
 
@@ -199,20 +209,11 @@ print('Done — report + summary + history written')
   further validation against published values.
 - Current approach: zone-boundary definition (no temperature mask).
 
-### Priority 2 — Burn-Averaged Histories Validation
-- `extract_histories_from_run_data()` uses a flexible attribute lookup to
-  pull hot-spot time histories from ICFRunData. The attribute names it looks
-  for (e.g. `hot_spot_ion_temperature`, `fuel_areal_density`) need to be
-  verified against the actual ICFRunData attributes populated by ICFAnalyzer.
-- May need to add per-timestep hot-spot history arrays to ICFAnalyzer if
-  they don't exist yet (currently many quantities are stored as scalars at
-  stagnation/bang time rather than full time histories).
-
-### Priority 3 — Physics Module Integration
+### Priority 2 — Physics Module Integration
 - `energetics`, `neutron_downscatter`, `pressure_gradients` work standalone
   with `HeliosRun` data but are not yet wired into `ICFAnalyzer` or `ICFPlotter`.
 
-### Priority 4 — `region_interfaces_indices` Robustness
+### Priority 3 — `region_interfaces_indices` Robustness
 - Material boundary identification between hot spot, fuel, and ablator.
 - Currently relies on EXODUS region data; could add fallback based on
   density/composition gradients.
