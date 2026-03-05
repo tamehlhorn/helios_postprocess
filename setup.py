@@ -19,13 +19,13 @@ else:
 
 setup(
     name="helios_postprocess",
-    version="2.0.0",
+    version="3.0.0",
     author="Prof T",
-    description="Comprehensive analysis tools for Helios ICF simulations with burn-averaged metrics",
+    description="ICF post-processing pipeline for Helios EXODUS simulations",
     long_description=long_description,
     long_description_content_type="text/markdown",
-    packages=find_packages(),
-    python_requires=">=3.7",
+    packages=find_packages(exclude=["archive", "archive.*", "examples"]),
+    python_requires=">=3.8",
     install_requires=[
         "numpy>=1.20",
         "scipy>=1.7",
@@ -37,7 +37,9 @@ setup(
             "pytest>=6.0",
             "pytest-cov>=2.0",
             "ipython>=7.0",
-            "jupyter>=1.0",
+        ],
+        "sklearn": [
+            "scikit-learn>=1.0",
         ],
     },
     classifiers=[
@@ -45,11 +47,11 @@ setup(
         "Intended Audience :: Science/Research",
         "Topic :: Scientific/Engineering :: Physics",
         "Programming Language :: Python :: 3",
-        "Programming Language :: Python :: 3.7",
         "Programming Language :: Python :: 3.8",
         "Programming Language :: Python :: 3.9",
         "Programming Language :: Python :: 3.10",
         "Programming Language :: Python :: 3.11",
+        "Programming Language :: Python :: 3.12",
     ],
-    keywords="ICF fusion Helios simulation analysis neutron areal-density hot-spot",
+    keywords="ICF fusion Helios simulation EXODUS postprocessing",
 )

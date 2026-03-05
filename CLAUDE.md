@@ -1,158 +1,223 @@
-# CLAUDE.md - Helios Postprocessor Project Context
-
-## Project Overview
-Production-ready Python package for analyzing Helios ICF (Inertial Confinement Fusion) rad-hydro simulation outputs. Transforms raw EXODUS/netCDF simulation files into comprehensive performance analyses including PDF visualizations, JSON metrics, text summaries, and CSV time series data.
+# helios_postprocessor — Project Guide
 
 ## Repository
-- **GitHub:** https://github.com/tamehlhorn/helios_postprocess
-- **Package name:** `helios_postprocess`
-- **Repo directory:** `helios_postprocessor`
-- **Version:** 2.0.0
-- **Author:** Prof T (Xcimer, ICF research)
+- **GitHub**: `tamehlhorn/helios_postprocessor`
+- **Package**: `helios_postprocess/`
+- **Dev machine**: MacBook (`~/Codes/helios_postprocessor`) — editing, pushing
+- **Run machine**: Mac Studio (`tommehlhorn`, `~/helios_postprocessor`) — running against simulation data
 
-## Development Environment
-- **MacBook Pro (M3):** Development/editing machine, repo at `~/Codes/helios_postprocessor/`
-- **Mac Studio:** Data processing machine, repo at `~/helios_postprocessor/`, data at `~/Sims/Xcimer/`
-- **Workflow:** Edit on MacBook → git push → git pull on Mac Studio → run against data
-- **Editor:** VS Code (local for editing, Remote-SSH for Mac Studio execution)
-- **Mac Studio Python:** `/usr/bin/python3` (3.9.6, system Python, no conda)
-- **Package installed:** `python3 -m pip install -e .` (editable mode on Mac Studio)
+## Architecture
 
-## Package Structure
+### Class-Based Pipeline (primary workflow)
+
 ```
-helios_postprocessor/           ← repo root
-    setup.py
-    README.md
-    SETUP_GUIDE.md
-    CLAUDE.md                   ← this file
-    examples/
-        compare_with_published_integrated.py
-    helios_postprocess/         ← Python package
-        __init__.py
-        core.py                 ← HeliosRun class (main interface, ~1100 lines)
-        burn.py                 ← Burn diagnostics
-        hot_spot.py             ← Hot spot identification
-        areal_density.py        ← Areal density calculations
-        neutron_downscatter.py  ← DSR diagnostics
-        pressure_gradients.py   ← Shock/RT analysis
-        energetics.py           ← Kinetic energy/efficiency
-        burn_averaged_metrics.py ← Burn-averaged quantities
+HeliosRun(exo_path)  →  build_run_data(run)  →  ICFRunData (dataclass, ~68 attributes)
+                                                    ↓
+                                             ICFAnalyzer(data)
+                                               .analyze_drive_phase()
+                                               .analyze_stagnation_phase()   ← also calls analyze_implosion_phase()
+                                               .analyze_burn_phase()
+                                               .compute_performance_metrics()
+                                                    ↓
+                                             ICFPlotter(data, config)
+                                               .create_full_report(pdf_path)
+                                                    ↓
+                                             ICFOutputGenerator(data)
+                                               .write_all(base_path)   → _summary.txt + _history.csv
 ```
 
-## Key Class: HeliosRun
+### Burn-Averaged Metrics (published-data comparison)
+
+After the pipeline runs, burn-averaged metrics can be computed for comparison
+with published ICF target designs:
+
 ```python
-from helios_postprocess import HeliosRun
-run = HeliosRun('simulation.exo')
+from helios_postprocess.burn_averaged_metrics import (
+    extract_histories_from_run_data,
+    calculate_burn_averaged_metrics,
+    compare_with_published,
+)
 
-# Core attributes
-run.times          # 1D array of simulation times (seconds)
-run.n_times        # number of time steps
-run.coords         # dict (currently empty - use zone_boundaries instead)
-
-# Core methods
-run.list_variables()                        # list all available variable names
-run.get_variable('mass_density', time_idx=0) # get zone data at time index
-run.get_burn_diagnostics()                  # bang time, burn width, yield
-run.calculate_areal_density(time_idx=-1)    # returns dict with 'rhoR'
-run.check_ignition_criteria()               # Lindl criteria check
-run.calculate_dsr(time_idx=-1)              # downscatter ratio
-run.close()
+histories = extract_histories_from_run_data(data)   # pulls from ICFRunData
+metrics = calculate_burn_averaged_metrics(histories)
+print(compare_with_published(metrics, published_data, laser_energy_MJ=4.0))
 ```
 
-## Helios EXODUS Variable Names
-The EXODUS files use Helios-specific variable names, NOT generic ones. Common mappings:
-- **Density:** `mass_density` (NOT `dens` or `density`)
-- **Ion temperature:** `ion_temperature` (NOT `temp` or `temperature`)
-- **Electron temperature:** `elec_temperature`
-- **Radiation temperature:** `radiation_temperature`
-- **Ion pressure:** `ion_pressure` (units: J/cm³; divide by 1e8 for Gbar)
-- **Electron pressure:** `elec_pressure`
-- **Velocity:** `fluid_velocity`
-- **Zone boundaries:** `zone_boundaries` (N+1 nodes for N zones)
-- **Zone mass:** `zone_mass`
-- **DT fusion rate:** `FusionRate_DT_nHe4` (zone-level, sum spatially for global rate)
-- **DD fusion rate:** `FusionRate_DD_nHe3`, `FusionRate_DD_pT`
-- **DT neutron count:** `TimeIntFusionProd_n_1406` (14.06 MeV, time-integrated)
-- **DD neutron count:** `TimeIntFusProd_n_0245` (2.45 MeV, time-integrated)
-- **Laser energy deposited:** `EnLaserDepositedTimeIntg`
-- **Laser power:** `LaserPwrSrc`, `LaserEnDelivered`
+### Additional Physics Modules (functional style)
+
+| Module | Purpose |
+|--------|---------|
+| `energetics` | Kinetic energy, hydro efficiency, PdV work |
+| `neutron_downscatter` | Down-scatter ratio (DSR) diagnostics |
+| `pressure_gradients` | Shock identification, RT instability assessment |
+
+### Optional
+
+`RHWParser` reads `.rhw` input files for drive configuration (direct/indirect,
+burn on/off, drive temperature profile).
+
+## Active Source Files
+
+| File | Lines | Role |
+|------|-------|------|
+| **Pipeline** | | |
+| `core.py` | ~965 | `HeliosRun` — EXODUS/netCDF4 reader |
+| `data_builder.py` | ~555 | Bridge: `HeliosRun` → `ICFRunData` dataclass |
+| `icf_analysis.py` | ~1100 | `ICFAnalyzer` — drive, stagnation, burn, implosion, mass fractions, burn propagation |
+| `icf_plotting.py` | ~1580 | `ICFPlotter` — full PDF report (contours, histories, trajectories, burn propagation, radial lineouts) |
+| `icf_output.py` | ~430 | `ICFOutputGenerator` — summary text + CSV time histories |
+| **Physics modules** | | |
+| `burn_averaged_metrics.py` | ~310 | Temporal burn-averaging, published-data comparison (refactored for ICFRunData) |
+| `energetics.py` | — | Kinetic energy, hydro efficiency, PdV work |
+| `neutron_downscatter.py` | — | Neutron down-scatter ratio diagnostics |
+| `pressure_gradients.py` | — | Pressure gradient analysis, shock ID, RT assessment |
+| **Support** | | |
+| `rhw_parser.py` | ~240 | `RHWParser` — reads `.rhw` input files |
+| `__init__.py` | ~90 | Package exports |
+
+## Archived Files
+
+`archive/legacy_modules/` contains 3 standalone modules from v2.0 whose physics
+is fully incorporated into `icf_analysis.py`:
+
+- `areal_density.py` — superseded by `ICFAnalyzer._compute_areal_densities()`
+- `burn.py` — superseded by `ICFAnalyzer.analyze_burn_phase()`
+- `hot_spot.py` — superseded by `ICFAnalyzer._compute_hot_spot_properties()`
+
+Note: `burn_averaged_metrics.py` formerly imported these three modules. It was
+refactored in v3.0 to read from `ICFRunData` instead, eliminating those dependencies.
+
+## Unit Conventions
+
+| Quantity | Internal Unit | Conversion from Helios |
+|----------|--------------|----------------------|
+| Temperature | eV (arrays), keV (scalars/reporting) | Helios stores eV; ÷1000 for keV |
+| Pressure | J/cm³ (arrays), Gbar (reporting) | ×1e-8 from J/cm³ |
+| Velocity | cm/s (arrays), km/s (reporting) | ×1e-5 from cm/s |
+| Areal density | g/cm² | ρR = ∫ρ dr |
+| Laser energy | MJ | ×1e-6 from J |
+| Drive temperature | eV | Stays in eV (radiation drive) |
+| Time | ns | Helios may store in seconds → ×1e9 |
 
 ## Physics Conventions
-- **Pressure:** Report in Gbar. 1 Gbar = 1e8 J/cm³
-- **Total pressure:** ion_pressure + elec_pressure (NOT ion + rad_pressure for reporting)
-- **Fusion yield:** Calculate from `TimeIntFusionProd_n_1406` × 17.6 MeV × 1.602e-19 MJ/MeV
-  - Do NOT integrate fusion rate in time (imprecise due to time grid)
-- **Laser energy:** Helios stores in Joules, convert to MJ (× 1e-6)
-- **Target gain:** yield_MJ / laser_energy_MJ
-- **DT fusion energy:** 17.6 MeV per reaction
-- **Variable centering:** Temperature and density are zone-centered; velocity is node-centered (N+1 points)
-- **Indexing:** Helios uses Fortran 1-indexed conventions; Python arrays are 0-indexed
 
-## Lindl Ignition Criteria
-- Temperature: > 5 keV
-- Pressure: > 100 Gbar
-- Areal density (ρR): > 0.3 g/cm²
-- Convergence ratio: > 15
+1. **Pressure aliasing**: `rad_pressure = elec_pressure` (or `elec + actual_rad` when 3-component).
+   Total pressure = `ion_pressure + rad_pressure` everywhere. Documented in data_builder.py.
 
-## Known Issues / Recent Fixes
-1. **FIXED:** `get_burn_diagnostics()` now searches for `FusionRate_DT_nHe4` first, builds global rate vs time by summing over zones. Falls back to T² proxy only if no fusion rate variable exists.
-2. **FIXED:** `calculate_areal_density()` uses `mass_density` and `zone_boundaries` directly. Removed broken import of nonexistent `.physics` subpackage.
-3. **WARNING:** `get_burn_diagnostics_corrected()` standalone function (line ~190) - receives neutron_rate as parameter, does NOT use `self`. The class method at line ~995 finds the right data and passes it in.
-4. **ISSUE:** `run.coords` returns empty dict `{}`. Use `run.get_variable('zone_boundaries', time_idx=i)` instead.
-5. **ISSUE:** Some methods in `core.py` still reference `'dens'` or `'temp'` instead of `'mass_density'` / `'ion_temperature'`. These need auditing.
-6. **ISSUE:** FWHM calculation sometimes fails, falls back to RMS width. Not critical but should be investigated.
+2. **Stagnation** = minimum hot-spot outer radius (NOT peak density).
+   For igniting capsules, peak ρ occurs after alpha heating.
 
-## What's Missing / Next Steps
-### Priority 1: Visualization Module
-- No plotting module in current repo
-- Best candidate: `~/Sims/Helios_Sims/helios_processor/icf_plotting.py` (1295 lines, most complete)
-- Also available: `~/Sims/Helios_Sims/Xcimer_Sims/Helios postprocess 3/icf_plotting.py` (1023 lines)
-- These depend on `ICFRunData` dataclass (old interface), need adaptation to `HeliosRun`
-- **Recommended approach:** Create `data_builder.py` that loads all time steps from HeliosRun into 2D arrays and scalar metrics, then feed to existing plotter
+3. **Ablation front** = steepest negative dρ/dr outside the hot spot boundary.
+   Smoothed with iterative algorithm anchored at stagnation.
 
-### Priority 2: Output Generation Module
-- `icf_output.py` exists in old versions at:
-  - `~/Sims/Helios_Sims/helios_processor/icf_output.py`
-  - `~/Sims/Helios_Sims/Xcimer_Sims/Helios postprocess 3/icf_output.py`
-- Generates JSON, CSV, TXT, NPZ outputs
+4. **Region boundaries**: `region_interfaces_indices` are NODE indices (not zone indices).
+   - Hot-spot boundary: `ri[:, 0]`
+   - Fuel/ablator boundary: `ri[:, -2]`
 
-### Priority 3: Analysis Module
-- `icf_analysis.py` exists in old versions
-- Computes all derived metrics (30+): timing, compression, hot spot, energy, etc.
+5. **Fusion yield**: Preferred method uses `TimeIntFusionProd_n_1406 × 17.6 MeV × 1.602e-19 MJ/MeV`.
+   Fallback: time-integrate `FusionRate_DT_nHe4` (less precise).
 
-### Priority 4: RHW Config Parser
-- Parser exists: `~/Sims/Helios_Sims/helios_processor/parsers/rhw_parser.py`
-- Parses Helios .rhw input files for drive type, burn status, drive temperature profile
+6. **Mass fractions**: Stagnated fuel uses zone-boundary definition —
+   fuel zones between hot-spot boundary and ablation front at stagnation.
+   Temperature-based cold mask was too aggressive for igniting targets.
 
-### Priority 5: Consolidation
-- Multiple old copies exist on MacBook (see below), should be archived after integration
-- Variable name audit throughout all modules
+7. **Burn propagation** (Olson et al. convention): Tracks hot-spot ρR vs total ρR over time.
+   Ignition identified when hot-spot ρR fraction exceeds 50%.
 
-## Old Code Locations (MacBook)
-These contain code to mine for the integration:
+## Test Data
+
+| Case | Regions | Zones | Key Features |
+|------|---------|-------|-------------|
+| **Olson_PDD_8** | 2 (DT gas + DT ice) | 350 | 2-component pressure (ion + elec) |
+| **Olson_PDD_9** | 4 | 351 | 3-component pressure (ion + elec + rad) |
+
+### Olson_PDD_9 Region Structure
+- Region 1: DT Vapor (zones 0–150) — hot spot
+- Region 2: DT Solid (zones 151–190) — cryo DT ice
+- Region 3: DT-CH foam (zones 191–320) — wetted foam ablator
+- Region 4: CH Skin (zones 321–350) — outer ablator
+
+### Validated Reference Values (Olson_PDD_8)
+- 1095 timesteps × 350 zones
+- Peak density: ~112 g/cc
+- Bang time: ~12.68 ns
+- Laser energy: ~2.15 MJ
+- Fusion yield: ~20.6 MJ
+- Target gain: ~9.57
+
+### Validated Reference Values (Olson_PDD_9)
+- Stagnation time: 12.599 ns (min HS radius = 0.0068 cm)
+- Peak density: 181.17 g/cc (at t = 12.670 ns)
+- Bang time: 12.681 ns
+- Hot spot pressure: 106.97 Gbar
+- Hot spot internal energy: 597.76 kJ
+- Core radius: 0.1853 cm
+- Fusion yield: 20.594 MJ, Target gain: 9.574
+- ⟨Ti⟩_n: 22.46 keV, ⟨P⟩_n: 193.40 Gbar
+- ⟨ρR⟩_n (fuel): 0.5189 g/cm²
+
+## Workflow
+
+1. Edit on MacBook → push to GitHub
+2. Pull on Mac Studio → run against simulation data at `~/Sims/Xcimer/`
+3. Terminal commands run one line at a time (avoid multi-line paste errors)
+4. Validate against known reference values before moving to next feature
+
+## Test Script
+
+```python
+from helios_postprocess import HeliosRun
+from helios_postprocess.data_builder import build_run_data
+from helios_postprocess.icf_analysis import ICFAnalyzer
+from helios_postprocess.icf_plotting import ICFPlotter
+from helios_postprocess.icf_output import ICFOutputGenerator
+import logging
+logging.basicConfig(level=logging.INFO)
+
+run = HeliosRun('/Users/tommehlhorn/Sims/Xcimer/Olson_PDD/Olson_PDD_9/Olson_PDD_9.exo', verbose=True)
+data = build_run_data(run, time_unit='s')
+run.close()
+
+analyzer = ICFAnalyzer(data)
+analyzer.analyze_drive_phase()
+analyzer.analyze_stagnation_phase()
+analyzer.analyze_burn_phase()
+analyzer.compute_performance_metrics()
+
+plotter = ICFPlotter(data, {})
+plotter.create_full_report('/Users/tommehlhorn/Sims/Xcimer/Olson_PDD/Olson_PDD_9/Olson_PDD_9_report.pdf')
+
+output = ICFOutputGenerator(data)
+output.write_all('/Users/tommehlhorn/Sims/Xcimer/Olson_PDD/Olson_PDD_9/Olson_PDD_9')
+print('Done — report + summary + history written')
 ```
-~/Sims/Helios_Sims/helios_processor/          ← icf_* modules + RHW parser
-~/Sims/Helios_Sims/Xcimer_Sims/Helios postprocess 3/  ← icf_* modules
-~/Sims/Helios_Sims/Postprocess archives/helios_postprocess/     ← archive copy
-~/Sims/Helios_Sims/Postprocess archives/helios_postprocess_dir/ ← older with physics/ subdir
-```
 
-## Validated Test Case
-**Olson PDD 8/9** (`~/Sims/Xcimer/Olson_PDD/Olson_PDD_8/Olson_PDD_8.exo` on Mac Studio):
-- 1095 time steps, 0 to 16.018 ns
-- 350 zones, 351 boundaries
-- Peak density: 112 g/cc at stagnation (12.5 ns)
-- Bang time: 12.68 ns
-- Peak Ti: 39 keV, Peak Te: 25 keV
-- Total pressure: 266 Gbar
-- ρR: 0.64 g/cm² at bang time
-- DT yield: 20.6 MJ from 2.15 MJ laser → gain 9.57
-- 248 nm KrF laser, direct drive
+## Open Items
 
-## For Starting a New Chat
-Upload these files:
-1. **CLAUDE.md** (this file) - complete project context
-2. **helios_postprocess/core.py** - current main module
-3. **icf_plotting.py** (from `~/Sims/Helios_Sims/helios_processor/`) - plotting to integrate
-4. **icf_analysis.py** (from same directory) - analysis to integrate
-5. **icf_output.py** (from same directory) - output generation to integrate
+### Priority 1 — Mass Fractions Refinement
+- Unablated fuel, ablator, and stagnated fuel fractions compute but may need
+  further validation against published values.
+- Current approach: zone-boundary definition (no temperature mask).
+
+### Priority 2 — Burn-Averaged Histories Validation
+- `extract_histories_from_run_data()` uses a flexible attribute lookup to
+  pull hot-spot time histories from ICFRunData. The attribute names it looks
+  for (e.g. `hot_spot_ion_temperature`, `fuel_areal_density`) need to be
+  verified against the actual ICFRunData attributes populated by ICFAnalyzer.
+- May need to add per-timestep hot-spot history arrays to ICFAnalyzer if
+  they don't exist yet (currently many quantities are stored as scalars at
+  stagnation/bang time rather than full time histories).
+
+### Priority 3 — Physics Module Integration
+- `energetics`, `neutron_downscatter`, `pressure_gradients` work standalone
+  with `HeliosRun` data but are not yet wired into `ICFAnalyzer` or `ICFPlotter`.
+
+### Priority 4 — `region_interfaces_indices` Robustness
+- Material boundary identification between hot spot, fuel, and ablator.
+- Currently relies on EXODUS region data; could add fallback based on
+  density/composition gradients.
+
+## Dependencies
+
+**Required**: numpy, scipy, matplotlib, netCDF4
+**Optional**: scikit-learn (RANSAC shock fitting in icf_plotting.py — guarded with `_HAS_SKLEARN`)
