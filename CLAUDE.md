@@ -1,11 +1,11 @@
-# helios_postprocessor — Project Guide
+# helios_postprocessor -- Project Guide
 
 ## Repository
 - **GitHub**: `tamehlhorn/helios_postprocessor`
 - **Package**: `helios_postprocess/`
 - **Version**: 3.0.0 (March 2026)
-- **Dev machine**: MacBook (`~/Codes/helios_postprocessor`) — editing, pushing
-- **Run machine**: Mac Studio (`tommehlhorn`, `~/helios_postprocessor`) — running against simulation data
+- **Dev machine**: MacBook (`~/Codes/helios_postprocessor`) -- editing, pushing
+- **Run machine**: Mac Studio (`tommehlhorn`, `~/helios_postprocessor`) -- running against simulation data
 
 ## Architecture
 
@@ -72,6 +72,7 @@ Also computes implosion metrics:
 - Hydrodynamic efficiency (max KE_inward / E_absorbed)
 - Fraction absorbed (laser_energy_deposited / integrated laser_power_delivered)
 - Imploded DT mass at stagnation
+- IFAR (density-based shell boundaries)
 
 Yield, laser energy, and gain come from Helios's own time-integrated
 quantities -- NOT re-integrated from sampled EXODUS data. See Physics
@@ -97,8 +98,8 @@ burn on/off, drive temperature profile).
 | **Pipeline** | | |
 | `core.py` | ~965 | `HeliosRun` -- EXODUS/netCDF4 reader |
 | `data_builder.py` | ~555 | Bridge: `HeliosRun` -> `ICFRunData` dataclass |
-| `icf_analysis.py` | ~1230 | `ICFAnalyzer` -- drive, stagnation, burn, implosion, mass fractions, burn propagation |
-| `icf_plotting.py` | ~1580 | `ICFPlotter` -- full PDF report (contours, histories, trajectories, burn propagation, radial lineouts) |
+| `icf_analysis.py` | ~1300 | `ICFAnalyzer` -- drive, stagnation, burn, implosion, IFAR, mass fractions, burn propagation |
+| `icf_plotting.py` | ~1580 | `ICFPlotter` -- full PDF report |
 | `icf_output.py` | ~430 | `ICFOutputGenerator` -- summary text + CSV time histories |
 | **Physics modules** | | |
 | `burn_averaged_metrics.py` | ~560 | Temporal burn-averaging, implosion metrics, published-data comparison |
@@ -120,10 +121,6 @@ is fully incorporated into `icf_analysis.py`:
 - `burn.py` -- superseded by `ICFAnalyzer.analyze_burn_phase()`
 - `hot_spot.py` -- superseded by `ICFAnalyzer._compute_hot_spot_properties()`
 
-Note: `burn_averaged_metrics.py` formerly imported these three modules. It was
-refactored in v3.0 to compute directly from ICFRunData 2D arrays using
-`region_interfaces_indices`, eliminating those dependencies.
-
 ## Published Data Comparison (JSON format)
 
 Place a `<name>_published.json` file next to the `.exo` file. Format:
@@ -139,6 +136,7 @@ Place a `<name>_published.json` file next to the `.exo` file. Format:
     "gain":    [65, 0],
     "peak_velocity_kms":    [410, 0.0],
     "adiabat":              [6, 0.0],
+    "ifar":                 [20, 0.0],
     "hydro_efficiency_pct": [8, 0.0],
     "imploded_DT_mass_mg":  [3, 0.0],
     "inflight_KE_kJ":      [300, 0.0],
@@ -202,12 +200,16 @@ Keys starting with `_` are treated as comments.
     KE_inward = sum of 0.5 m v^2 for zones with v < 0 (imploding), maximized
     over all timesteps. E_absorbed = max(laser_energy_deposited) in Joules.
 
+11. **IFAR (In-Flight Aspect Ratio)**: IFAR = R_shell / Delta_R at peak
+    implosion velocity. Shell boundaries determined from density profile using
+    rho > rho_peak / e threshold (NOT Lagrangian region interfaces, which
+    include uncompressed vapor). Validated: VI_6 gives IFAR=18.1 vs published 20.
+
 ## Test Data
 
 | Case | Regions | Zones | Key Features |
 |------|---------|-------|-------------|
-| **Olson_PDD_8** | 2 (DT gas + DT ice) | 350 | 2-component pressure (ion + elec) |
-| **Olson_PDD_9** | 4 | 351 | 3-component pressure (ion + elec + rad) |
+| **Olson_PDD_9** | 4 | 351 | 3-component pressure (ion + elec + rad), PDD |
 | **VI_6** | 4 | 350 | Vulcan HDD target, 3-component pressure |
 
 ### Olson_PDD_9 Region Structure
@@ -235,14 +237,15 @@ Keys starting with `_` are treated as comments.
 - Burn-averaged: T=23.75 keV, P=208.4 Gbar, rhoR=0.5515 g/cm2
 
 ### Validated Reference Values (VI_6)
-- Laser energy: 3.383 MJ
+- Laser energy: 3.383 MJ (absorbed)
 - Stagnation time: 14.630 ns
 - Peak density: 221.84 g/cc (at t = 14.700 ns)
 - Bang time: 14.670 ns
 - Peak implosion velocity: 763.1 km/s
-- Fusion yield: 28.811 MJ, Target gain: 8.516
 - In-flight KE: 311.6 kJ, Hydro efficiency: 9.2%
+- IFAR: 18.1 (density-based, rho > rho_peak/e)
 - Adiabat: 1.13 (cold fuel at peak v_imp)
+- Fusion yield: 28.811 MJ, Target gain: 8.516
 - Burn-averaged: T=29.9 keV, P=340 Gbar, rhoR=0.88 g/cm2
 
 ## Workflow
@@ -273,12 +276,8 @@ python3 ~/helios_postprocessor/examples/run_analysis.py ~/Sims/Xcimer/Olson_PDD/
 - Material boundary identification between hot spot, fuel, and ablator.
 - Currently relies on EXODUS region data; could add fallback based on
   density/composition gradients.
-- Note: for adiabat, the cold fuel region is ri[t,0] to ri[t,1], NOT ri[t,-2].
-  ri[t,-2] includes ablated fuel which inflates the adiabat.
-
-### Priority 4 -- IFAR (In-Flight Aspect Ratio)
-- Published table includes IFAR=20 but we don't compute it yet.
-- IFAR = R_shell / Delta_R_shell at peak velocity.
+- Note: for adiabat, cold fuel = ri[t,0] to ri[t,1] only.
+  For IFAR, density-based boundaries (not Lagrangian) are required.
 
 ## Dependencies
 
