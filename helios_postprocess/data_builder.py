@@ -143,6 +143,7 @@ class ICFRunData:
 
         # Implosion
         self.peak_implosion_velocity: float = 0.0  # km/s
+        self.ifar: float = 0.0                      # in-flight aspect ratio at peak v_imp
         self.adiabat_mass_averaged_ice: float = 0.0
 
         # Critical density tracking (populated by ICFAnalyzer)

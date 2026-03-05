@@ -209,6 +209,7 @@ def extract_histories_from_run_data(data) -> Dict:
     # ── Scalar implosion metrics from ICFAnalyzer ──
     peak_vimp_kms = abs(getattr(data, 'peak_implosion_velocity', 0.0))
     adiabat       = getattr(data, 'adiabat_mass_averaged_ice', 0.0)
+    ifar          = getattr(data, 'ifar', 0.0)
 
     # ── Derived implosion metrics ──
 
@@ -298,6 +299,7 @@ def extract_histories_from_run_data(data) -> Dict:
         # Implosion metrics
         'peak_velocity_kms':     peak_vimp_kms,
         'adiabat':               adiabat,
+        'ifar':                  ifar,
         'fraction_absorbed_pct': fraction_absorbed,
         'inflight_KE_kJ':       inflight_KE_kJ,
         'hydro_efficiency_pct':  hydro_efficiency_pct,
@@ -429,6 +431,7 @@ def calculate_burn_averaged_metrics(histories: Dict,
         # Implosion metrics (pass through from histories)
         'peak_velocity_kms':     histories.get('peak_velocity_kms', 0.0),
         'adiabat':               histories.get('adiabat', 0.0),
+        'ifar':                  histories.get('ifar', 0.0),
         'fraction_absorbed_pct': histories.get('fraction_absorbed_pct', 0.0),
         'inflight_KE_kJ':       histories.get('inflight_KE_kJ', 0.0),
         'hydro_efficiency_pct':  histories.get('hydro_efficiency_pct', 0.0),
@@ -491,6 +494,8 @@ def compare_with_published(sim_metrics: Dict,
          'fraction_absorbed_pct',     '.1f'),
         ('In-flight KE (kJ)',        sim_metrics.get('inflight_KE_kJ', 0.0),
          'inflight_KE_kJ',           '.1f'),
+        ('IFAR',                      sim_metrics.get('ifar', 0.0),
+         'ifar',                    '.1f'),
         ('Hydro efficiency (%)',     sim_metrics.get('hydro_efficiency_pct', 0.0),
          'hydro_efficiency_pct',     '.1f'),
         ('Imploded DT mass (mg)',    sim_metrics.get('imploded_DT_mass_mg', 0.0),

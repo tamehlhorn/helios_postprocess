@@ -256,6 +256,9 @@ class ICFAnalyzer:
         
         # Track ablation front position
         self._track_ablation_front()
+
+        # Compute in-flight aspect ratio
+        self._compute_ifar()
         
     def _track_shock_fronts(self):
         """Track shock fronts using pressure gradient detection with RANSAC fitting."""
@@ -480,6 +483,84 @@ class ICFAnalyzer:
         else:
             logger.warning("No valid ablation front positions found")
     
+    def _compute_ifar(self):
+        """
+        Compute In-Flight Aspect Ratio (IFAR) at peak implosion velocity.
+
+        IFAR = R_shell / Delta_R  where:
+          R_inner = zone boundary at hot-spot/fuel interface (ri[t, 0])
+          R_outer = ablation front radius (from _track_ablation_front)
+          Delta_R = R_outer - R_inner  (shell thickness)
+          R_shell = (R_inner + R_outer) / 2  (mid-shell radius)
+
+        Evaluated at peak inward velocity (pre-stagnation), same time as adiabat.
+        Requires _track_ablation_front() to have been called first.
+        """
+        abl_front = self.data.ablation_front_radius
+        if abl_front is None:
+            logger.warning("Cannot compute IFAR: ablation front not tracked")
+            return
+
+        ri = self.data.region_interfaces_indices
+        vel = self.data.velocity
+        zbnd = self.data.zone_boundaries
+
+        if ri is None or vel is None or zbnd is None:
+            logger.warning("Cannot compute IFAR: missing required data")
+            return
+
+        try:
+            n_zones = self.data.mass_density.shape[1]
+
+            # Zone-center velocities
+            if vel.shape[1] > n_zones:
+                v_zone = 0.5 * (vel[:, :n_zones] + vel[:, 1:n_zones+1])
+            else:
+                v_zone = vel[:, :n_zones]
+
+            # Find peak inward velocity in fuel region (pre-stagnation)
+            if ri.shape[1] >= 2:
+                fuel_start = int(ri[0, 0])
+                fuel_end = int(ri[0, -2])
+                if fuel_end > fuel_start:
+                    min_v_per_time = np.min(v_zone[:, fuel_start:fuel_end], axis=1)
+                else:
+                    min_v_per_time = np.min(v_zone, axis=1)
+            else:
+                min_v_per_time = np.min(v_zone, axis=1)
+
+            stag_t = self.data.stag_time if self.data.stag_time > 0 else self.data.time[-1]
+            pre_stag = self.data.time < stag_t
+            if np.any(pre_stag):
+                masked_v = min_v_per_time.copy()
+                masked_v[~pre_stag] = 0.0
+                t_pv = np.argmin(masked_v)
+            else:
+                t_pv = np.argmin(min_v_per_time)
+
+            # Shell boundaries at peak velocity
+            hs_bnd = int(ri[t_pv, 0])              # hot-spot / fuel interface (node index)
+            R_inner = zbnd[t_pv, hs_bnd]            # cm
+
+            R_outer = abl_front[t_pv]                # cm (from ablation front tracker)
+
+            if R_outer <= R_inner or R_inner <= 0:
+                logger.warning(f"IFAR: invalid shell boundaries at t={self.data.time[t_pv]:.2f} ns "
+                             f"(R_inner={R_inner:.5f}, R_outer={R_outer:.5f} cm)")
+                return
+
+            delta_R = R_outer - R_inner
+            R_shell = 0.5 * (R_inner + R_outer)
+
+            self.data.ifar = R_shell / delta_R
+            logger.info(f"IFAR at peak v_imp (t={self.data.time[t_pv]:.2f} ns): "
+                        f"{self.data.ifar:.1f}  "
+                        f"(R_shell={R_shell*1e4:.1f} um, dR={delta_R*1e4:.1f} um)")
+
+        except Exception as e:
+            logger.warning(f"Could not compute IFAR: {e}")
+            self.data.ifar = 0.0
+
     def _smooth_ablation_front(self, radii: np.ndarray, iterations: int = 10) -> np.ndarray:
         """
         Smooth ablation front radius profile.
