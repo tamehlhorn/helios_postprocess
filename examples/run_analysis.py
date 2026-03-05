@@ -5,22 +5,22 @@ Helios ICF Post-Processing Runner
 
 Runs the full analysis pipeline on a Helios simulation, producing:
   - PDF report with diagnostic plots
-  - Text summary of key metrics
+  - Comparison PDF with burn-averaged metrics and published-data table (if JSON provided)
+  - Text summary of key metrics (includes comparison if JSON provided)
   - CSV time-history data
-  - Burn-averaged metrics (printed to console)
-  - Optional comparison with published target design data
 
 Usage
 -----
     python run_analysis.py <base_path>
 
 where <base_path> is the path WITHOUT extension.  All files are derived:
-    <base_path>.exo           — EXODUS simulation output (required)
-    <base_path>.rhw           — RHW input file (optional)
-    <base_path>_report.pdf    — output: diagnostic plots
-    <base_path>_summary.txt   — output: text summary
-    <base_path>_history.csv   — output: time histories
-    <base_path>_published.json — input: published data for comparison (optional)
+    <base_path>.exo               — EXODUS simulation output (required)
+    <base_path>.rhw               — RHW input file (optional)
+    <base_path>_report.pdf        — output: diagnostic plots
+    <base_path>_comparison.pdf    — output: comparison table + burn metrics (if published JSON)
+    <base_path>_summary.txt       — output: text summary (includes comparison)
+    <base_path>_history.csv       — output: time histories
+    <base_path>_published.json    — input: published data for comparison (optional)
 
 Examples
 --------
@@ -37,6 +37,10 @@ import logging
 from pathlib import Path
 
 import numpy as np
+import matplotlib
+matplotlib.use('Agg')
+import matplotlib.pyplot as plt
+from matplotlib.backends.backend_pdf import PdfPages
 
 from helios_postprocess import HeliosRun
 from helios_postprocess.data_builder import build_run_data
@@ -51,23 +55,17 @@ from helios_postprocess.burn_averaged_metrics import (
 
 
 def main(base_path: str):
-    """
-    Run full post-processing pipeline.
-
-    Parameters
-    ----------
-    base_path : str
-        Path without extension, e.g. '~/Sims/Xcimer/Olson_PDD/Olson_PDD_9/Olson_PDD_9'
-    """
+    """Run full post-processing pipeline."""
     base = Path(base_path).expanduser().resolve()
     name = base.name
 
     # Derived paths
-    exo_path       = base.with_suffix('.exo')
-    rhw_path       = base.with_suffix('.rhw')
-    report_path    = base.parent / f"{name}_report.pdf"
-    summary_path   = base.parent / f"{name}"
-    published_path = base.parent / f"{name}_published.json"
+    exo_path        = base.with_suffix('.exo')
+    rhw_path        = base.with_suffix('.rhw')
+    report_path     = base.parent / f"{name}_report.pdf"
+    comparison_path = base.parent / f"{name}_comparison.pdf"
+    summary_path    = base.parent / f"{name}"
+    published_path  = base.parent / f"{name}_published.json"
 
     print("=" * 80)
     print(f"  Helios Post-Processing: {name}")
@@ -180,7 +178,14 @@ def main(base_path: str):
         print(f"    Imploded DT     = {metrics['imploded_DT_mass_mg']:.2f} mg")
     print()
 
+    # ── Append burn-averaged metrics to summary text file ──
+    summary_txt = f"{summary_path}_summary.txt"
+    _append_metrics_to_summary(summary_txt, name, metrics)
+
     # ── Step 6: Compare with published data (if available) ──
+    published_metrics = None
+    pub_laser = None
+
     if published_path.exists():
         print("-" * 80)
         print("STEP 6: Comparison with published data")
@@ -190,12 +195,11 @@ def main(base_path: str):
             with open(published_path, 'r') as f:
                 pub_raw = json.load(f)
 
-            # Extract laser energy and remove non-metric keys
             pub_laser = pub_raw.pop('laser_energy_MJ', None)
             published_metrics = {}
             for key, val in pub_raw.items():
                 if key.startswith('_'):
-                    continue   # skip comments
+                    continue
                 if isinstance(val, (list, tuple)) and len(val) == 2:
                     published_metrics[key] = tuple(val)
 
@@ -206,15 +210,280 @@ def main(base_path: str):
             print(table)
             print()
 
+            # Append comparison table to summary text file
+            _append_comparison_to_summary(summary_txt, table)
+
+            # Create comparison PDF
+            _create_comparison_pdf(
+                str(comparison_path), name,
+                metrics, published_metrics, pub_laser, histories
+            )
+            print(f"  Comparison PDF: {comparison_path}")
+            print()
+
         except Exception as e:
             print(f"  WARNING: Could not load published data: {e}")
+            import traceback; traceback.print_exc()
             print()
 
     # ── Done ──
     print("=" * 80)
     print(f"  Analysis complete: {name}")
     print(f"  Outputs in: {base.parent}")
+    outputs = [f"    {name}_report.pdf", f"    {name}_summary.txt", f"    {name}_history.csv"]
+    if published_metrics is not None:
+        outputs.append(f"    {name}_comparison.pdf")
+    print("\n".join(outputs))
     print("=" * 80)
+
+
+# ── Helper: append burn-averaged metrics to summary text ──
+
+def _append_metrics_to_summary(summary_path: str, name: str, metrics: dict):
+    """Append burn-averaged and implosion metrics to the summary text file."""
+    with open(summary_path, 'a') as f:
+        f.write("\n")
+        f.write("=" * 72 + "\n")
+        f.write("  BURN-AVERAGED & IMPLOSION METRICS\n")
+        f.write("=" * 72 + "\n")
+        f.write("\n")
+        f.write("  Burn-averaged quantities:\n")
+        f.write(f"    <T_hs>          = {metrics['T_burn_avg']:.2f} keV\n")
+        f.write(f"    <P_hs>          = {metrics['P_burn_avg']:.1f} Gbar\n")
+        f.write(f"    <rhoR_cf>       = {metrics['rhoR_burn_avg']:.4f} g/cm2\n")
+        f.write(f"    CR_max          = {metrics['CR_max']:.1f}\n")
+        f.write(f"    Yield           = {metrics['yield_MJ']:.3f} MJ\n")
+        f.write(f"    Gain            = {metrics['target_gain']:.3f}\n")
+        f.write("\n")
+        f.write("  Implosion metrics:\n")
+        f.write(f"    Peak velocity   = {metrics['peak_velocity_kms']:.1f} km/s\n")
+        f.write(f"    Adiabat         = {metrics['adiabat']:.2f}\n")
+        if metrics['fraction_absorbed_pct'] > 0:
+            f.write(f"    Frac absorbed   = {metrics['fraction_absorbed_pct']:.1f}%\n")
+        if metrics['inflight_KE_kJ'] > 0:
+            f.write(f"    In-flight KE    = {metrics['inflight_KE_kJ']:.1f} kJ\n")
+        if metrics['hydro_efficiency_pct'] > 0:
+            f.write(f"    Hydro eff       = {metrics['hydro_efficiency_pct']:.1f}%\n")
+        if metrics['imploded_DT_mass_mg'] > 0:
+            f.write(f"    Imploded DT     = {metrics['imploded_DT_mass_mg']:.2f} mg\n")
+        f.write("\n")
+
+
+def _append_comparison_to_summary(summary_path: str, table: str):
+    """Append comparison table to the summary text file."""
+    with open(summary_path, 'a') as f:
+        f.write("\n")
+        f.write(table)
+        f.write("\n")
+
+
+# ── Helper: create comparison PDF ──
+
+def _create_comparison_pdf(output_path: str, name: str,
+                           metrics: dict, published_metrics: dict,
+                           pub_laser: float, histories: dict):
+    """Create a PDF with comparison table page and diagnostic bar chart."""
+
+    with PdfPages(output_path) as pdf:
+        # ── Page 1: Comparison table ──
+        fig = plt.figure(figsize=(11, 8.5))
+
+        title = f"{name} — Comparison with Published Target Design"
+        fig.text(0.5, 0.95, title, fontsize=14, fontweight='bold',
+                 ha='center', va='top', family='monospace')
+
+        # Build table data
+        laser_sim = metrics.get('laser_energy_MJ', 0.0)
+        laser_pub = pub_laser if pub_laser else laser_sim
+        sim_gain = metrics['yield_MJ'] / laser_pub if laser_pub > 0 else 0.0
+
+        all_rows = []
+
+        # Implosion section
+        imp_defs = [
+            ('Peak velocity (km/s)',  metrics.get('peak_velocity_kms', 0.0),  'peak_velocity_kms',     '.1f'),
+            ('Adiabat',               metrics.get('adiabat', 0.0),            'adiabat',               '.2f'),
+            ('Fraction absorbed (%)', metrics.get('fraction_absorbed_pct',0.0),'fraction_absorbed_pct', '.1f'),
+            ('In-flight KE (kJ)',     metrics.get('inflight_KE_kJ', 0.0),     'inflight_KE_kJ',       '.1f'),
+            ('Hydro efficiency (%)',  metrics.get('hydro_efficiency_pct',0.0), 'hydro_efficiency_pct', '.1f'),
+            ('Imploded DT mass (mg)', metrics.get('imploded_DT_mass_mg',0.0), 'imploded_DT_mass_mg',  '.2f'),
+        ]
+
+        for label, sim_val, pub_key, fmt in imp_defs:
+            pub_entry = published_metrics.get(pub_key)
+            if pub_entry is None:
+                continue
+            pv, pu = _to_tuple(pub_entry)
+            if pv <= 0 and sim_val <= 0:
+                continue
+            all_rows.append((label, sim_val, pv, pu, fmt))
+
+        # Burn-averaged section
+        burn_defs = [
+            ('<T_hs> (keV)',       metrics['T_burn_avg'],    'T_hs',    '.1f'),
+            ('<P_hs> (Gbar)',      metrics['P_burn_avg'],    'P_hs',    '.0f'),
+            ('<rhoR_cf> (g/cm2)',  metrics['rhoR_burn_avg'], 'rhoR_cf', '.2f'),
+            ('CR_max',             metrics['CR_max'],         'CR_max',  '.1f'),
+            ('Yield (MJ)',         metrics['yield_MJ'],       'yield',   '.1f'),
+            ('Fusion Gain',        sim_gain,                   'gain',    '.1f'),
+        ]
+
+        for label, sim_val, pub_key, fmt in burn_defs:
+            pub_entry = published_metrics.get(pub_key)
+            if pub_entry is None:
+                continue
+            pv, pu = _to_tuple(pub_entry)
+            if pv <= 0:
+                continue
+            all_rows.append((label, sim_val, pv, pu, fmt))
+
+        # Render table
+        if all_rows:
+            col_labels = ['Metric', 'Simulation', 'Published', 'Delta (%)']
+            cell_text = []
+            cell_colors = []
+            for label, sv, pv, pu, fmt in all_rows:
+                sv_str = format(sv, fmt) if sv > 0 else '—'
+                pv_str = format(pv, fmt)
+                if pu > 0:
+                    pv_str += f' +/- {format(pu, fmt)}'
+                if pv > 0 and sv > 0:
+                    delta = 100 * (sv - pv) / pv
+                    d_str = f'{delta:+.1f}%'
+                    # Color: green if within 20%, yellow 20-50%, red >50%
+                    if abs(delta) < 20:
+                        color = '#d4edda'
+                    elif abs(delta) < 50:
+                        color = '#fff3cd'
+                    else:
+                        color = '#f8d7da'
+                else:
+                    d_str = '—'
+                    color = '#ffffff'
+                cell_text.append([label, sv_str, pv_str, d_str])
+                cell_colors.append(['#ffffff', '#ffffff', '#ffffff', color])
+
+            ax = fig.add_axes([0.08, 0.10, 0.84, 0.78])
+            ax.axis('off')
+
+            table = ax.table(
+                cellText=cell_text,
+                colLabels=col_labels,
+                cellColours=cell_colors,
+                colColours=['#cce5ff'] * 4,
+                loc='upper center',
+                cellLoc='center',
+            )
+            table.auto_set_font_size(False)
+            table.set_fontsize(10)
+            table.scale(1.0, 1.6)
+
+            # Bold header
+            for j in range(4):
+                table[0, j].set_text_props(fontweight='bold')
+
+            # Laser energy footnote
+            fig.text(0.5, 0.06,
+                     f"Laser energy:  Simulation = {laser_sim:.3f} MJ,  Published = {laser_pub:.3f} MJ",
+                     fontsize=9, ha='center', style='italic')
+
+        pdf.savefig(fig)
+        plt.close(fig)
+
+        # ── Page 2: Burn history plots ──
+        fig, axes = plt.subplots(2, 2, figsize=(11, 8.5))
+        fig.suptitle(f'{name} — Burn-Averaged Diagnostics',
+                     fontsize=14, fontweight='bold')
+
+        time = histories['time_ns']
+        bf = metrics['burn_fraction']
+        bf_max = bf.max() if bf.max() > 0 else 1.0
+        bf_norm = bf / bf_max
+
+        # Temperature
+        ax = axes[0, 0]
+        ax.plot(time, histories['temperature_keV'], 'b-', lw=2)
+        ax.axhline(metrics['T_burn_avg'], color='b', ls='--',
+                    label=f'Burn-avg: {metrics["T_burn_avg"]:.1f} keV')
+        pub_T = _pub_val(published_metrics, 'T_hs')
+        if pub_T > 0:
+            ax.axhline(pub_T, color='r', ls='--',
+                        label=f'Published: {pub_T:.1f} keV')
+        ax.fill_between(time, 0, np.max(histories['temperature_keV']) * 1.1,
+                        bf_norm, alpha=0.15, color='orange')
+        ax.set_xlabel('Time (ns)')
+        ax.set_ylabel('Temperature (keV)')
+        ax.set_title('Hot Spot Temperature')
+        ax.legend(fontsize=8)
+        ax.grid(True, alpha=0.3)
+
+        # Pressure
+        ax = axes[0, 1]
+        ax.plot(time, histories['pressure_Gbar'], 'b-', lw=2)
+        ax.axhline(metrics['P_burn_avg'], color='b', ls='--',
+                    label=f'Burn-avg: {metrics["P_burn_avg"]:.0f} Gbar')
+        pub_P = _pub_val(published_metrics, 'P_hs')
+        if pub_P > 0:
+            ax.axhline(pub_P, color='r', ls='--',
+                        label=f'Published: {pub_P:.0f} Gbar')
+        ax.fill_between(time, 0, np.max(histories['pressure_Gbar']) * 1.1,
+                        bf_norm, alpha=0.15, color='orange')
+        ax.set_xlabel('Time (ns)')
+        ax.set_ylabel('Pressure (Gbar)')
+        ax.set_title('Hot Spot Pressure')
+        ax.legend(fontsize=8)
+        ax.grid(True, alpha=0.3)
+
+        # Areal density
+        ax = axes[1, 0]
+        ax.plot(time, histories['areal_density_gcm2'], 'b-', lw=2)
+        ax.axhline(metrics['rhoR_burn_avg'], color='b', ls='--',
+                    label=f'Burn-avg: {metrics["rhoR_burn_avg"]:.2f} g/cm2')
+        pub_rhoR = _pub_val(published_metrics, 'rhoR_cf')
+        if pub_rhoR > 0:
+            ax.axhline(pub_rhoR, color='r', ls='--',
+                        label=f'Published: {pub_rhoR:.2f} g/cm2')
+        rhoR_max = np.max(histories['areal_density_gcm2'])
+        if rhoR_max > 0:
+            ax.fill_between(time, 0, rhoR_max * 1.1, bf_norm,
+                            alpha=0.15, color='orange')
+        ax.set_xlabel('Time (ns)')
+        ax.set_ylabel(r'$\rho R$ (g/cm$^2$)')
+        ax.set_title('Cold Fuel Areal Density')
+        ax.legend(fontsize=8)
+        ax.grid(True, alpha=0.3)
+
+        # Burn rate
+        ax = axes[1, 1]
+        ax.plot(time, bf_norm, 'orange', lw=2)
+        ax.fill_between(time, 0, bf_norm, alpha=0.3, color='orange')
+        ax.set_xlabel('Time (ns)')
+        ax.set_ylabel('Normalized Burn Rate')
+        ax.set_title('Fusion Burn Profile')
+        ax.grid(True, alpha=0.3)
+
+        plt.tight_layout(rect=[0, 0, 1, 0.94])
+        pdf.savefig(fig)
+        plt.close(fig)
+
+
+def _to_tuple(val):
+    if isinstance(val, (list, tuple)) and len(val) >= 2:
+        return (float(val[0]), float(val[1]))
+    elif isinstance(val, (int, float)):
+        return (float(val), 0.0)
+    return (0.0, 0.0)
+
+
+def _pub_val(published_metrics, key):
+    """Extract published value (first element), or 0."""
+    if published_metrics is None:
+        return 0.0
+    entry = published_metrics.get(key)
+    if entry is None:
+        return 0.0
+    v, _ = _to_tuple(entry)
+    return v
 
 
 if __name__ == '__main__':
