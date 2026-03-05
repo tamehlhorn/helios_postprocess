@@ -487,30 +487,31 @@ class ICFAnalyzer:
         """
         Compute In-Flight Aspect Ratio (IFAR) at peak implosion velocity.
 
-        IFAR = R_shell / Delta_R  where:
-          R_inner = zone boundary at hot-spot/fuel interface (ri[t, 0])
-          R_outer = ablation front radius (from _track_ablation_front)
-          Delta_R = R_outer - R_inner  (shell thickness)
-          R_shell = (R_inner + R_outer) / 2  (mid-shell radius)
+        IFAR = R_shell / Delta_R
 
-        Evaluated at peak inward velocity (pre-stagnation), same time as adiabat.
+        The shell boundaries are determined from the density profile at peak
+        implosion velocity using a density threshold (rho > rho_peak / e).
+        This correctly identifies the actual dense shell, excluding any
+        uncompressed vapor inside the Lagrangian region interface.
+
+        R_inner = inner boundary of dense shell (first zone above threshold)
+        R_outer = outer boundary of dense shell (last zone above threshold)
+        Delta_R = R_outer - R_inner
+        R_shell = (R_inner + R_outer) / 2
+
         Requires _track_ablation_front() to have been called first.
         """
-        abl_front = self.data.ablation_front_radius
-        if abl_front is None:
-            logger.warning("Cannot compute IFAR: ablation front not tracked")
-            return
-
         ri = self.data.region_interfaces_indices
         vel = self.data.velocity
         zbnd = self.data.zone_boundaries
+        rho = self.data.mass_density
 
-        if ri is None or vel is None or zbnd is None:
+        if ri is None or vel is None or zbnd is None or rho is None:
             logger.warning("Cannot compute IFAR: missing required data")
             return
 
         try:
-            n_zones = self.data.mass_density.shape[1]
+            n_zones = rho.shape[1]
 
             # Zone-center velocities
             if vel.shape[1] > n_zones:
@@ -538,14 +539,44 @@ class ICFAnalyzer:
             else:
                 t_pv = np.argmin(min_v_per_time)
 
-            # Shell boundaries at peak velocity
-            hs_bnd = int(ri[t_pv, 0])              # hot-spot / fuel interface (node index)
-            R_inner = zbnd[t_pv, hs_bnd]            # cm
+            # --- Density-based shell identification ---
+            # Search within fuel + ablated region (ri[0] to ri[-2])
+            z_lo = int(ri[t_pv, 0])    # inner fuel boundary (Lagrangian)
+            z_hi = int(ri[t_pv, -2])   # fuel/ablator boundary
+            if z_hi <= z_lo:
+                z_hi = n_zones
 
-            R_outer = abl_front[t_pv]                # cm (from ablation front tracker)
+            rho_shell = rho[t_pv, z_lo:z_hi]
+            rho_peak = np.max(rho_shell)
+
+            if rho_peak <= 0:
+                logger.warning("IFAR: no density peak found in fuel region")
+                return
+
+            # Threshold: rho_peak / e
+            threshold = rho_peak / np.e
+
+            # Find contiguous dense shell above threshold
+            above = rho_shell > threshold
+            if not np.any(above):
+                logger.warning("IFAR: no zones above density threshold")
+                return
+
+            # Inner edge: first zone above threshold (relative to z_lo)
+            idx_inner = np.argmax(above)           # first True
+            # Outer edge: last zone above threshold
+            idx_outer = len(above) - 1 - np.argmax(above[::-1])  # last True
+
+            # Convert to absolute zone indices
+            z_inner = z_lo + idx_inner
+            z_outer = z_lo + idx_outer
+
+            # Shell radii from zone boundaries (node-centered)
+            R_inner = zbnd[t_pv, z_inner]          # inner boundary of first dense zone
+            R_outer = zbnd[t_pv, z_outer + 1]      # outer boundary of last dense zone
 
             if R_outer <= R_inner or R_inner <= 0:
-                logger.warning(f"IFAR: invalid shell boundaries at t={self.data.time[t_pv]:.2f} ns "
+                logger.warning(f"IFAR: invalid shell boundaries "
                              f"(R_inner={R_inner:.5f}, R_outer={R_outer:.5f} cm)")
                 return
 
@@ -555,7 +586,9 @@ class ICFAnalyzer:
             self.data.ifar = R_shell / delta_R
             logger.info(f"IFAR at peak v_imp (t={self.data.time[t_pv]:.2f} ns): "
                         f"{self.data.ifar:.1f}  "
-                        f"(R_shell={R_shell*1e4:.1f} um, dR={delta_R*1e4:.1f} um)")
+                        f"(R_shell={R_shell*1e4:.1f} um, dR={delta_R*1e4:.1f} um, "
+                        f"rho_peak={rho_peak:.2f} g/cc, threshold={threshold:.2f} g/cc, "
+                        f"zones {z_inner}-{z_outer})")
 
         except Exception as e:
             logger.warning(f"Could not compute IFAR: {e}")
