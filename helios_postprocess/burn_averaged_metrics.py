@@ -212,38 +212,54 @@ def extract_histories_from_run_data(data) -> Dict:
 
     # ── Derived implosion metrics ──
 
-    # Fraction absorbed: laser energy deposited / delivered
-    fraction_absorbed = 0.0
+    # Absorbed energy from laser_energy_deposited (cumulative, in J)
+    # This is the total energy coupled into the target — the denominator
+    # for hydrodynamic efficiency.
     led = getattr(data, 'laser_energy_deposited', None)
-    lpd = getattr(data, 'laser_power_delivered', None)
-    if led is not None and lpd is not None:
-        total_deposited = np.max(np.sum(led, axis=-1)) if led.ndim > 1 else np.max(led)
-        # laser_energy is already in MJ; deposited is in J
-        if laser_energy_MJ > 0:
-            fraction_absorbed = (total_deposited * 1e-6) / laser_energy_MJ * 100.0
+    E_absorbed_J = 0.0
+    if led is not None:
+        E_absorbed_J = np.max(np.sum(led, axis=-1)) if led.ndim > 1 else np.max(led)
 
-    # In-flight kinetic energy at peak velocity
+    # Fraction absorbed: deposited / delivered
+    # laser_power_delivered integrated gives total incident energy;
+    # laser_energy_deposited gives absorbed energy.
+    fraction_absorbed = 0.0
+    lpd = getattr(data, 'laser_power_delivered', None)
+    if lpd is not None and E_absorbed_J > 0:
+        # Integrate delivered power over time
+        E_delivered_J = np.trapz(lpd, x=time_ns * 1e-9)
+        if E_delivered_J > 0:
+            fraction_absorbed = E_absorbed_J / E_delivered_J * 100.0
+
+    # In-flight kinetic energy: INWARD-MOVING shell only, max over time.
+    # η_hydro = max(KE_inward) / E_absorbed
+    # KE computed at every timestep; only zones with v < 0 (imploding) count.
     inflight_KE_kJ = 0.0
     if vel is not None and zmass is not None:
-        # Find time of peak implosion velocity (most negative velocity)
-        # Use zone-center velocities
         n_zones = zmass.shape[1]
         if vel.shape[1] > n_zones:
-            # Node-centered → zone-center average
+            # Node-centered velocity → zone-center average
             v_zone = 0.5 * (vel[:, :n_zones] + vel[:, 1:n_zones+1])
         else:
             v_zone = vel[:, :n_zones]
-        min_vel_per_time = np.min(v_zone, axis=1)
-        t_peak_v = np.argmin(min_vel_per_time)
-        KE = 0.5 * zmass[t_peak_v, :] * v_zone[t_peak_v, :]**2  # erg = g·cm²/s²
-        inflight_KE_kJ = np.sum(KE) * 1e-10  # g·cm²/s² → kJ (1 J = 1e7 erg, 1 kJ = 1e10 erg)
 
-    # Hydrodynamic efficiency
+        # At each timestep, sum KE of inward-moving zones only (v < 0)
+        KE_inward = np.zeros(n_times)
+        for t in range(n_times):
+            inward = v_zone[t, :] < 0           # imploding zones
+            if np.any(inward):
+                KE_inward[t] = 0.5 * np.sum(
+                    zmass[t, inward] * v_zone[t, inward]**2
+                )  # g·(cm/s)² = erg
+
+        # Convert max KE from erg to kJ: 1 erg = 1e-7 J, 1 kJ = 1e3 J
+        inflight_KE_kJ = np.max(KE_inward) * 1e-10  # erg → kJ
+
+    # Hydrodynamic efficiency = max(KE_inward) / E_absorbed
     hydro_efficiency_pct = 0.0
-    if inflight_KE_kJ > 0 and laser_energy_MJ > 0:
-        # laser absorbed energy
-        E_abs = laser_energy_MJ * (fraction_absorbed / 100.0) if fraction_absorbed > 0 else laser_energy_MJ
-        hydro_efficiency_pct = inflight_KE_kJ / (E_abs * 1e3) * 100.0  # MJ → kJ
+    if inflight_KE_kJ > 0 and E_absorbed_J > 0:
+        E_absorbed_kJ = E_absorbed_J * 1e-3  # J → kJ
+        hydro_efficiency_pct = inflight_KE_kJ / E_absorbed_kJ * 100.0
 
     # Imploded DT mass at stagnation
     imploded_DT_mass_mg = 0.0
