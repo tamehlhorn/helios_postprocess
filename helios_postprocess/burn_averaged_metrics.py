@@ -109,9 +109,8 @@ def extract_histories_from_run_data(data) -> Dict:
     within the hot spot.  Also extracts cold-fuel areal density from the
     cumulative areal_density_vs_time array.
 
-    Also passes through the Helios-computed integral quantities (fusion yield,
-    laser energy) which are more accurate than re-integrating from the sampled
-    EXODUS timesteps.
+    Also passes through Helios-computed integral quantities and scalar
+    implosion metrics from ICFAnalyzer.
 
     Parameters
     ----------
@@ -122,19 +121,7 @@ def extract_histories_from_run_data(data) -> Dict:
     Returns
     -------
     dict
-        Keys for calculate_burn_averaged_metrics():
-        - 'time_ns'            : (n_times,) time in nanoseconds
-        - 'temperature_keV'    : (n_times,) mass-avg hot-spot ion T in keV
-        - 'pressure_Gbar'      : (n_times,) mass-avg hot-spot total P in Gbar
-        - 'density_gcc'        : (n_times,) mass-avg hot-spot density in g/cm³
-        - 'areal_density_gcm2' : (n_times,) cold-fuel ρR in g/cm²
-        - 'radius_um'          : (n_times,) hot-spot outer radius in μm
-        - 'volume_cm3'         : (n_times,) hot-spot volume in cm³ (sphere)
-        - 'mass_mg'            : (n_times,) hot-spot mass in mg
-        - 'initial_radius_um'  : scalar, radius at first timestep
-        - 'energy_output_MJ'   : scalar, Helios-computed fusion yield (MJ)
-        - 'laser_energy_MJ'    : scalar, Helios-computed laser energy (MJ)
-        - 'target_gain'        : scalar, Helios-computed target gain
+        Keys for calculate_burn_averaged_metrics().
     """
     # ── Validate required data ──
     _check_required(data, [
@@ -155,6 +142,7 @@ def extract_histories_from_run_data(data) -> Dict:
     P_tot = P_ion + P_rad                        # total pressure
     zmass = data.zone_mass                       # (n_times, n_zones) g
     zbnd  = data.zone_boundaries                 # (n_times, n_nodes) cm
+    vel   = data.velocity                        # (n_times, n_nodes) cm/s
 
     # Cumulative areal density (optional — for cold fuel ρR)
     cumul_rhoR = data.areal_density_vs_time      # (n_times, n_zones+1) or None
@@ -213,13 +201,71 @@ def extract_histories_from_run_data(data) -> Dict:
 
     logger.info("Hot-spot history extraction complete")
 
-    # ── Pass through Helios-computed integral quantities ──
-    # These are more accurate than re-integrating from sampled EXODUS timesteps.
+    # ── Helios-computed integral quantities (authoritative) ──
     energy_output_MJ = getattr(data, 'energy_output', 0.0)
     laser_energy_MJ  = getattr(data, 'laser_energy', 0.0)
     target_gain      = getattr(data, 'target_gain', 0.0)
 
+    # ── Scalar implosion metrics from ICFAnalyzer ──
+    peak_vimp_kms = abs(getattr(data, 'peak_implosion_velocity', 0.0))
+    adiabat       = getattr(data, 'adiabat_mass_averaged_ice', 0.0)
+
+    # ── Derived implosion metrics ──
+
+    # Fraction absorbed: laser energy deposited / delivered
+    fraction_absorbed = 0.0
+    led = getattr(data, 'laser_energy_deposited', None)
+    lpd = getattr(data, 'laser_power_delivered', None)
+    if led is not None and lpd is not None:
+        total_deposited = np.max(np.sum(led, axis=-1)) if led.ndim > 1 else np.max(led)
+        # laser_energy is already in MJ; deposited is in J
+        if laser_energy_MJ > 0:
+            fraction_absorbed = (total_deposited * 1e-6) / laser_energy_MJ * 100.0
+
+    # In-flight kinetic energy at peak velocity
+    inflight_KE_kJ = 0.0
+    if vel is not None and zmass is not None:
+        # Find time of peak implosion velocity (most negative velocity)
+        # Use zone-center velocities
+        n_zones = zmass.shape[1]
+        if vel.shape[1] > n_zones:
+            # Node-centered → zone-center average
+            v_zone = 0.5 * (vel[:, :n_zones] + vel[:, 1:n_zones+1])
+        else:
+            v_zone = vel[:, :n_zones]
+        min_vel_per_time = np.min(v_zone, axis=1)
+        t_peak_v = np.argmin(min_vel_per_time)
+        KE = 0.5 * zmass[t_peak_v, :] * v_zone[t_peak_v, :]**2  # erg = g·cm²/s²
+        inflight_KE_kJ = np.sum(KE) * 1e-10  # g·cm²/s² → kJ (1 J = 1e7 erg, 1 kJ = 1e10 erg)
+
+    # Hydrodynamic efficiency
+    hydro_efficiency_pct = 0.0
+    if inflight_KE_kJ > 0 and laser_energy_MJ > 0:
+        # laser absorbed energy
+        E_abs = laser_energy_MJ * (fraction_absorbed / 100.0) if fraction_absorbed > 0 else laser_energy_MJ
+        hydro_efficiency_pct = inflight_KE_kJ / (E_abs * 1e3) * 100.0  # MJ → kJ
+
+    # Imploded DT mass at stagnation
+    imploded_DT_mass_mg = 0.0
+    stag_idx = getattr(data, '_stag_index', None)
+    if stag_idx is None:
+        # Find stagnation index from stag_time
+        stag_time = getattr(data, 'stag_time', 0.0)
+        if stag_time > 0:
+            stag_idx = np.argmin(np.abs(time_ns - stag_time))
+    if stag_idx is not None and stag_idx > 0:
+        # Imploded mass = all mass inside ablation front or fuel/ablator boundary
+        abl_front = getattr(data, 'ablation_front_radius', None)
+        if abl_front is not None:
+            r_abl = abl_front[stag_idx]
+            # Sum mass of zones with outer boundary <= ablation front
+            for z in range(zmass.shape[1]):
+                if zbnd[stag_idx, z + 1] <= r_abl * 1.01:  # small tolerance
+                    imploded_DT_mass_mg += zmass[stag_idx, z]
+            imploded_DT_mass_mg *= 1e3  # g → mg
+
     return {
+        # Time histories
         'time_ns':            time_ns,
         'temperature_keV':    temperatures,
         'pressure_Gbar':      pressures,
@@ -233,6 +279,13 @@ def extract_histories_from_run_data(data) -> Dict:
         'energy_output_MJ':   energy_output_MJ,
         'laser_energy_MJ':    laser_energy_MJ,
         'target_gain':        target_gain,
+        # Implosion metrics
+        'peak_velocity_kms':     peak_vimp_kms,
+        'adiabat':               adiabat,
+        'fraction_absorbed_pct': fraction_absorbed,
+        'inflight_KE_kJ':       inflight_KE_kJ,
+        'hydro_efficiency_pct':  hydro_efficiency_pct,
+        'imploded_DT_mass_mg':   imploded_DT_mass_mg,
     }
 
 
@@ -252,20 +305,6 @@ def extract_hot_spot_histories(run_or_data, T_threshold=1000.0,
                                time_indices=None) -> Dict:
     """
     Compatibility wrapper — routes to extract_histories_from_run_data().
-
-    Parameters
-    ----------
-    run_or_data : ICFRunData or HeliosRun
-        Populated ICFRunData (preferred) or HeliosRun (raises error).
-    T_threshold : float, optional
-        Ignored (kept for API compatibility).
-    time_indices : array-like, optional
-        Ignored (kept for API compatibility).
-
-    Returns
-    -------
-    dict
-        Histories dictionary for calculate_burn_averaged_metrics().
     """
     if hasattr(run_or_data, 'ion_temperature') and hasattr(run_or_data, 'zone_mass'):
         return extract_histories_from_run_data(run_or_data)
@@ -307,17 +346,8 @@ def calculate_burn_averaged_metrics(histories: Dict,
     Returns
     -------
     dict
-        - 'T_burn_avg'    : Burn-averaged temperature (keV)
-        - 'P_burn_avg'    : Burn-averaged pressure (Gbar)
-        - 'rho_burn_avg'  : Burn-averaged density (g/cm³)
-        - 'rhoR_burn_avg' : Burn-averaged cold-fuel areal density (g/cm²)
-        - 'CR_max'        : Maximum convergence ratio
-        - 'yield_MJ'      : Fusion yield (Helios-computed)
-        - 'laser_energy_MJ' : Laser energy (Helios-computed)
-        - 'target_gain'   : Fusion gain (Helios-computed)
-        - 'T_peak', 'P_peak', 'rho_peak', 'rhoR_peak' : Peak values
-        - 'burn_fraction'  : Normalized burn-rate weighting profile
-        - 'burn_rate'      : Raw burn-rate weighting array
+        Burn-averaged quantities, peak values, Helios integrals,
+        implosion metrics, and burn-rate weighting profile.
     """
     time_ns    = histories['time_ns']
     temp_keV   = histories['temperature_keV']
@@ -329,7 +359,6 @@ def calculate_burn_averaged_metrics(histories: Dict,
     time_s = time_ns * 1e-9
 
     # ── Burn-rate weighting function ──
-    # Used for averaging only, NOT for absolute yield calculation.
     burn_rate = calculate_burn_rate_from_sim(temp_keV, dens_gcc, ion_fraction)
 
     # ── Burn-averaged quantities ──
@@ -351,16 +380,15 @@ def calculate_burn_averaged_metrics(histories: Dict,
     else:
         CR_max = 0.0
 
-    # ── Yield and gain from Helios integrals (authoritative) ──
+    # ── Helios-computed integrals ──
     yield_MJ        = histories.get('energy_output_MJ', 0.0)
     laser_energy_MJ = histories.get('laser_energy_MJ', 0.0)
     target_gain     = histories.get('target_gain', 0.0)
 
-    # ── Normalized burn fraction (for plotting) ──
+    # ── Normalized burn fraction ──
     br_sum = np.sum(burn_rate)
     burn_fraction = burn_rate / br_sum if br_sum > 0 else burn_rate
 
-    # ── Min radius (skip zeros) ──
     valid_r = radius_um[radius_um > 0]
     min_radius = np.min(valid_r) if len(valid_r) > 0 else 0.0
 
@@ -382,6 +410,13 @@ def calculate_burn_averaged_metrics(histories: Dict,
         'yield_MJ':         yield_MJ,
         'laser_energy_MJ':  laser_energy_MJ,
         'target_gain':      target_gain,
+        # Implosion metrics (pass through from histories)
+        'peak_velocity_kms':     histories.get('peak_velocity_kms', 0.0),
+        'adiabat':               histories.get('adiabat', 0.0),
+        'fraction_absorbed_pct': histories.get('fraction_absorbed_pct', 0.0),
+        'inflight_KE_kJ':       histories.get('inflight_KE_kJ', 0.0),
+        'hydro_efficiency_pct':  histories.get('hydro_efficiency_pct', 0.0),
+        'imploded_DT_mass_mg':   histories.get('imploded_DT_mass_mg', 0.0),
         # Burn-rate weighting profile
         'burn_fraction':    burn_fraction,
         'burn_rate':        burn_rate,
@@ -402,17 +437,19 @@ def compare_with_published(sim_metrics: Dict,
         From calculate_burn_averaged_metrics().
     published_metrics : dict
         Published values: {key: (value, uncertainty)}.
-        Supported keys: 'T_hs', 'P_hs', 'rhoR_cf', 'CR_max', 'yield', 'gain'
+        Supported keys:
+          Burn-averaged: 'T_hs', 'P_hs', 'rhoR_cf', 'CR_max', 'yield', 'gain'
+          Implosion: 'peak_velocity_kms', 'adiabat', 'ifar',
+                     'hydro_efficiency_pct', 'imploded_DT_mass_mg',
+                     'inflight_KE_kJ', 'fraction_absorbed_pct'
     laser_energy_MJ : float, optional
-        Override laser energy for gain calculation.  If None, uses the
-        Helios-computed value from sim_metrics.
+        Override laser energy for gain calculation.
 
     Returns
     -------
     str
         Formatted comparison table.
     """
-    # Use Helios-computed laser energy unless overridden
     if laser_energy_MJ is None:
         laser_energy_MJ = sim_metrics.get('laser_energy_MJ', 0.0)
 
@@ -422,10 +459,54 @@ def compare_with_published(sim_metrics: Dict,
     lines.append("=" * 80)
     lines.append("COMPARISON WITH PUBLISHED DATA")
     lines.append("=" * 80)
-    lines.append(f"{'Metric':<30} {'Simulation':<20} {'Published':<20} {'Δ (%)':<10}")
+    lines.append(f"  Laser energy:  Sim = {sim_metrics.get('laser_energy_MJ', 0.0):.3f} MJ"
+                 f"   Published = {laser_energy_MJ:.3f} MJ")
+    lines.append("")
+    lines.append(f"{'Metric':<30} {'Simulation':>15} {'Published':>15} {'Δ (%)':>10}")
     lines.append("-" * 80)
 
-    rows = [
+    # ── Implosion metrics section ──
+    implosion_rows = [
+        ('Peak velocity (km/s)',      sim_metrics.get('peak_velocity_kms', 0.0),
+         'peak_velocity_kms',         '.1f'),
+        ('Adiabat',                   sim_metrics.get('adiabat', 0.0),
+         'adiabat',                   '.2f'),
+        ('Fraction absorbed (%)',     sim_metrics.get('fraction_absorbed_pct', 0.0),
+         'fraction_absorbed_pct',     '.1f'),
+        ('In-flight KE (kJ)',        sim_metrics.get('inflight_KE_kJ', 0.0),
+         'inflight_KE_kJ',           '.1f'),
+        ('Hydro efficiency (%)',     sim_metrics.get('hydro_efficiency_pct', 0.0),
+         'hydro_efficiency_pct',     '.1f'),
+        ('Imploded DT mass (mg)',    sim_metrics.get('imploded_DT_mass_mg', 0.0),
+         'imploded_DT_mass_mg',      '.2f'),
+    ]
+
+    has_implosion = False
+    for label, sim_val, pub_key, fmt in implosion_rows:
+        pub_entry = published_metrics.get(pub_key, None)
+        if pub_entry is None:
+            continue
+        pub_val, pub_unc = _to_tuple(pub_entry)
+        if pub_val <= 0 and sim_val <= 0:
+            continue
+        has_implosion = True
+        sv = format(sim_val, fmt) if sim_val > 0 else "—"
+        if pub_val > 0:
+            delta = 100 * (sim_val - pub_val) / pub_val if sim_val > 0 else float('nan')
+            pv = format(pub_val, fmt)
+            if pub_unc > 0:
+                pv += f"±{format(pub_unc, fmt)}"
+            delta_str = f"{delta:>9.1f}" if np.isfinite(delta) else "      —"
+        else:
+            pv = "—"
+            delta_str = "      —"
+        lines.append(f"{label:<30} {sv:>15} {pv:>15} {delta_str}")
+
+    if has_implosion:
+        lines.append("-" * 80)
+
+    # ── Burn-averaged metrics section ──
+    burn_rows = [
         ('⟨T_hs⟩ (keV)',    sim_metrics['T_burn_avg'],    'T_hs',    '.1f'),
         ('⟨P_hs⟩ (Gbar)',   sim_metrics['P_burn_avg'],    'P_hs',    '.0f'),
         ('⟨ρR_cf⟩ (g/cm²)', sim_metrics['rhoR_burn_avg'], 'rhoR_cf', '.2f'),
@@ -434,13 +515,28 @@ def compare_with_published(sim_metrics: Dict,
         ('Fusion Gain',      sim_gain,                      'gain',    '.1f'),
     ]
 
-    for label, sim_val, pub_key, fmt in rows:
-        pub_val, pub_unc = published_metrics.get(pub_key, (0.0, 0.0))
-        if pub_val > 0:
-            delta = 100 * (sim_val - pub_val) / pub_val
-            sv = format(sim_val, fmt)
-            pv = f"{format(pub_val, fmt)}±{format(pub_unc, fmt)}"
-            lines.append(f"{label:<30} {sv:>19} {pv:>19} {delta:>9.1f}")
+    for label, sim_val, pub_key, fmt in burn_rows:
+        pub_entry = published_metrics.get(pub_key, None)
+        if pub_entry is None:
+            continue
+        pub_val, pub_unc = _to_tuple(pub_entry)
+        if pub_val <= 0:
+            continue
+        delta = 100 * (sim_val - pub_val) / pub_val
+        sv = format(sim_val, fmt)
+        pv = format(pub_val, fmt)
+        if pub_unc > 0:
+            pv += f"±{format(pub_unc, fmt)}"
+        lines.append(f"{label:<30} {sv:>15} {pv:>15} {delta:>9.1f}")
 
     lines.append("=" * 80)
     return "\n".join(lines)
+
+
+def _to_tuple(val):
+    """Convert [value, unc] list or (value, unc) tuple to (float, float)."""
+    if isinstance(val, (list, tuple)) and len(val) >= 2:
+        return (float(val[0]), float(val[1]))
+    elif isinstance(val, (int, float)):
+        return (float(val), 0.0)
+    return (0.0, 0.0)

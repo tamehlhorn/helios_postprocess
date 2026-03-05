@@ -27,17 +27,6 @@ Examples
     python run_analysis.py ~/Sims/Xcimer/Olson_PDD/Olson_PDD_9/Olson_PDD_9
     python run_analysis.py ~/Sims/Xcimer/Vulcan_HDD/VI_6/VI_6
 
-The published data JSON file (optional) should look like:
-    {
-        "laser_energy_MJ": 4.0,
-        "T_hs":    [46.7, 4.8],
-        "P_hs":    [2720, 212],
-        "rhoR_cf": [1.60, 0.46],
-        "CR_max":  [20.1, 9.6],
-        "yield":   [256, 0.6],
-        "gain":    [65, 0]
-    }
-
 Author: Prof T
 Date: March 2026
 """
@@ -77,14 +66,13 @@ def main(base_path: str):
     exo_path       = base.with_suffix('.exo')
     rhw_path       = base.with_suffix('.rhw')
     report_path    = base.parent / f"{name}_report.pdf"
-    summary_path   = base.parent / f"{name}"          # ICFOutputGenerator adds _summary.txt / _history.csv
+    summary_path   = base.parent / f"{name}"
     published_path = base.parent / f"{name}_published.json"
 
     print("=" * 80)
     print(f"  Helios Post-Processing: {name}")
     print("=" * 80)
 
-    # ── Check input files ──
     if not exo_path.exists():
         print(f"ERROR: EXODUS file not found: {exo_path}")
         sys.exit(1)
@@ -94,11 +82,7 @@ def main(base_path: str):
     print(f"  Published: {published_path}  {'(found)' if published_path.exists() else '(not found — skipping comparison)'}")
     print()
 
-    # ── Configure logging ──
-    logging.basicConfig(
-        level=logging.INFO,
-        format='%(name)s: %(message)s',
-    )
+    logging.basicConfig(level=logging.INFO, format='%(name)s: %(message)s')
 
     # ── Load RHW if available ──
     rhw_config = None
@@ -119,9 +103,9 @@ def main(base_path: str):
             print()
 
     # ── Step 1: Load EXODUS data ──
-    print("─" * 80)
+    print("-" * 80)
     print("STEP 1: Loading simulation data")
-    print("─" * 80)
+    print("-" * 80)
 
     run = HeliosRun(str(exo_path), verbose=True)
     data = build_run_data(
@@ -134,9 +118,9 @@ def main(base_path: str):
     print()
 
     # ── Step 2: Run analysis pipeline ──
-    print("─" * 80)
+    print("-" * 80)
     print("STEP 2: Running analysis pipeline")
-    print("─" * 80)
+    print("-" * 80)
 
     analyzer = ICFAnalyzer(data)
     analyzer.analyze_drive_phase()
@@ -146,9 +130,9 @@ def main(base_path: str):
     print()
 
     # ── Step 3: Generate PDF report ──
-    print("─" * 80)
+    print("-" * 80)
     print("STEP 3: Generating PDF report")
-    print("─" * 80)
+    print("-" * 80)
 
     plotter = ICFPlotter(data, {})
     plotter.create_full_report(str(report_path))
@@ -156,9 +140,9 @@ def main(base_path: str):
     print()
 
     # ── Step 4: Write summary + CSV ──
-    print("─" * 80)
+    print("-" * 80)
     print("STEP 4: Writing summary and CSV output")
-    print("─" * 80)
+    print("-" * 80)
 
     output = ICFOutputGenerator(data)
     output.write_all(str(summary_path))
@@ -166,38 +150,53 @@ def main(base_path: str):
     print(f"  History: {summary_path}_history.csv")
     print()
 
-    # ── Step 5: Burn-averaged metrics ──
-    print("─" * 80)
-    print("STEP 5: Burn-averaged metrics")
-    print("─" * 80)
+    # ── Step 5: Burn-averaged and implosion metrics ──
+    print("-" * 80)
+    print("STEP 5: Burn-averaged and implosion metrics")
+    print("-" * 80)
 
     histories = extract_histories_from_run_data(data)
     metrics = calculate_burn_averaged_metrics(histories)
 
     print()
-    print(f"  ⟨T_hs⟩       = {metrics['T_burn_avg']:.2f} keV")
-    print(f"  ⟨P_hs⟩       = {metrics['P_burn_avg']:.1f} Gbar")
-    print(f"  ⟨ρR_cf⟩      = {metrics['rhoR_burn_avg']:.4f} g/cm²")
-    print(f"  CR_max       = {metrics['CR_max']:.1f}")
-    print(f"  Yield        = {metrics['yield_MJ']:.3f} MJ")
-    print(f"  Gain         = {metrics['target_gain']:.3f}")
+    print("  Burn-averaged quantities:")
+    print(f"    ⟨T_hs⟩          = {metrics['T_burn_avg']:.2f} keV")
+    print(f"    ⟨P_hs⟩          = {metrics['P_burn_avg']:.1f} Gbar")
+    print(f"    ⟨ρR_cf⟩         = {metrics['rhoR_burn_avg']:.4f} g/cm²")
+    print(f"    CR_max          = {metrics['CR_max']:.1f}")
+    print(f"    Yield           = {metrics['yield_MJ']:.3f} MJ")
+    print(f"    Gain            = {metrics['target_gain']:.3f}")
+    print()
+    print("  Implosion metrics:")
+    print(f"    Peak velocity   = {metrics['peak_velocity_kms']:.1f} km/s")
+    print(f"    Adiabat         = {metrics['adiabat']:.2f}")
+    if metrics['fraction_absorbed_pct'] > 0:
+        print(f"    Frac absorbed   = {metrics['fraction_absorbed_pct']:.1f}%")
+    if metrics['inflight_KE_kJ'] > 0:
+        print(f"    In-flight KE    = {metrics['inflight_KE_kJ']:.1f} kJ")
+    if metrics['hydro_efficiency_pct'] > 0:
+        print(f"    Hydro eff       = {metrics['hydro_efficiency_pct']:.1f}%")
+    if metrics['imploded_DT_mass_mg'] > 0:
+        print(f"    Imploded DT     = {metrics['imploded_DT_mass_mg']:.2f} mg")
     print()
 
     # ── Step 6: Compare with published data (if available) ──
     if published_path.exists():
-        print("─" * 80)
+        print("-" * 80)
         print("STEP 6: Comparison with published data")
-        print("─" * 80)
+        print("-" * 80)
 
         try:
             with open(published_path, 'r') as f:
                 pub_raw = json.load(f)
 
-            # Convert [value, uncertainty] lists to tuples
-            published_metrics = {}
+            # Extract laser energy and remove non-metric keys
             pub_laser = pub_raw.pop('laser_energy_MJ', None)
+            published_metrics = {}
             for key, val in pub_raw.items():
-                if isinstance(val, list) and len(val) == 2:
+                if key.startswith('_'):
+                    continue   # skip comments
+                if isinstance(val, (list, tuple)) and len(val) == 2:
                     published_metrics[key] = tuple(val)
 
             table = compare_with_published(
