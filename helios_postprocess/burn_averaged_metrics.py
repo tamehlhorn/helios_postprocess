@@ -9,6 +9,15 @@ This module provides TIME-HISTORY burn-averaging using the 2D arrays stored
 on ICFRunData (after build_run_data + ICFAnalyzer have run), complementing
 the SPATIAL neutron-averaging in icf_analysis.py.
 
+Important
+---------
+EXODUS files sample only a fraction of the actual simulation timesteps.
+Therefore Helios's own time-integrated quantities (neutron count, deposited
+energy, etc.) are far more accurate than anything re-integrated from EXODUS
+data.  This module uses the Helios-computed fusion yield and laser energy
+for absolute values, and only uses the EXODUS-sampled burn rate profile as
+a *weighting function* for burn-averaging.
+
 Workflow
 -------
     >>> from helios_postprocess import HeliosRun
@@ -60,6 +69,9 @@ def calculate_burn_rate_from_sim(temperature_keV: np.ndarray,
     """
     Calculate DT fusion reaction rate from temperature and density.
 
+    This is used as a *weighting function* for burn-averaging, NOT for
+    computing absolute yield (which comes from Helios's own integrals).
+
     Parameters
     ----------
     temperature_keV : np.ndarray
@@ -97,24 +109,20 @@ def extract_histories_from_run_data(data) -> Dict:
     within the hot spot.  Also extracts cold-fuel areal density from the
     cumulative areal_density_vs_time array.
 
-    This replaces the old extract_hot_spot_histories() which looped over
-    timesteps calling the legacy hot_spot/areal_density modules.
+    Also passes through the Helios-computed integral quantities (fusion yield,
+    laser energy) which are more accurate than re-integrating from the sampled
+    EXODUS timesteps.
 
     Parameters
     ----------
     data : ICFRunData
         Populated dataclass — must have had build_run_data() and
-        ICFAnalyzer (at least analyze_stagnation_phase) run on it.
-        Required attributes:
-            time, ion_temperature, mass_density, ion_pressure, rad_pressure,
-            zone_boundaries, zone_mass, region_interfaces_indices
-        Optional (for areal density):
-            areal_density_vs_time
+        ICFAnalyzer (at least through compute_performance_metrics()) run on it.
 
     Returns
     -------
     dict
-        Dictionary with keys expected by calculate_burn_averaged_metrics():
+        Keys for calculate_burn_averaged_metrics():
         - 'time_ns'            : (n_times,) time in nanoseconds
         - 'temperature_keV'    : (n_times,) mass-avg hot-spot ion T in keV
         - 'pressure_Gbar'      : (n_times,) mass-avg hot-spot total P in Gbar
@@ -124,11 +132,9 @@ def extract_histories_from_run_data(data) -> Dict:
         - 'volume_cm3'         : (n_times,) hot-spot volume in cm³ (sphere)
         - 'mass_mg'            : (n_times,) hot-spot mass in mg
         - 'initial_radius_um'  : scalar, radius at first timestep
-
-    Raises
-    ------
-    ValueError
-        If required arrays are missing from ICFRunData.
+        - 'energy_output_MJ'   : scalar, Helios-computed fusion yield (MJ)
+        - 'laser_energy_MJ'    : scalar, Helios-computed laser energy (MJ)
+        - 'target_gain'        : scalar, Helios-computed target gain
     """
     # ── Validate required data ──
     _check_required(data, [
@@ -207,6 +213,12 @@ def extract_histories_from_run_data(data) -> Dict:
 
     logger.info("Hot-spot history extraction complete")
 
+    # ── Pass through Helios-computed integral quantities ──
+    # These are more accurate than re-integrating from sampled EXODUS timesteps.
+    energy_output_MJ = getattr(data, 'energy_output', 0.0)
+    laser_energy_MJ  = getattr(data, 'laser_energy', 0.0)
+    target_gain      = getattr(data, 'target_gain', 0.0)
+
     return {
         'time_ns':            time_ns,
         'temperature_keV':    temperatures,
@@ -217,6 +229,10 @@ def extract_histories_from_run_data(data) -> Dict:
         'volume_cm3':         volumes,
         'mass_mg':            masses_mg,
         'initial_radius_um':  radii_um[0],
+        # Helios-computed integrals (authoritative)
+        'energy_output_MJ':   energy_output_MJ,
+        'laser_energy_MJ':    laser_energy_MJ,
+        'target_gain':        target_gain,
     }
 
 
@@ -236,10 +252,6 @@ def extract_hot_spot_histories(run_or_data, T_threshold=1000.0,
                                time_indices=None) -> Dict:
     """
     Compatibility wrapper — routes to extract_histories_from_run_data().
-
-    If called with an ICFRunData object (has 'ion_temperature' attribute),
-    extracts histories directly.  If called with a HeliosRun object, raises
-    an informative error directing the caller to use the pipeline.
 
     Parameters
     ----------
@@ -276,15 +288,21 @@ def calculate_burn_averaged_metrics(histories: Dict,
     """
     Calculate burn-averaged metrics from time histories.
 
-    Burn-averaging: <Q> = ∫ Q(t) · Ṙ(t) dt / ∫ Ṙ(t) dt
-    where Ṙ is the volumetric fusion reaction rate ∝ ρ² · <σv>(T).
+    Burn-averaging: <Q> = ∫ Q(t) · w(t) dt / ∫ w(t) dt
+    where w(t) is a burn-rate weighting function ∝ ρ² · <σv>(T).
+
+    The weighting function is computed from the EXODUS-sampled data and is
+    used only for averaging.  Absolute yield and gain come from Helios's own
+    time-integrated quantities, which use every simulation timestep and are
+    therefore far more accurate than re-integrating from the sampled EXODUS
+    output.
 
     Parameters
     ----------
     histories : dict
         Dictionary from extract_histories_from_run_data().
     ion_fraction : float, optional
-        Ion fraction for burn rate calculation (default 0.5 for 50-50 DT).
+        Ion fraction for burn rate weighting (default 0.5 for 50-50 DT).
 
     Returns
     -------
@@ -294,10 +312,12 @@ def calculate_burn_averaged_metrics(histories: Dict,
         - 'rho_burn_avg'  : Burn-averaged density (g/cm³)
         - 'rhoR_burn_avg' : Burn-averaged cold-fuel areal density (g/cm²)
         - 'CR_max'        : Maximum convergence ratio
-        - 'yield_MJ'      : Total fusion yield (MJ)
+        - 'yield_MJ'      : Fusion yield (Helios-computed)
+        - 'laser_energy_MJ' : Laser energy (Helios-computed)
+        - 'target_gain'   : Fusion gain (Helios-computed)
         - 'T_peak', 'P_peak', 'rho_peak', 'rhoR_peak' : Peak values
-        - 'burn_fraction'  : Normalized burn rate profile
-        - 'burn_rate'      : Raw burn rate array
+        - 'burn_fraction'  : Normalized burn-rate weighting profile
+        - 'burn_rate'      : Raw burn-rate weighting array
     """
     time_ns    = histories['time_ns']
     temp_keV   = histories['temperature_keV']
@@ -305,14 +325,14 @@ def calculate_burn_averaged_metrics(histories: Dict,
     dens_gcc   = histories['density_gcc']
     rhoR_gcm2  = histories['areal_density_gcm2']
     radius_um  = histories['radius_um']
-    volume_cm3 = histories['volume_cm3']
 
     time_s = time_ns * 1e-9
 
-    # Burn rate at each timestep
+    # ── Burn-rate weighting function ──
+    # Used for averaging only, NOT for absolute yield calculation.
     burn_rate = calculate_burn_rate_from_sim(temp_keV, dens_gcc, ion_fraction)
 
-    # Burn-averaged quantities
+    # ── Burn-averaged quantities ──
     def _burn_avg(quantity):
         num = simpson(quantity * burn_rate, x=time_s)
         den = simpson(burn_rate, x=time_s)
@@ -323,7 +343,7 @@ def calculate_burn_averaged_metrics(histories: Dict,
     rho_burn_avg  = _burn_avg(dens_gcc)
     rhoR_burn_avg = _burn_avg(rhoR_gcm2)
 
-    # Convergence ratio
+    # ── Convergence ratio ──
     r0 = histories['initial_radius_um']
     valid = radius_um > 0
     if r0 > 0 and np.any(valid):
@@ -331,35 +351,38 @@ def calculate_burn_averaged_metrics(histories: Dict,
     else:
         CR_max = 0.0
 
-    # Total yield from volumetric burn rate
-    E_fusion = 17.6 * 1.60218e-13   # MeV → J
-    reaction_rate_total = burn_rate * volume_cm3
-    total_reactions = simpson(reaction_rate_total, x=time_s)
-    yield_J  = total_reactions * E_fusion
-    yield_MJ = yield_J * 1e-6
+    # ── Yield and gain from Helios integrals (authoritative) ──
+    yield_MJ        = histories.get('energy_output_MJ', 0.0)
+    laser_energy_MJ = histories.get('laser_energy_MJ', 0.0)
+    target_gain     = histories.get('target_gain', 0.0)
 
-    # Normalized burn fraction (for plotting)
+    # ── Normalized burn fraction (for plotting) ──
     br_sum = np.sum(burn_rate)
     burn_fraction = burn_rate / br_sum if br_sum > 0 else burn_rate
 
-    # Min radius (skip zeros)
+    # ── Min radius (skip zeros) ──
     valid_r = radius_um[radius_um > 0]
     min_radius = np.min(valid_r) if len(valid_r) > 0 else 0.0
 
     return {
+        # Burn-averaged values
         'T_burn_avg':       T_burn_avg,
         'P_burn_avg':       P_burn_avg,
         'rho_burn_avg':     rho_burn_avg,
         'rhoR_burn_avg':    rhoR_burn_avg,
+        # Peak values
         'T_peak':           np.max(temp_keV),
         'P_peak':           np.max(pres_Gbar),
         'rho_peak':         np.max(dens_gcc),
         'rhoR_peak':        np.max(rhoR_gcm2),
+        # Convergence
         'CR_max':           CR_max,
         'min_radius_um':    min_radius,
+        # Helios-computed integrals (authoritative)
         'yield_MJ':         yield_MJ,
-        'yield_J':          yield_J,
-        'total_reactions':  total_reactions,
+        'laser_energy_MJ':  laser_energy_MJ,
+        'target_gain':      target_gain,
+        # Burn-rate weighting profile
         'burn_fraction':    burn_fraction,
         'burn_rate':        burn_rate,
     }
@@ -369,7 +392,7 @@ def calculate_burn_averaged_metrics(histories: Dict,
 
 def compare_with_published(sim_metrics: Dict,
                            published_metrics: Dict,
-                           laser_energy_MJ: float = 4.0) -> str:
+                           laser_energy_MJ: Optional[float] = None) -> str:
     """
     Generate comparison table between simulation and published results.
 
@@ -380,14 +403,19 @@ def compare_with_published(sim_metrics: Dict,
     published_metrics : dict
         Published values: {key: (value, uncertainty)}.
         Supported keys: 'T_hs', 'P_hs', 'rhoR_cf', 'CR_max', 'yield', 'gain'
-    laser_energy_MJ : float
-        Laser energy in MJ for gain calculation.
+    laser_energy_MJ : float, optional
+        Override laser energy for gain calculation.  If None, uses the
+        Helios-computed value from sim_metrics.
 
     Returns
     -------
     str
         Formatted comparison table.
     """
+    # Use Helios-computed laser energy unless overridden
+    if laser_energy_MJ is None:
+        laser_energy_MJ = sim_metrics.get('laser_energy_MJ', 0.0)
+
     sim_gain = sim_metrics['yield_MJ'] / laser_energy_MJ if laser_energy_MJ > 0 else 0.0
 
     lines = []
