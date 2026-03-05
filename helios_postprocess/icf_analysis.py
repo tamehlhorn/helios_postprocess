@@ -378,7 +378,7 @@ class ICFAnalyzer:
             # -- Zone range: cold fuel = between hot-spot and ablator boundaries --
             if ri is not None and ri.shape[1] >= 2:
                 z_start = int(ri[eval_idx, 0])           # outer edge of hot spot
-                z_end   = int(ri[eval_idx, -2])           # inner edge of ablator
+                z_end   = int(ri[eval_idx, 1])            # outer edge of cold fuel (exclude ablated region)
             else:
                 z_start = 0
                 z_end   = n_zones // 2
