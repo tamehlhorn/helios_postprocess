@@ -1264,6 +1264,8 @@ class ICFAnalyzer:
             # Initial masses
             initial_fuel_mass    = np.sum(self.data.zone_mass[0, :fuel_bnd])
             initial_ablator_mass = np.sum(self.data.zone_mass[0, fuel_bnd:])
+            self.data.initial_fuel_mass_mg    = float(initial_fuel_mass) * 1e3
+            self.data.initial_ablator_mass_mg = float(initial_ablator_mass) * 1e3
 
             # ---- Determine "inside the shell" mask at stagnation ----
             #

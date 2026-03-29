@@ -171,9 +171,9 @@ class ICFOutputGenerator:
         # ---- Mass fractions ----
         _a('MASS FRACTIONS (at stagnation)')
         _a('-' * width)
+        _a(self._metric('Initial DT mass',     d.initial_fuel_mass_mg,    'mg', fmt='.3f'))
+        _a(self._metric('Initial ablator mass',d.initial_ablator_mass_mg, 'mg', fmt='.3f'))
         _a(self._metric('Unablated fuel',      d.unablated_fuel_mass,     '', fmt='.4f'))
-        _a(self._metric('Unablated ablator',   d.unablated_ablatar_mass,  '', fmt='.4f'))
-        _a(self._metric('Stagnated fuel',      d.stagnated_fuel_mass,     '', fmt='.4f'))
         _a('')
 
         # ---- Implosion ----
