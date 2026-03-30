@@ -271,15 +271,24 @@ def extract_histories_from_run_data(data) -> Dict:
         if stag_time > 0:
             stag_idx = np.argmin(np.abs(time_ns - stag_time))
     if stag_idx is not None and stag_idx > 0:
-        # Imploded mass = all mass inside ablation front or fuel/ablator boundary
-        abl_front = getattr(data, 'ablation_front_radius', None)
-        if abl_front is not None:
-            r_abl = abl_front[stag_idx]
-            # Sum mass of zones with outer boundary <= ablation front
-            for z in range(zmass.shape[1]):
-                if zbnd[stag_idx, z + 1] <= r_abl * 1.01:  # small tolerance
-                    imploded_DT_mass_mg += zmass[stag_idx, z]
-            imploded_DT_mass_mg *= 1e3  # g → mg
+        # Imploded mass = all DT zones inside the ablation front at stagnation.
+        # Prefer zone-index method (consistent with icf_analysis.py mass fractions)
+        # over radius method, which is sensitive to smoothing artefacts.
+        abl_indices = getattr(data, 'ablation_front_indices', None)
+        ri = getattr(data, 'region_interfaces_indices', None)
+        fuel_bnd = int(ri[0, -2]) if ri is not None and ri.shape[1] >= 2 else zmass.shape[1]
+        if abl_indices is not None and abl_indices[stag_idx] > 0:
+            abl_idx = int(abl_indices[stag_idx])
+            imploded_DT_mass_mg = float(np.sum(zmass[stag_idx, :min(abl_idx+1, fuel_bnd)])) * 1e3
+        else:
+            # Fallback: radius-based (less reliable at stagnation)
+            abl_front = getattr(data, 'ablation_front_radius', None)
+            if abl_front is not None:
+                r_abl = abl_front[stag_idx]
+                for z in range(zmass.shape[1]):
+                    if zbnd[stag_idx, z + 1] <= r_abl * 1.01:
+                        imploded_DT_mass_mg += zmass[stag_idx, z]
+                imploded_DT_mass_mg *= 1e3  # g → mg
 
     return {
         # Time histories
