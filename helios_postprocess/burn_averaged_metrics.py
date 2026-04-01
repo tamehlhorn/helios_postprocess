@@ -313,6 +313,7 @@ def extract_histories_from_run_data(data) -> Dict:
         'inflight_KE_kJ':       inflight_KE_kJ,
         'hydro_efficiency_pct':  hydro_efficiency_pct,
         'imploded_DT_mass_mg':   imploded_DT_mass_mg,
+        'CR_max':                getattr(data, 'comp_ratio', 0.0),
     }
 
 
@@ -400,12 +401,9 @@ def calculate_burn_averaged_metrics(histories: Dict,
     rhoR_burn_avg = _burn_avg(rhoR_gcm2)
 
     # ── Convergence ratio ──
-    r0 = histories['initial_radius_um']
-    valid = radius_um > 0
-    if r0 > 0 and np.any(valid):
-        CR_max = np.max(r0 / radius_um[valid])
-    else:
-        CR_max = 0.0
+    # Use CR computed in icf_analysis.py: R0 / Rf where R0 = initial inner
+    # shell radius and Rf = ablation front radius at peak implosion velocity.
+    CR_max = histories.get('CR_max', 0.0)
 
     # ── Helios-computed integrals ──
     yield_MJ        = histories.get('energy_output_MJ', 0.0)

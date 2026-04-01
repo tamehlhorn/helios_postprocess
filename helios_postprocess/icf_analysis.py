@@ -244,6 +244,9 @@ class ICFAnalyzer:
             else:
                 pre_bang = np.ones(len(self.data.time), dtype=bool)
             min_velocities = np.min(self.data.velocity[pre_bang], axis=1)
+            pre_bang_indices = np.where(pre_bang)[0]
+            peak_idx_in_prebang = np.argmin(min_velocities)
+            self.data.peak_velocity_index = int(pre_bang_indices[peak_idx_in_prebang])
             self.data.peak_implosion_velocity = np.min(min_velocities) * 1e-5  # cm/s → km/s
             logger.info(f"Peak implosion velocity (pre-bang): "
                         f"{abs(self.data.peak_implosion_velocity):.2f} km/s")
@@ -1241,12 +1244,23 @@ class ICFAnalyzer:
             self.data.target_gain = self.data.energy_output / self.data.laser_energy
             logger.info(f"Target gain: {self.data.target_gain:.3f}")
         
-        # Compression ratio
-        if self.data.mass_density is not None and self.data.max_density > 0:
-            initial_density = np.mean(self.data.mass_density[0])
-            if initial_density > 0:
-                self.data.comp_ratio = self.data.max_density / initial_density
-                logger.info(f"Compression ratio: {self.data.comp_ratio:.2f}")
+        # Convergence ratio CR = R0 / Rf
+        # R0 = initial inner radius of shell (hot-spot boundary at t=0)
+        # Rf = ablation front radius at peak implosion velocity
+        ri  = self.data.region_interfaces_indices
+        zbnd = self.data.zone_boundaries
+        abl_indices = self.data.ablation_front_indices
+        pv_idx = getattr(self.data, 'peak_velocity_index', None)
+        if (ri is not None and zbnd is not None
+                and abl_indices is not None and pv_idx is not None):
+            hs_node_0 = int(ri[0, 0])          # hot-spot boundary node at t=0
+            R0 = float(zbnd[0, hs_node_0])     # initial inner shell radius
+            abl_zone = int(abl_indices[pv_idx])
+            Rf = float(zbnd[pv_idx, abl_zone + 1])  # ablation front radius at peak v
+            if Rf > 0 and R0 > 0:
+                self.data.comp_ratio = R0 / Rf
+                logger.info(f"Convergence ratio CR = R0/Rf: "
+                            f"{R0:.4f} cm / {Rf:.4f} cm = {self.data.comp_ratio:.2f}")
 
         # ---- Mass fractions (require region interfaces + ablation front) ----
         ri = self.data.region_interfaces_indices

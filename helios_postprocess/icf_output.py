@@ -127,7 +127,7 @@ class ICFOutputGenerator:
         _a('COMPRESSION')
         _a('-' * width)
         _a(self._metric('Peak density',         d.max_density,  'g/cc', fmt='.2f'))
-        _a(self._metric('Compression ratio',    d.comp_ratio,   '',     fmt='.1f'))
+        _a(self._metric('Convergence ratio CR',  d.comp_ratio,   '',     fmt='.1f'))
         _a(self._metric('Core radius',          d.core_radius,  'cm',   fmt='.4f'))
         _a('')
 
