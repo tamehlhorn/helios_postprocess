@@ -745,60 +745,60 @@ class ICFAnalyzer:
             hot_spot_mask = temperatures > temp_threshold
             
             boundaries = self.data.zone_boundaries[stag_idx]
-                radii = (boundaries[:-1] + boundaries[1:]) / 2
+            radii = (boundaries[:-1] + boundaries[1:]) / 2
 
-                # Hot spot radius — prefer region interface (robust for igniting
-                # capsules where alpha heating warms the dense shell above 1 keV,
-                # causing the temperature mask to extend far outside the hot spot).
-                ri = self.data.region_interfaces_indices
-                if ri is not None and ri.shape[1] >= 1:
-                    hs_node = int(ri[stag_idx, 0])
-                    self.data.core_radius = float(boundaries[hs_node])
-                    self.data.stagnation_hot_spot_radius = self.data.core_radius
-                elif np.any(hot_spot_mask):
-                    # Fallback: temperature mask (unreliable for igniting capsules)
-                    hot_radii = radii[hot_spot_mask]
-                    self.data.stagnation_hot_spot_radius = np.max(hot_radii)
-                    hot_zone_indices = np.where(hot_spot_mask)[0]
-                    self.data.core_radius = boundaries[hot_zone_indices[-1] + 1]
-                
-                # Hot spot pressure (mass-averaged)
-                # CLAUDE.md: report pressure in Gbar.  1 Gbar = 1e8 J/cm³
-                pressure_Gbar = (self.data.ion_pressure[stag_idx] + 
-                           self.data.rad_pressure[stag_idx]) * 1e-8  # J/cm³ → Gbar
-                mass = self.data.zone_mass[stag_idx]
-                
-                self.data.hot_spot_pressure = np.average(
-                    pressure_Gbar[hot_spot_mask],
-                    weights=mass[hot_spot_mask]
-                )
-                
-                # Hot spot areal density
-                density = self.data.mass_density[stag_idx]
-                dr = boundaries[1:] - boundaries[:-1]
-                self.data.hot_spot_areal_density = np.sum(
-                    density[hot_spot_mask] * dr[hot_spot_mask]
-                )
-                
-                # Hot spot internal energy  (ion + electron)
-                # specific_internal_energy × mass, summed over hot-spot zones,
-                # then converted J → kJ.
-                hs_energy_J = 0.0
-                if self.data.ion_pressure is not None:
-                    # E_int = P / (γ-1) × Volume  for ideal gas
-                    # Or directly: e_specific × mass  if we have SIE.
-                    # Use  E = (3/2) n k T × V  ≈ (3/2) P V  for each species
-                    vol = (4.0 / 3.0) * np.pi * (boundaries[1:]**3 - boundaries[:-1]**3)
-                    p_ion  = self.data.ion_pressure[stag_idx]
-                    p_elec = self.data.rad_pressure[stag_idx]  # includes elec + rad
-                    hs_energy_J = np.sum((1.5 * (p_ion[hot_spot_mask] + p_elec[hot_spot_mask]))
-                                         * vol[hot_spot_mask])
-                self.data.hot_spot_internal_energy = hs_energy_J * 1e-3  # J → kJ
-                
-                logger.info(f"Core radius: {self.data.core_radius:.4f} cm")
-                logger.info(f"Hot spot radius: {self.data.stagnation_hot_spot_radius:.4f} cm")
-                logger.info(f"Hot spot pressure: {self.data.hot_spot_pressure:.2f} Gbar")
-                logger.info(f"Hot spot internal energy: {self.data.hot_spot_internal_energy:.2f} kJ")
+            # Hot spot radius — prefer region interface (robust for igniting
+            # capsules where alpha heating warms the dense shell above 1 keV,
+            # causing the temperature mask to extend far outside the hot spot).
+            ri = self.data.region_interfaces_indices
+            if ri is not None and ri.shape[1] >= 1:
+                hs_node = int(ri[stag_idx, 0])
+                self.data.core_radius = float(boundaries[hs_node])
+                self.data.stagnation_hot_spot_radius = self.data.core_radius
+            elif np.any(hot_spot_mask):
+                # Fallback: temperature mask (unreliable for igniting capsules)
+                hot_radii = radii[hot_spot_mask]
+                self.data.stagnation_hot_spot_radius = np.max(hot_radii)
+                hot_zone_indices = np.where(hot_spot_mask)[0]
+                self.data.core_radius = boundaries[hot_zone_indices[-1] + 1]
+            
+            # Hot spot pressure (mass-averaged)
+            # CLAUDE.md: report pressure in Gbar.  1 Gbar = 1e8 J/cm³
+            pressure_Gbar = (self.data.ion_pressure[stag_idx] + 
+                       self.data.rad_pressure[stag_idx]) * 1e-8  # J/cm³ → Gbar
+            mass = self.data.zone_mass[stag_idx]
+            
+            self.data.hot_spot_pressure = np.average(
+                pressure_Gbar[hot_spot_mask],
+                weights=mass[hot_spot_mask]
+            )
+            
+            # Hot spot areal density
+            density = self.data.mass_density[stag_idx]
+            dr = boundaries[1:] - boundaries[:-1]
+            self.data.hot_spot_areal_density = np.sum(
+                density[hot_spot_mask] * dr[hot_spot_mask]
+            )
+            
+            # Hot spot internal energy  (ion + electron)
+            # specific_internal_energy × mass, summed over hot-spot zones,
+            # then converted J → kJ.
+            hs_energy_J = 0.0
+            if self.data.ion_pressure is not None:
+                # E_int = P / (γ-1) × Volume  for ideal gas
+                # Or directly: e_specific × mass  if we have SIE.
+                # Use  E = (3/2) n k T × V  ≈ (3/2) P V  for each species
+                vol = (4.0 / 3.0) * np.pi * (boundaries[1:]**3 - boundaries[:-1]**3)
+                p_ion  = self.data.ion_pressure[stag_idx]
+                p_elec = self.data.rad_pressure[stag_idx]  # includes elec + rad
+                hs_energy_J = np.sum((1.5 * (p_ion[hot_spot_mask] + p_elec[hot_spot_mask]))
+                                     * vol[hot_spot_mask])
+            self.data.hot_spot_internal_energy = hs_energy_J * 1e-3  # J → kJ
+            
+            logger.info(f"Core radius: {self.data.core_radius:.4f} cm")
+            logger.info(f"Hot spot radius: {self.data.stagnation_hot_spot_radius:.4f} cm")
+            logger.info(f"Hot spot pressure: {self.data.hot_spot_pressure:.2f} Gbar")
+            logger.info(f"Hot spot internal energy: {self.data.hot_spot_internal_energy:.2f} kJ")
                 
         except Exception as e:
             logger.warning(f"Could not compute hot spot properties: {e}")
