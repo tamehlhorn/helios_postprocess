@@ -744,17 +744,23 @@ class ICFAnalyzer:
             temperatures = self.data.ion_temperature[stag_idx]
             hot_spot_mask = temperatures > temp_threshold
             
-            if np.any(hot_spot_mask):
-                boundaries = self.data.zone_boundaries[stag_idx]
+            boundaries = self.data.zone_boundaries[stag_idx]
                 radii = (boundaries[:-1] + boundaries[1:]) / 2
-                
-                # Hot spot radius (outermost hot zone)
-                hot_radii = radii[hot_spot_mask]
-                self.data.stagnation_hot_spot_radius = np.max(hot_radii)
-                
-                # Core radius = outer boundary of the outermost hot-spot zone
-                hot_zone_indices = np.where(hot_spot_mask)[0]
-                self.data.core_radius = boundaries[hot_zone_indices[-1] + 1]
+
+                # Hot spot radius — prefer region interface (robust for igniting
+                # capsules where alpha heating warms the dense shell above 1 keV,
+                # causing the temperature mask to extend far outside the hot spot).
+                ri = self.data.region_interfaces_indices
+                if ri is not None and ri.shape[1] >= 1:
+                    hs_node = int(ri[stag_idx, 0])
+                    self.data.core_radius = float(boundaries[hs_node])
+                    self.data.stagnation_hot_spot_radius = self.data.core_radius
+                elif np.any(hot_spot_mask):
+                    # Fallback: temperature mask (unreliable for igniting capsules)
+                    hot_radii = radii[hot_spot_mask]
+                    self.data.stagnation_hot_spot_radius = np.max(hot_radii)
+                    hot_zone_indices = np.where(hot_spot_mask)[0]
+                    self.data.core_radius = boundaries[hot_zone_indices[-1] + 1]
                 
                 # Hot spot pressure (mass-averaged)
                 # CLAUDE.md: report pressure in Gbar.  1 Gbar = 1e8 J/cm³
