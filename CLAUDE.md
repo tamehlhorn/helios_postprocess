@@ -4,8 +4,10 @@
 - **GitHub**: `tamehlhorn/helios_postprocessor`
 - **Package**: `helios_postprocess/`
 - **Version**: 3.0.0 (March 2026)
-- **Dev machine**: MacBook (`~/Codes/helios_postprocessor`) -- editing, pushing
-- **Run machine**: Mac Studio (`tommehlhorn`, `~/helios_postprocessor`) -- running against simulation data
+- **Dev machine**: MacBook (`~/Codes/helios_postprocessor`) -- editing, pushing; use `python` not `python3`
+- **Run machine**: Mac Studio (`tommehlhorn`, `~/helios_postprocessor`) -- use `python3`
+- **MacBook python**: `/Users/mehlhorn/anaconda3/bin/python` (NOT `/usr/local/bin/python3`)
+- **Package install on MacBook**: `pip install -e . --user` (requires `--user` due to Anaconda permissions)
 
 ## Architecture
 
@@ -30,7 +32,11 @@ HeliosRun(exo_path)  ->  build_run_data(run)  ->  ICFRunData (dataclass, ~68 att
 ### Runner Script (recommended entry point)
 
 ```bash
+# Mac Studio
 python3 ~/helios_postprocessor/examples/run_analysis.py <base_path>
+
+# MacBook
+python ~/Codes/helios_postprocessor/examples/run_analysis.py <base_path>
 ```
 
 Takes a path WITHOUT extension and derives all filenames:
@@ -71,8 +77,9 @@ Also computes implosion metrics:
 - In-flight KE (inward-moving shell only, max over time)
 - Hydrodynamic efficiency (max KE_inward / E_absorbed)
 - Fraction absorbed (laser_energy_deposited / integrated laser_power_delivered)
-- Imploded DT mass at stagnation
+- Imploded DT mass at stagnation (zone-index method, consistent with mass fractions)
 - IFAR (density-based shell boundaries)
+- CR_max (stagnation convergence ratio, passed through from icf_analysis.py)
 
 Yield, laser energy, and gain come from Helios's own time-integrated
 quantities -- NOT re-integrated from sampled EXODUS data. See Physics
@@ -86,6 +93,8 @@ Convention #8 below.
 | `neutron_downscatter` | Down-scatter ratio (DSR) diagnostics |
 | `pressure_gradients` | Shock identification, RT instability assessment |
 
+These modules are standalone and not yet wired into ICFAnalyzer -- see Open Items.
+
 ### Optional
 
 `RHWParser` reads `.rhw` input files for drive configuration (direct/indirect,
@@ -98,9 +107,9 @@ burn on/off, drive temperature profile).
 | **Pipeline** | | |
 | `core.py` | ~965 | `HeliosRun` -- EXODUS/netCDF4 reader |
 | `data_builder.py` | ~555 | Bridge: `HeliosRun` -> `ICFRunData` dataclass |
-| `icf_analysis.py` | ~1300 | `ICFAnalyzer` -- drive, stagnation, burn, implosion, IFAR, mass fractions, burn propagation |
+| `icf_analysis.py` | ~1340 | `ICFAnalyzer` -- drive, stagnation, burn, implosion, IFAR, mass fractions, burn propagation, convergence ratios |
 | `icf_plotting.py` | ~1580 | `ICFPlotter` -- full PDF report |
-| `icf_output.py` | ~430 | `ICFOutputGenerator` -- summary text + CSV time histories |
+| `icf_output.py` | ~435 | `ICFOutputGenerator` -- summary text + CSV time histories |
 | **Physics modules** | | |
 | `burn_averaged_metrics.py` | ~560 | Temporal burn-averaging, implosion metrics, published-data comparison |
 | `energetics.py` | -- | Kinetic energy, hydro efficiency, PdV work |
@@ -169,6 +178,8 @@ Keys starting with `_` are treated as comments.
 
 3. **Ablation front** = steepest negative drho/dr outside the hot spot boundary.
    Smoothed with iterative algorithm anchored at stagnation.
+   Stored as zone indices (`ablation_front_indices`) -- use these, NOT the smoothed radius,
+   for mass fraction and imploded mass calculations.
 
 4. **Region boundaries**: `region_interfaces_indices` are NODE indices (not zone indices).
    - Hot-spot boundary: `ri[:, 0]`
@@ -178,9 +189,14 @@ Keys starting with `_` are treated as comments.
 5. **Fusion yield**: Preferred method uses `TimeIntFusionProd_n_1406 x 17.6 MeV x 1.602e-19 MJ/MeV`.
    Fallback: time-integrate `FusionRate_DT_nHe4` (less precise).
 
-6. **Mass fractions**: Stagnated fuel uses zone-boundary definition --
-   fuel zones between hot-spot boundary and ablation front at stagnation.
-   Temperature-based cold mask was too aggressive for igniting targets.
+6. **Mass fractions**: Use zone-index method exclusively (no temperature mask).
+   Temperature mask fails for igniting capsules where alpha heating warms dense shell above 1 keV.
+   - `unablated_fuel_mass` = fuel zones (0..fuel_bnd) inside ablation front / initial_fuel_mass
+   - `unablated_ablatar_mass` = ablator zones (fuel_bnd..) inside ablation front / initial_ablator_mass
+   - `stagnated_fuel_mass` = fuel zones between hs_bnd and ablation front / initial_fuel_mass
+   - `initial_fuel_mass_mg`, `initial_ablator_mass_mg` stored on data and written to summary
+   - Typo `unablated_ablatar_mass` (ablatar not ablator) is intentional -- do not fix without
+     coordinated find-replace across all files.
 
 7. **Burn propagation** (Olson et al. convention): Tracks hot-spot rhoR vs total rhoR over time.
    Ignition identified when hot-spot rhoR fraction exceeds 50%.
@@ -205,12 +221,35 @@ Keys starting with `_` are treated as comments.
     rho > rho_peak / e threshold (NOT Lagrangian region interfaces, which
     include uncompressed vapor). Validated: VI_6 gives IFAR=18.1 vs published 20.
 
+12. **Convergence ratios** -- two distinct quantities, both computed and reported:
+    - `comp_ratio` = CR_stag = R0 / R_hs_at_stagnation (matches published data convention)
+      R0 = initial inner shell radius = zbnd[0, ri[0,0]]
+      R_hs = hot-spot boundary radius at stagnation = zbnd[stag_idx, ri[stag_idx,0]]
+      Validated: Olson_PDD_9 gives 29.6 vs published 29.0 (2.1%)
+    - `cr_inflight` = R0 / R_ablfront_at_peak_velocity (in-flight shell diagnostic)
+      Reported in implosion section of summary; NOT used in published-data comparison.
+    - DO NOT use density ratio for CR -- that was the old incorrect implementation.
+
+13. **Hot-spot radius**: Use region interface `ri[stag_idx, 0]` (node index) to get
+    hot-spot boundary radius from `zone_boundaries[stag_idx, hs_node]`.
+    DO NOT use temperature mask (`T > threshold`) -- alpha heating in igniting capsules
+    warms the dense shell above 1 keV, causing the mask to extend far outside the true
+    hot spot, giving unphysically large radii (e.g. 0.68 cm > R0 for VI_6).
+
+14. **Imploded DT mass**: Use zone-index method in burn_averaged_metrics.py --
+    sum `zone_mass[stag_idx, :min(abl_idx+1, fuel_bnd)]` where `abl_idx` comes from
+    `ablation_front_indices[stag_idx]`. DO NOT use radius-based method -- the smoothed
+    ablation front radius is unreliable at stagnation and gave 1.55 mg vs correct 2.14 mg for VI_6.
+
+15. **Peak velocity index**: Stored as `data.peak_velocity_index` (integer timestep index).
+    Used for adiabat, IFAR, in-flight CR, and ablation front at peak velocity.
+
 ## Test Data
 
 | Case | Regions | Zones | Key Features |
 |------|---------|-------|-------------|
-| **Olson_PDD_9** | 4 | 351 | 3-component pressure (ion + elec + rad), PDD |
-| **VI_6** | 4 | 350 | Vulcan HDD target, 3-component pressure |
+| **Olson_PDD_9** | 4 | 351 | 3-component pressure (ion + elec + rad), PDD, igniting |
+| **VI_6** | 4 | 350 | Vulcan HDD target, 3-component pressure, work in progress |
 
 ### Olson_PDD_9 Region Structure
 - Region 1: DT Vapor (zones 0-150) -- hot spot
@@ -230,54 +269,94 @@ Keys starting with `_` are treated as comments.
 - Bang time: 12.681 ns
 - Hot spot pressure: 106.97 Gbar
 - Hot spot internal energy: 597.76 kJ
-- Core radius: 0.1853 cm
+- Core radius: 0.0068 cm
+- Stagnation CR: 29.6 (R0=0.2008 cm, R_hs=0.0068 cm)
+- In-flight CR: 2.16 (R0=0.2008 cm, Rf=0.0930 cm at peak v)
 - Fusion yield: 20.594 MJ, Target gain: 9.574
 - <Ti>_n: 22.46 keV, <P>_n: 193.40 Gbar
 - <rhoR>_n (fuel): 0.5189 g/cm2
 - Burn-averaged: T=23.75 keV, P=208.4 Gbar, rhoR=0.5515 g/cm2
+- Initial DT mass: 4.718 mg, Initial ablator mass: 0.349 mg
+- Unablated fuel: 0.1262 (12.6%), Unablated ablator: 0.000 (all CH ablated)
+- Stagnated fuel: 0.1219, Imploded DT: ~0.60 mg
 
-### Validated Reference Values (VI_6)
-- Laser energy: 3.383 MJ (absorbed)
-- Stagnation time: 14.630 ns
+### VI_6 Reference Values (work in progress -- laser deposition over-ablating target)
+- Laser energy: 3.383 MJ (absorbed); published design is 4.0 MJ
+- Stagnation time: 14.630 ns (min HS radius = 0.0046 cm)
 - Peak density: 221.84 g/cc (at t = 14.700 ns)
 - Bang time: 14.670 ns
-- Peak implosion velocity: 763.1 km/s
+- Hot spot pressure: 88.20 Gbar
+- Stagnation CR: 41.1 (R0=0.1890 cm, R_hs=0.0046 cm)
+- In-flight CR: 2.49 (R0=0.1890 cm, Rf=0.0759 cm at peak v)
+- Peak implosion velocity: 763.1 km/s (published 410 km/s -- over-ablation)
 - In-flight KE: 311.6 kJ, Hydro efficiency: 9.2%
 - IFAR: 18.1 (density-based, rho > rho_peak/e)
-- Adiabat: 1.13 (cold fuel at peak v_imp)
+- Adiabat: 1.13 (cold fuel at peak v_imp); published 6.0 -- different target variant
 - Fusion yield: 28.811 MJ, Target gain: 8.516
 - Burn-averaged: T=29.9 keV, P=340 Gbar, rhoR=0.88 g/cm2
+- Initial DT mass: 3.709 mg, Initial ablator mass: 2.548 mg
+- Unablated fuel: 0.5771 (57.7%), Unablated ablator: 0.000 (all CD ablated)
+- Imploded DT: 2.14 mg (published 3.00 mg -- energy/ablation difference)
+
+## Simulation Paths
+
+### Mac Studio
+- Olson: `~/Sims/Xcimer/Olson_PDD/Olson_PDD_9/Olson_PDD_9`
+- VI_6:  `~/Sims/Xcimer/Xcimer_Sims/D_Montgomery/VI_6/VI_6`
+
+### MacBook
+- Olson: `~/Sims/Helios_Sims/Xcimer_Sims/Olson_PDD/Olson_PDD_9/Olson_PDD_9`
 
 ## Workflow
 
-1. Edit on MacBook -> push to GitHub
-2. Pull on Mac Studio -> run against simulation data at `~/Sims/Xcimer/`
+1. Edit on MacBook (`python`) -> push to GitHub
+2. Pull on Mac Studio (`python3`) -> run against simulation data
 3. Terminal commands run one line at a time (avoid multi-line paste errors)
 4. Validate against known reference values before moving to next feature
+5. Output goes to `<sim>_summary.txt` -- use `grep` on the file, not stdout
 
-## Quick Test
+## Quick Tests
 
 ```bash
-python3 ~/helios_postprocessor/examples/run_analysis.py ~/Sims/Xcimer/Olson_PDD/Olson_PDD_9/Olson_PDD_9
+# Mac Studio -- Olson (primary validation target)
+python3 ~/helios_postprocessor/examples/run_analysis.py \
+  ~/Sims/Xcimer/Olson_PDD/Olson_PDD_9/Olson_PDD_9
+grep -A 6 "MASS FRACTIONS" ~/Sims/Xcimer/Olson_PDD/Olson_PDD_9/Olson_PDD_9_summary.txt
+
+# Mac Studio -- VI_6
+python3 ~/helios_postprocessor/examples/run_analysis.py \
+  ~/Sims/Xcimer/Xcimer_Sims/D_Montgomery/VI_6/VI_6
 ```
 
 ## Open Items
 
-### Priority 1 -- Mass Fractions Refinement
-- Unablated fuel, ablator, and stagnated fuel fractions compute but may need
-  further validation against published values.
-- Current approach: zone-boundary definition (no temperature mask).
-
-### Priority 2 -- Physics Module Integration
+### Priority 1 -- Physics Module Integration (next session)
 - `energetics`, `neutron_downscatter`, `pressure_gradients` work standalone
-  with `HeliosRun` data but are not yet wired into `ICFAnalyzer` or `ICFPlotter`.
+  but are not yet wired into `ICFAnalyzer` or `ICFPlotter`.
+- Start by inspecting `def` signatures in each module, then wire into
+  `ICFAnalyzer.integrate_physics_modules()` (new method), then add plotter pages
+  and output sections.
+- Cross-check: `energetics.py` KE_inward should match `burn_averaged_metrics.py`
+  hydro efficiency (both give 9.2% for VI_6).
 
-### Priority 3 -- `region_interfaces_indices` Robustness
-- Material boundary identification between hot spot, fuel, and ablator.
+### Priority 2 -- VI_6 Laser Deposition Fix
+- Over-ablation issue: simulated velocity 763 vs published 410 km/s.
+- Low adiabat (1.13 vs published 6.0) and low remaining mass (2.14 vs 3.00 mg)
+  are consistent with over-ablation, not just energy scaling.
+- Published values (peak_velocity=410, adiabat=6.0) may be from a different
+  target variant -- verify which published table VI_6_published.json references.
+
+### Priority 3 -- CR_max Definition for VI_6
+- Stagnation CR = 41.1 vs published 20.1 for VI_6.
+- Published value likely uses shell mid-radius at stagnation, not hot-spot boundary.
+- Olson matches well (29.6 vs 29.0) because hot-spot and shell nearly coincide
+  at stagnation for high-convergence igniting targets.
+- May need a separate `cr_shell_stag` metric using the ablation front radius
+  at stagnation rather than the hot-spot boundary.
+
+### Priority 4 -- `region_interfaces_indices` Robustness
 - Currently relies on EXODUS region data; could add fallback based on
-  density/composition gradients.
-- Note: for adiabat, cold fuel = ri[t,0] to ri[t,1] only.
-  For IFAR, density-based boundaries (not Lagrangian) are required.
+  density/composition gradients for targets without explicit region data.
 
 ## Dependencies
 
