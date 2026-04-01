@@ -181,6 +181,7 @@ class ICFOutputGenerator:
         _a('IMPLOSION')
         _a('-' * width)
         _a(self._metric('Peak implosion velocity',  abs(d.peak_implosion_velocity), 'km/s', fmt='.2f'))
+        _a(self._metric('In-flight CR',              d.cr_inflight,                  '',     fmt='.1f'))
         _a(self._metric('Mass-avg adiabat (ice)',   d.adiabat_mass_averaged_ice,    '',     fmt='.2f'))
         _a('')
 

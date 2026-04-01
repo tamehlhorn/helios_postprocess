@@ -1244,23 +1244,35 @@ class ICFAnalyzer:
             self.data.target_gain = self.data.energy_output / self.data.laser_energy
             logger.info(f"Target gain: {self.data.target_gain:.3f}")
         
-        # Convergence ratio CR = R0 / Rf
+        # Convergence ratios
         # R0 = initial inner radius of shell (hot-spot boundary at t=0)
-        # Rf = ablation front radius at peak implosion velocity
-        ri  = self.data.region_interfaces_indices
+        # CR_stag    = R0 / R_hs_at_stagnation  (matches published data convention)
+        # CR_inflight = R0 / R_ablfront_at_peak_v (in-flight shell convergence)
+        ri   = self.data.region_interfaces_indices
         zbnd = self.data.zone_boundaries
         abl_indices = self.data.ablation_front_indices
-        pv_idx = getattr(self.data, 'peak_velocity_index', None)
-        if (ri is not None and zbnd is not None
-                and abl_indices is not None and pv_idx is not None):
-            hs_node_0 = int(ri[0, 0])          # hot-spot boundary node at t=0
+        pv_idx  = getattr(self.data, 'peak_velocity_index', None)
+        stag_time = getattr(self.data, 'stag_time', 0.0)
+        stag_idx_cr = int(np.argmin(np.abs(self.data.time - stag_time)))                       if stag_time > 0 else None
+        if ri is not None and zbnd is not None:
+            hs_node_0 = int(ri[0, 0])
             R0 = float(zbnd[0, hs_node_0])     # initial inner shell radius
-            abl_zone = int(abl_indices[pv_idx])
-            Rf = float(zbnd[pv_idx, abl_zone + 1])  # ablation front radius at peak v
-            if Rf > 0 and R0 > 0:
-                self.data.comp_ratio = R0 / Rf
-                logger.info(f"Convergence ratio CR = R0/Rf: "
-                            f"{R0:.4f} cm / {Rf:.4f} cm = {self.data.comp_ratio:.2f}")
+            # Stagnation CR
+            if stag_idx_cr is not None:
+                hs_node_stag = int(ri[stag_idx_cr, 0])
+                R_hs_stag = float(zbnd[stag_idx_cr, hs_node_stag])
+                if R_hs_stag > 0 and R0 > 0:
+                    self.data.comp_ratio = R0 / R_hs_stag
+                    logger.info(f"Stagnation CR = R0/R_hs: "
+                                f"{R0:.4f} cm / {R_hs_stag:.4f} cm = {self.data.comp_ratio:.2f}")
+            # In-flight CR
+            if abl_indices is not None and pv_idx is not None:
+                abl_zone = int(abl_indices[pv_idx])
+                Rf = float(zbnd[pv_idx, abl_zone + 1])
+                if Rf > 0 and R0 > 0:
+                    self.data.cr_inflight = R0 / Rf
+                    logger.info(f"In-flight CR = R0/Rf: "
+                                f"{R0:.4f} cm / {Rf:.4f} cm = {self.data.cr_inflight:.2f}")
 
         # ---- Mass fractions (require region interfaces + ablation front) ----
         ri = self.data.region_interfaces_indices
