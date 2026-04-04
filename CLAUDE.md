@@ -6,8 +6,8 @@
 - **Version**: 3.0.0 (March 2026)
 - **Dev machine**: MacBook (`~/Codes/helios_postprocessor`) -- editing, pushing; use `python` not `python3`
 - **Run machine**: Mac Studio (`tommehlhorn`, `~/helios_postprocessor`) -- use `python3`
-- **MacBook python**: `/Users/mehlhorn/anaconda3/bin/python` (NOT `/usr/local/bin/python3`)
-- **Package install on MacBook**: `pip install -e . --user` (requires `--user` due to Anaconda permissions)
+- **MacBook python**: Anaconda (`python` command); Mac Studio uses `python3`
+- **Package install**: `pip install -e . --user` (MacBook); `pip install -e .` (Mac Studio)
 
 ## Architecture
 
@@ -199,7 +199,7 @@ Keys starting with `_` are treated as comments.
      coordinated find-replace across all files.
 
 7. **Burn propagation** (Olson et al. convention): Tracks hot-spot rhoR vs total rhoR over time.
-   Ignition identified when hot-spot rhoR fraction exceeds 50%.
+   Ignition identified when hot-spot rhoR (absolute) >= 0.3 g/cm2 (Olson et al. criterion). The T_ion > 4.5 keV mask is used only for the burn propagation plot. Scalars ignition_time, ignition_hs_pressure, ignition_hs_radius all use the 0.3 g/cm2 threshold.
 
 8. **EXODUS sampling principle**: EXODUS files contain only a fraction of the
    actual simulation timesteps. Therefore Helios's own time-integrated quantities
@@ -330,35 +330,123 @@ python3 ~/helios_postprocessor/examples/run_analysis.py \
 
 ## Open Items
 
-### Priority 1 -- Physics Module Integration (next session)
+### Priority 1 -- PDD Laser Calibration (active, Helios running)
+- **Goal**: match LILAC peak implosion velocity ~410 km/s for Olson PDD target at 1.4× drive multiplier
+- **Reference pulse shape**: Olson figure 4 -- foot ~25 TW (0-6 ns), ramp 6-9 ns, peak ~235 TW (9-12.5 ns)
+- **1.4× multiplier** applies to peak only, not foot -- gives peak ~329 TW
+- **Flux limiter**: f = 0.06 confirmed set; over-ablation is geometric, not thermal conduction issue
+- **Calibration scan results**:
+
+| Run | Spot (cm) | Cone (°) | Focus (cm) | Peak power (TW) | Velocity (km/s) | CR | Yield (MJ) |
+|-----|-----------|----------|------------|-----------------|-----------------|-----|------------|
+| PDD_9  | 0.000 | 1  | 0.00 | 225 (wrong pulse) | — | 29.6 | 20.6 |
+| PDD_10 | 0.020 | 23 | 0.20 | 329 | 640.5 | 43.6 | 111.5 |
+| PDD_14a| 0.023 | 23 | 0.20 | 329 | 617.7 | 39.4 | 100.7 |
+| PDD_16a| 0.080 | 23 | 0.20 | 329 | 606.8 | 37.9 | 95.6  |
+| PDD_17 | 0.120 | 35 | 0.20 | 329 | running | — | — |
+
+- **Next run PDD_17**: spot=0.12 cm, cone=35°, focus=0.20 cm, same pulse as PDD_16a
+- **Key insight**: PDD_16a pulse shape IS correct (1.4× on Olson fig 4 baseline)
+  PDD_9 uses a different lower-energy pulse (base peak 161 TW) -- not the Olson reference
+
+### Priority 2 -- Published JSON files (created this session)
+- `Olson_PDD_9_published.json` -- CR=29.0, rhoR=1.10, yield=87.4 MJ, gain=40.6
+- `Olson_PDD_10_published.json` -- same + P_hs_ignition=75 Gbar, hs_radius_ignition=120 um
+- `Olson_PDD_12_published.json` -- same structure as PDD_10
+- All based on LILAC 3.1e19 neutron yield at 1.4× / ~2 MJ drive
+- **Copy to Mac Studio sim directories before running comparison**
+
+### Priority 3 -- Physics Module Integration
 - `energetics`, `neutron_downscatter`, `pressure_gradients` work standalone
   but are not yet wired into `ICFAnalyzer` or `ICFPlotter`.
-- Start by inspecting `def` signatures in each module, then wire into
-  `ICFAnalyzer.integrate_physics_modules()` (new method), then add plotter pages
-  and output sections.
+- Start by inspecting `def` signatures in each module, then add
+  `ICFAnalyzer.integrate_physics_modules()`, plotter pages, and output sections.
 - Cross-check: `energetics.py` KE_inward should match `burn_averaged_metrics.py`
   hydro efficiency (both give 9.2% for VI_6).
 
-### Priority 2 -- VI_6 Laser Deposition Fix
-- Over-ablation issue: simulated velocity 763 vs published 410 km/s.
-- Low adiabat (1.13 vs published 6.0) and low remaining mass (2.14 vs 3.00 mg)
-  are consistent with over-ablation, not just energy scaling.
-- Published values (peak_velocity=410, adiabat=6.0) may be from a different
-  target variant -- verify which published table VI_6_published.json references.
+### Priority 4 -- data_builder.py cleanup
+- Duplicate laser wiring block exists (lines ~286-305) from multiple patch sessions.
+  Both blocks assign the same values so it is harmless, but should be cleaned up.
+- Pattern: `data.laser_wavelength_um = rhw_config.laser_wavelength_um` appears twice.
 
-### Priority 3 -- CR_max Definition for VI_6
+### Priority 5 -- CR_max definition for VI_6 (carried from previous session)
 - Stagnation CR = 41.1 vs published 20.1 for VI_6.
-- Published value likely uses shell mid-radius at stagnation, not hot-spot boundary.
-- Olson matches well (29.6 vs 29.0) because hot-spot and shell nearly coincide
-  at stagnation for high-convergence igniting targets.
-- May need a separate `cr_shell_stag` metric using the ablation front radius
-  at stagnation rather than the hot-spot boundary.
-
-### Priority 4 -- `region_interfaces_indices` Robustness
-- Currently relies on EXODUS region data; could add fallback based on
-  density/composition gradients for targets without explicit region data.
+- Published value likely uses shell mid-radius, not hot-spot boundary.
+- May need `cr_shell_stag` metric using ablation front radius at stagnation.
 
 ## Dependencies
 
 **Required**: numpy, scipy, matplotlib, netCDF4
 **Optional**: scikit-learn (RANSAC shock fitting in icf_plotting.py -- guarded with `_HAS_SKLEARN`)
+## Laser Configuration Parsing (added April 2026)
+
+`RHWParser._parse_laser_geometry()` extracts beam-1 ray-trace parameters and pulse shape
+from the `[Laser Source Data]` block. All values stored on `RHWConfiguration` and
+passed through to `ICFRunData` via `build_run_data()`.
+
+### Fields added to RHWConfiguration and ICFRunData:
+| Field | Unit | Description |
+|-------|------|-------------|
+| `laser_wavelength_um` | um | Laser wavelength |
+| `laser_spot_size_cm` | cm | Focal spot radius |
+| `laser_half_cone_angle_deg` | deg | Half cone angle |
+| `laser_focus_position_cm` | cm | Focus position from plasma origin |
+| `laser_power_multiplier` | — | Power table multiplier |
+| `laser_spatial_profile` | str | "Gaussian" or "Uniform" |
+| `laser_foot_power_TW` | TW | Mean foot power (< 50% of peak) |
+| `laser_peak_power_TW` | TW | Peak power |
+| `laser_foot_start_ns` | ns | Foot start time |
+| `laser_foot_end_ns` | ns | Foot end time |
+| `laser_peak_start_ns` | ns | Peak start time |
+| `laser_peak_end_ns` | ns | Peak end time |
+| `laser_pulse_duration_ns` | ns | Total pulse duration (last nonzero power) |
+
+### Summary output (LASER CONFIGURATION section):
+```
+LASER CONFIGURATION (beam 1)
+  Wavelength                           0.350 um
+  Focus position                       0.2000 cm
+  Half-cone angle                      23.00 deg
+  Spot radius                          0.0800 cm  (Gaussian)
+  Power multiplier                     1.0000
+  Pulse shape (beam 1)
+    Foot power                         23.0 TW  (0.00 – 5.00 ns)
+    Peak power                        329.0 TW  (9.00 – 12.70 ns)
+    Pulse duration                     12.90 ns
+```
+
+---
+
+## New section: Comparison Framework (updated April 2026)
+
+### Keys now supported in `_published.json` (compare_with_published):
+All original keys plus:
+- `P_hs_ignition_Gbar` -- hot-spot pressure at ignition (rhoR_hs = 0.3 g/cm²)
+- `hs_radius_ignition_um` -- hot-spot radius at ignition (micrometers)
+
+These are read from `data.ignition_hs_pressure` (Gbar) and
+`data.ignition_hs_radius` (cm, x1e4 for um) set by `_compute_burn_propagation()`.
+
+### Ignition criterion (Physics Convention #7 -- corrected):
+Ignition identified when hot-spot rhoR (absolute) >= 0.3 g/cm2 (Olson et al.).
+The T_ion > 4.5 keV mask is used only for the burn propagation PLOT.
+Scalars `ignition_time`, `ignition_hs_pressure`, `ignition_hs_radius` all use
+the 0.3 g/cm2 absolute threshold. This is confirmed correct in the code.
+
+---
+
+## Updated Simulation Paths
+
+### Mac Studio
+- Olson PDD: `~/Sims/Xcimer/Olson_PDD/Olson_PDD_<N>/Olson_PDD_<N>`
+- VI_6:  `~/Sims/Xcimer/Xcimer_Sims/D_Montgomery/VI_6/VI_6`
+
+### MacBook
+- Olson PDD_9: `~/Sims/Helios_Sims/Xcimer_Sims/Olson_PDD/Olson_PDD_9/Olson_PDD_9`
+
+### Quick grep after run:
+```bash
+grep -A 8  "LASER CONFIGURATION" <sim>_summary.txt
+grep -A 25 "COMPARISON WITH PUBLISHED" <sim>_summary.txt
+grep -A 6  "IMPLOSION" <sim>_summary.txt
+```
