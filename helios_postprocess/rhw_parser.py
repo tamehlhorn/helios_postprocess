@@ -72,6 +72,7 @@ class RHWParser:
         # Extract configuration flags
         is_direct_drive = self._parse_direct_drive(lines)
         burn_enabled = self._parse_burn_status(lines)
+        laser_params = self._parse_laser_geometry(lines)
         
         # Extract drive temperature data
         drive_time, drive_temp = self._parse_drive_temperature(lines)
@@ -81,7 +82,13 @@ class RHWParser:
             burn_enabled=burn_enabled,
             drive_time=drive_time,
             drive_temperature=drive_temp,
-            source_file=str(self.file_path)
+            source_file=str(self.file_path),
+            laser_wavelength_um=laser_params.get("wavelength", 0.35),
+            laser_spot_size_cm=laser_params.get("spot_size", 0.0),
+            laser_half_cone_angle_deg=laser_params.get("half_cone_angle", 1.0),
+            laser_focus_position_cm=laser_params.get("focus_position", 0.0),
+            laser_power_multiplier=laser_params.get("power_multiplier", 1.0),
+            laser_spatial_profile=laser_params.get("spatial_profile", "Uniform")
         )
         
         logger.info(f"Configuration: {config.drive_type}, "
