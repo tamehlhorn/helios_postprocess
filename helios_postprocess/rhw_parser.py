@@ -28,14 +28,7 @@ class RHWConfiguration:
     laser_half_cone_angle_deg: float = 1.0
     laser_focus_position_cm: float = 0.0
     laser_power_multiplier: float = 1.0
-    laser_spatial_profile: str = "Uniform" 
-    # Laser ray-trace geometry (beam 1)
-    laser_wavelength_um: float = 0.35
-    laser_spot_size_cm: float = 0.0
-    laser_half_cone_angle_deg: float = 1.0
-    laser_focus_position_cm: float = 0.0
-    laser_power_multiplier: float = 1.0
-    laser_spatial_profile: str = "Uniform" 
+    laser_spatial_profile: str = "Uniform"  
     drive_time: Optional[np.ndarray] = None
     drive_temperature: Optional[np.ndarray] = None
     source_file: Optional[str] = None
@@ -98,6 +91,47 @@ class RHWParser:
                        f"{drive_time[0]:.3e} to {drive_time[-1]:.3e} s")
         
         return config
+    
+    def _parse_laser_geometry(self, lines: list) -> dict:
+        """Parse beam-1 ray-trace parameters from [Laser Source Data] block."""
+        import re
+        params = {}
+        in_laser = False
+        beam1_found = False
+        kv = re.compile(r'^\s*(.+?)\s*=\s*([^\s#]+)')
+        for line in lines:
+            if '[Laser Source Data]' in line:
+                in_laser = True; continue
+            if '[End Laser Source Data]' in line:
+                break
+            if not in_laser:
+                continue
+            m = kv.match(line)
+            if m and 'Parameters for beam' in m.group(1):
+                beam1_found = (m.group(2).strip() == '1'); continue
+            if beam1_found and m and 'Parameters for beam' in m.group(1):
+                break
+            if not beam1_found or not m:
+                continue
+            key, val = m.group(1).strip(), m.group(2).strip()
+            try:
+                fval = float(val)
+            except ValueError:
+                continue
+            lkey = key.lower()
+            if 'wavelength' in lkey:
+                params['wavelength'] = fval
+            elif 'spot size' in lkey:
+                params['spot_size'] = fval
+            elif 'half cone' in lkey:
+                params['half_cone_angle'] = fval
+            elif 'focus position' in lkey:
+                params['focus_position'] = fval
+            elif 'power table multiplier' in lkey:
+                params['power_multiplier'] = fval
+            elif 'spatial profile model' in lkey:
+                params['spatial_profile'] = 'Gaussian' if fval == 1.0 else 'Uniform'
+        return params
     
     def _parse_direct_drive(self, lines: list) -> bool:
         """
