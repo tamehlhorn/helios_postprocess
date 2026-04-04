@@ -22,6 +22,13 @@ class RHWConfiguration:
     
     is_direct_drive: bool
     burn_enabled: bool
+    # Laser ray-trace geometry (beam 1)
+    laser_wavelength_um: float = 0.35
+    laser_spot_size_cm: float = 0.0
+    laser_half_cone_angle_deg: float = 1.0
+    laser_focus_position_cm: float = 0.0
+    laser_power_multiplier: float = 1.0
+    laser_spatial_profile: str = "Uniform" 
     drive_time: Optional[np.ndarray] = None
     drive_temperature: Optional[np.ndarray] = None
     source_file: Optional[str] = None
