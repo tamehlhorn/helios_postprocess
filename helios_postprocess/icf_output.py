@@ -168,6 +168,18 @@ class ICFOutputGenerator:
         _a(self._metric('Max DT temperature',  d.max_dt_temp,      'keV', fmt='.2f'))
         _a('')
 
+        # ---- Laser configuration ----
+        if d.laser_wavelength_um > 0:
+            _a('LASER CONFIGURATION (beam 1)')
+            _a('-' * width)
+            _a(self._metric('Wavelength',       d.laser_wavelength_um,       'um',  fmt='.3f'))
+            _a(self._metric('Focus position',   d.laser_focus_position_cm,   'cm',  fmt='.4f'))
+            _a(self._metric('Half-cone angle',  d.laser_half_cone_angle_deg, 'deg', fmt='.2f'))
+            _a(self._metric('Spot radius',      d.laser_spot_size_cm,        'cm',  fmt='.4f')
+               + f"  ({d.laser_spatial_profile})")
+            _a(self._metric('Power multiplier', d.laser_power_multiplier,    '',    fmt='.4f'))
+            _a('')
+
         # ---- Mass fractions ----
         _a('MASS FRACTIONS (at stagnation)')
         _a('-' * width)
