@@ -289,6 +289,13 @@ def build_run_data(
         data.laser_focus_position_cm   = rhw_config.laser_focus_position_cm
         data.laser_power_multiplier    = rhw_config.laser_power_multiplier
         data.laser_spatial_profile     = rhw_config.laser_spatial_profile
+    if rhw_config is not None:
+        data.laser_wavelength_um       = rhw_config.laser_wavelength_um
+        data.laser_spot_size_cm        = rhw_config.laser_spot_size_cm
+        data.laser_half_cone_angle_deg = rhw_config.laser_half_cone_angle_deg
+        data.laser_focus_position_cm   = rhw_config.laser_focus_position_cm
+        data.laser_power_multiplier    = rhw_config.laser_power_multiplier
+        data.laser_spatial_profile     = rhw_config.laser_spatial_profile
     data.drive_temperature = drive_temperature
     data.drive_time = drive_time
 
