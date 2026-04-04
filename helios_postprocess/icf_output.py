@@ -177,6 +177,15 @@ class ICFOutputGenerator:
             _a(self._metric('Half-cone angle',  d.laser_half_cone_angle_deg, 'deg', fmt='.2f'))
             _a(f"  {'Spot radius':<30} {d.laser_spot_size_cm:>15.4f} cm  ({d.laser_spatial_profile})")
             _a(self._metric('Power multiplier', d.laser_power_multiplier,    '',    fmt='.4f'))
+            # Pulse shape
+            if d.laser_peak_power_TW > 0:
+                _a(f"  {'Pulse shape (beam 1)':<30}")
+                if d.laser_foot_power_TW > 0:
+                    _a(f"    {'Foot power':<28} {d.laser_foot_power_TW:>10.1f} TW"
+                       f"  ({d.laser_foot_start_ns:.2f} – {d.laser_foot_end_ns:.2f} ns)")
+                _a(f"    {'Peak power':<28} {d.laser_peak_power_TW:>10.1f} TW"
+                   f"  ({d.laser_peak_start_ns:.2f} – {d.laser_peak_end_ns:.2f} ns)")
+                _a(f"    {'Pulse duration':<28} {d.laser_pulse_duration_ns:>10.2f} ns")
             _a('')
 
         # ---- Mass fractions ----

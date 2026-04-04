@@ -289,6 +289,13 @@ def build_run_data(
         data.laser_focus_position_cm   = rhw_config.laser_focus_position_cm
         data.laser_power_multiplier    = rhw_config.laser_power_multiplier
         data.laser_spatial_profile     = rhw_config.laser_spatial_profile
+        data.laser_foot_power_TW       = rhw_config.laser_foot_power_TW
+        data.laser_peak_power_TW       = rhw_config.laser_peak_power_TW
+        data.laser_foot_start_ns       = rhw_config.laser_foot_start_ns
+        data.laser_foot_end_ns         = rhw_config.laser_foot_end_ns
+        data.laser_peak_start_ns       = rhw_config.laser_peak_start_ns
+        data.laser_peak_end_ns         = rhw_config.laser_peak_end_ns
+        data.laser_pulse_duration_ns   = rhw_config.laser_pulse_duration_ns
     if rhw_config is not None:
         data.laser_wavelength_um       = rhw_config.laser_wavelength_um
         data.laser_spot_size_cm        = rhw_config.laser_spot_size_cm

@@ -88,7 +88,14 @@ class RHWParser:
             laser_half_cone_angle_deg=laser_params.get("half_cone_angle", 1.0),
             laser_focus_position_cm=laser_params.get("focus_position", 0.0),
             laser_power_multiplier=laser_params.get("power_multiplier", 1.0),
-            laser_spatial_profile=laser_params.get("spatial_profile", "Uniform")
+            laser_spatial_profile=laser_params.get("spatial_profile", "Uniform"),
+            laser_foot_power_TW=laser_params.get("foot_power_TW", 0.0),
+            laser_peak_power_TW=laser_params.get("peak_power_TW", 0.0),
+            laser_foot_start_ns=laser_params.get("foot_start_ns", 0.0),
+            laser_foot_end_ns=laser_params.get("foot_end_ns", 0.0),
+            laser_peak_start_ns=laser_params.get("peak_start_ns", 0.0),
+            laser_peak_end_ns=laser_params.get("peak_end_ns", 0.0),
+            laser_pulse_duration_ns=laser_params.get("pulse_duration_ns", 0.0)
         )
         
         logger.info(f"Configuration: {config.drive_type}, "
@@ -138,6 +145,82 @@ class RHWParser:
                 params['power_multiplier'] = fval
             elif 'spatial profile model' in lkey:
                 params['spatial_profile'] = 'Gaussian' if fval == 1.0 else 'Uniform'
+
+        # ── Parse beam-1 power table ────────────────────────────────────────
+        # Table format: times on one line, powers on next, both space-separated
+        # Times are in seconds; convert to ns. Powers are in TW.
+        in_laser = False
+        beam1_found = False
+        in_table = False
+        n_rows = 0
+        data_lines = []
+
+        for line in lines:
+            if '[Laser Source Data]' in line:
+                in_laser = True; continue
+            if '[End Laser Source Data]' in line:
+                break
+            if not in_laser:
+                continue
+            m2 = kv.match(line)
+            if m2 and 'Parameters for beam' in m2.group(1):
+                beam1_found = (m2.group(2).strip() == '1'); continue
+            if beam1_found and m2 and 'Parameters for beam' in m2.group(1):
+                break
+            if not beam1_found:
+                continue
+            # Detect table start
+            if '[table format' in line:
+                in_table = True; data_lines = []; n_rows = 0; continue
+            if not in_table:
+                continue
+            stripped = line.strip()
+            if stripped.startswith('#') and 'table rows' in stripped:
+                try: n_rows = int(stripped.split('=')[1].strip())
+                except: pass
+                continue
+            # Skip header lines (start with letters or #)
+            if stripped and not stripped[0].replace('-','').replace('.','').replace('e','').replace('E','').replace('+','').replace(' ','').isdigit():
+                if not stripped.replace(' ','').replace('	','').replace('e','').replace('E','').replace('+','').replace('-','').replace('.','').isnumeric():
+                    continue
+            # Collect numeric data lines
+            try:
+                vals = [float(v) for v in stripped.split()]
+                if len(vals) == n_rows and n_rows > 0:
+                    data_lines.append(vals)
+                    if len(data_lines) == 2:
+                        break
+            except ValueError:
+                continue
+
+        if len(data_lines) == 2 and n_rows > 0:
+            import numpy as np
+            times_ns = np.array(data_lines[0]) * 1e9   # s -> ns
+            powers_TW = np.array(data_lines[1])         # already TW
+
+            # Remove zero-power tail
+            nonzero = powers_TW > 0
+            if nonzero.any():
+                params['pulse_duration_ns'] = float(times_ns[nonzero][-1])
+
+            # Identify foot: first non-zero power level (below 50% of peak)
+            peak_power = float(powers_TW.max())
+            params['peak_power_TW'] = peak_power
+            foot_mask = (powers_TW > 0) & (powers_TW < 0.5 * peak_power)
+            if foot_mask.any():
+                foot_power = float(powers_TW[foot_mask].mean())
+                params['foot_power_TW'] = foot_power
+                foot_times = times_ns[foot_mask]
+                params['foot_start_ns'] = float(foot_times[0])
+                params['foot_end_ns']   = float(foot_times[-1])
+
+            # Peak: power >= 50% of max
+            peak_mask = powers_TW >= 0.5 * peak_power
+            if peak_mask.any():
+                peak_times = times_ns[peak_mask]
+                params['peak_start_ns'] = float(peak_times[0])
+                params['peak_end_ns']   = float(peak_times[-1])
+
         return params
     
     def _parse_direct_drive(self, lines: list) -> bool:
