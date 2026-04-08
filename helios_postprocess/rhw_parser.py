@@ -30,6 +30,7 @@ class RHWConfiguration:
     laser_power_multiplier: float = 1.0
     laser_spatial_profile: str = "Uniform"
     laser_peak_power_TW: float = 0.0
+    laser_foot_power_TW: float = 0.0
     laser_foot_start_ns: float = 0.0
     laser_foot_end_ns: float = 0.0
     laser_peak_start_ns: float = 0.0
