@@ -240,17 +240,31 @@ class ICFAnalyzer:
         # Track peak implosion velocity (only before bang time)
         if self.data.velocity is not None:
             if self.data.bang_time > 0:
-                pre_bang = self.data.time <= self.data.bang_time
+                pre_bang = self.data.time < self.data.bang_time   # strict < avoids stagnation spike
             else:
                 pre_bang = np.ones(len(self.data.time), dtype=bool)
-            min_velocities = np.min(self.data.velocity[pre_bang], axis=1)
             pre_bang_indices = np.where(pre_bang)[0]
+
+            # Restrict to shell zones (outside hot-spot boundary) to avoid the
+            # large inward velocity spike of converging vapor at ignition.
+            # region_interfaces_indices[:, 0] is the hot-spot boundary NODE index;
+            # zones outside the hot spot start at that node index.
+            ri = getattr(self.data, 'region_interfaces_indices', None)
+            if ri is not None:
+                min_velocities = np.array([
+                    np.min(self.data.velocity[ti, ri[ti, 0]:])
+                    for ti in pre_bang_indices
+                ])
+            else:
+                # Fallback: all zones (original behaviour)
+                min_velocities = np.min(self.data.velocity[pre_bang], axis=1)
+
             peak_idx_in_prebang = np.argmin(min_velocities)
             self.data.peak_velocity_index = int(pre_bang_indices[peak_idx_in_prebang])
-            self.data.peak_implosion_velocity = np.min(min_velocities) * 1e-5  # cm/s → km/s
+            self.data.peak_implosion_velocity = float(min_velocities[peak_idx_in_prebang]) * 1e-5
             logger.info(f"Peak implosion velocity (pre-bang): "
                         f"{abs(self.data.peak_implosion_velocity):.2f} km/s")
-        
+            
         # Detect and track shock fronts
         self._track_shock_fronts()
         
@@ -744,61 +758,55 @@ class ICFAnalyzer:
             temperatures = self.data.ion_temperature[stag_idx]
             hot_spot_mask = temperatures > temp_threshold
             
-            boundaries = self.data.zone_boundaries[stag_idx]
-            radii = (boundaries[:-1] + boundaries[1:]) / 2
-
-            # Hot spot radius — prefer region interface (robust for igniting
-            # capsules where alpha heating warms the dense shell above 1 keV,
-            # causing the temperature mask to extend far outside the hot spot).
-            ri = self.data.region_interfaces_indices
-            if ri is not None and ri.shape[1] >= 1:
-                hs_node = int(ri[stag_idx, 0])
-                self.data.core_radius = float(boundaries[hs_node])
-                self.data.stagnation_hot_spot_radius = self.data.core_radius
-            elif np.any(hot_spot_mask):
-                # Fallback: temperature mask (unreliable for igniting capsules)
+            if np.any(hot_spot_mask):
+                boundaries = self.data.zone_boundaries[stag_idx]
+                radii = (boundaries[:-1] + boundaries[1:]) / 2
+                
+                # Hot spot radius (outermost hot zone)
                 hot_radii = radii[hot_spot_mask]
                 self.data.stagnation_hot_spot_radius = np.max(hot_radii)
+                
+                # Core radius = outer boundary of the outermost hot-spot zone
                 hot_zone_indices = np.where(hot_spot_mask)[0]
                 self.data.core_radius = boundaries[hot_zone_indices[-1] + 1]
-            
-            # Hot spot pressure (mass-averaged)
-            # CLAUDE.md: report pressure in Gbar.  1 Gbar = 1e8 J/cm³
-            pressure_Gbar = (self.data.ion_pressure[stag_idx] + 
-                       self.data.rad_pressure[stag_idx]) * 1e-8  # J/cm³ → Gbar
-            mass = self.data.zone_mass[stag_idx]
-            
-            self.data.hot_spot_pressure = np.average(
-                pressure_Gbar[hot_spot_mask],
-                weights=mass[hot_spot_mask]
-            )
-            
-            # Hot spot areal density
-            density = self.data.mass_density[stag_idx]
-            dr = boundaries[1:] - boundaries[:-1]
-            self.data.hot_spot_areal_density = np.sum(
-                density[hot_spot_mask] * dr[hot_spot_mask]
-            )
-            
-            # Hot spot internal energy  (ion + electron)
-            # specific_internal_energy × mass, summed over hot-spot zones,
-            # then converted J → kJ.
-            hs_energy_J = 0.0
-            if self.data.ion_pressure is not None:
-                # E_int = P / (γ-1) × Volume  for ideal gas
-                # Or directly: e_specific × mass  if we have SIE.
-                # Use  E = (3/2) n k T × V  ≈ (3/2) P V  for each species
-                vol = (4.0 / 3.0) * np.pi * (boundaries[1:]**3 - boundaries[:-1]**3)
-                p_ion  = self.data.ion_pressure[stag_idx]
-                p_elec = self.data.rad_pressure[stag_idx]  # includes elec + rad
-                hs_energy_J = np.sum((1.5 * (p_ion[hot_spot_mask] + p_elec[hot_spot_mask]))
-                                     * vol[hot_spot_mask])
-            self.data.hot_spot_internal_energy = hs_energy_J * 1e-3  # J → kJ
-            
-            logger.info(f"Core radius: {self.data.core_radius:.4f} cm")
-            logger.info(f"Hot spot radius: {self.data.stagnation_hot_spot_radius:.4f} cm")
-            logger.info(f"Hot spot pressure: {self.data.hot_spot_pressure:.2f} Gbar")
-            logger.info(f"Hot spot internal energy: {self.data.hot_spot_internal_energy:.2f} kJ")
+                
+                # Hot spot pressure (mass-averaged)
+                # CLAUDE.md: report pressure in Gbar.  1 Gbar = 1e8 J/cm³
+                pressure_Gbar = (self.data.ion_pressure[stag_idx] + 
+                           self.data.rad_pressure[stag_idx]) * 1e-8  # J/cm³ → Gbar
+                mass = self.data.zone_mass[stag_idx]
+                
+                self.data.hot_spot_pressure = np.average(
+                    pressure_Gbar[hot_spot_mask],
+                    weights=mass[hot_spot_mask]
+                )
+                
+                # Hot spot areal density
+                density = self.data.mass_density[stag_idx]
+                dr = boundaries[1:] - boundaries[:-1]
+                self.data.hot_spot_areal_density = np.sum(
+                    density[hot_spot_mask] * dr[hot_spot_mask]
+                )
+                
+                # Hot spot internal energy  (ion + electron)
+                # specific_internal_energy × mass, summed over hot-spot zones,
+                # then converted J → kJ.
+                hs_energy_J = 0.0
+                if self.data.ion_pressure is not None:
+                    # E_int = P / (γ-1) × Volume  for ideal gas
+                    # Or directly: e_specific × mass  if we have SIE.
+                    # Use  E = (3/2) n k T × V  ≈ (3/2) P V  for each species
+                    vol = (4.0 / 3.0) * np.pi * (boundaries[1:]**3 - boundaries[:-1]**3)
+                    p_ion  = self.data.ion_pressure[stag_idx]
+                    p_elec = self.data.rad_pressure[stag_idx]  # includes elec + rad
+                    hs_energy_J = np.sum((1.5 * (p_ion[hot_spot_mask] + p_elec[hot_spot_mask]))
+                                         * vol[hot_spot_mask])
+                self.data.hot_spot_internal_energy = hs_energy_J * 1e-3  # J → kJ
+                
+                logger.info(f"Core radius: {self.data.core_radius:.4f} cm")
+                logger.info(f"Hot spot radius: {self.data.stagnation_hot_spot_radius:.4f} cm")
+                logger.info(f"Hot spot pressure: {self.data.hot_spot_pressure:.2f} Gbar")
+                logger.info(f"Hot spot internal energy: {self.data.hot_spot_internal_energy:.2f} kJ")
                 
         except Exception as e:
             logger.warning(f"Could not compute hot spot properties: {e}")
@@ -1250,35 +1258,12 @@ class ICFAnalyzer:
             self.data.target_gain = self.data.energy_output / self.data.laser_energy
             logger.info(f"Target gain: {self.data.target_gain:.3f}")
         
-        # Convergence ratios
-        # R0 = initial inner radius of shell (hot-spot boundary at t=0)
-        # CR_stag    = R0 / R_hs_at_stagnation  (matches published data convention)
-        # CR_inflight = R0 / R_ablfront_at_peak_v (in-flight shell convergence)
-        ri   = self.data.region_interfaces_indices
-        zbnd = self.data.zone_boundaries
-        abl_indices = self.data.ablation_front_indices
-        pv_idx  = getattr(self.data, 'peak_velocity_index', None)
-        stag_time = getattr(self.data, 'stag_time', 0.0)
-        stag_idx_cr = int(np.argmin(np.abs(self.data.time - stag_time)))                       if stag_time > 0 else None
-        if ri is not None and zbnd is not None:
-            hs_node_0 = int(ri[0, 0])
-            R0 = float(zbnd[0, hs_node_0])     # initial inner shell radius
-            # Stagnation CR
-            if stag_idx_cr is not None:
-                hs_node_stag = int(ri[stag_idx_cr, 0])
-                R_hs_stag = float(zbnd[stag_idx_cr, hs_node_stag])
-                if R_hs_stag > 0 and R0 > 0:
-                    self.data.comp_ratio = R0 / R_hs_stag
-                    logger.info(f"Stagnation CR = R0/R_hs: "
-                                f"{R0:.4f} cm / {R_hs_stag:.4f} cm = {self.data.comp_ratio:.2f}")
-            # In-flight CR
-            if abl_indices is not None and pv_idx is not None:
-                abl_zone = int(abl_indices[pv_idx])
-                Rf = float(zbnd[pv_idx, abl_zone + 1])
-                if Rf > 0 and R0 > 0:
-                    self.data.cr_inflight = R0 / Rf
-                    logger.info(f"In-flight CR = R0/Rf: "
-                                f"{R0:.4f} cm / {Rf:.4f} cm = {self.data.cr_inflight:.2f}")
+        # Compression ratio
+        if self.data.mass_density is not None and self.data.max_density > 0:
+            initial_density = np.mean(self.data.mass_density[0])
+            if initial_density > 0:
+                self.data.comp_ratio = self.data.max_density / initial_density
+                logger.info(f"Compression ratio: {self.data.comp_ratio:.2f}")
 
         # ---- Mass fractions (require region interfaces + ablation front) ----
         ri = self.data.region_interfaces_indices
@@ -1296,7 +1281,7 @@ class ICFAnalyzer:
             # Initial masses
             initial_fuel_mass    = np.sum(self.data.zone_mass[0, :fuel_bnd])
             initial_ablator_mass = np.sum(self.data.zone_mass[0, fuel_bnd:])
-            self.data.initial_fuel_mass_mg    = float(initial_fuel_mass) * 1e3
+            self.data.initial_fuel_mass_mg    = float(initial_fuel_mass) * 1e3   # g -> mg
             self.data.initial_ablator_mass_mg = float(initial_ablator_mass) * 1e3
 
             # ---- Determine "inside the shell" mask at stagnation ----
