@@ -100,6 +100,7 @@ class ICFRunData:
         # Compression / density
         self.max_density: float = 0.0            # g/cm³
         self.comp_ratio: float = 0.0
+        self.cr_inflight: float = 0.0        # R0 / R_ablfront at peak velocity
         self.core_radius: float = 0.0            # cm
 
         # Hot spot (at stagnation)

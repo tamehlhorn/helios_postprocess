@@ -253,7 +253,7 @@ class ICFAnalyzer:
             if ri is not None:
                 min_velocities = np.array([
                      np.min(self.data.velocity[ti, int(ri[ti, 0]):])
-                    for ti in pre_bang_indices
+                for ti in pre_bang_indices
                 ])
             else:
                 # Fallback: all zones (original behaviour)
@@ -1264,6 +1264,17 @@ class ICFAnalyzer:
             if initial_density > 0:
                 self.data.comp_ratio = self.data.max_density / initial_density
                 logger.info(f"Compression ratio: {self.data.comp_ratio:.2f}")
+                # In-flight CR = R0 / R_ablfront at peak velocity
+                pv_idx = getattr(self.data, 'peak_velocity_index', None)
+                if (pv_idx is not None
+                        and self.data.ablation_front_radius is not None
+                        and self.data.ablation_front_radius[pv_idx] > 0
+                       and self.data.region_interfaces_indices is not None):
+                    R0 = self.data.zone_boundaries[0, int(self.data.region_interfaces_indices[0, 0])]
+                     Rf = self.data.ablation_front_radius[pv_idx]
+                     self.data.cr_inflight = R0 / Rf
+                     t_pv = self.data.time_ns[pv_idx]
+                     logger.info(f"In-flight CR = R0/Rf: {R0:.4f} cm / {Rf:.4f} cm = {self.data.cr_inflight:.2f}")
 
         # ---- Mass fractions (require region interfaces + ablation front) ----
         ri = self.data.region_interfaces_indices
