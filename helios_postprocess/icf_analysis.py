@@ -1271,10 +1271,10 @@ class ICFAnalyzer:
                         and self.data.ablation_front_radius[pv_idx] > 0
                        and self.data.region_interfaces_indices is not None):
                     R0 = self.data.zone_boundaries[0, int(self.data.region_interfaces_indices[0, 0])]
-                     Rf = self.data.ablation_front_radius[pv_idx]
-                     self.data.cr_inflight = R0 / Rf
-                     t_pv = self.data.time_ns[pv_idx]
-                     logger.info(f"In-flight CR = R0/Rf: {R0:.4f} cm / {Rf:.4f} cm = {self.data.cr_inflight:.2f}")
+                    Rf = self.data.ablation_front_radius[pv_idx]
+                    self.data.cr_inflight = R0 / Rf
+                    t_pv = self.data.time_ns[pv_idx]
+                    logger.info(f"In-flight CR = R0/Rf: {R0:.4f} cm / {Rf:.4f} cm = {self.data.cr_inflight:.2f}")
 
         # ---- Mass fractions (require region interfaces + ablation front) ----
         ri = self.data.region_interfaces_indices
