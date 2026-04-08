@@ -252,7 +252,7 @@ class ICFAnalyzer:
             ri = getattr(self.data, 'region_interfaces_indices', None)
             if ri is not None:
                 min_velocities = np.array([
-                    np.min(self.data.velocity[ti, ri[ti, 0]:])
+                     np.min(self.data.velocity[ti, int(ri[ti, 0]):])
                     for ti in pre_bang_indices
                 ])
             else:
