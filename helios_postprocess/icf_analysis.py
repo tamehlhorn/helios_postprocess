@@ -1258,22 +1258,26 @@ class ICFAnalyzer:
             self.data.target_gain = self.data.energy_output / self.data.laser_energy
             logger.info(f"Target gain: {self.data.target_gain:.3f}")
         
-        # Compression ratio
-        if self.data.mass_density is not None and self.data.max_density > 0:
-            initial_density = np.mean(self.data.mass_density[0])
-            if initial_density > 0:
-                self.data.comp_ratio = self.data.max_density / initial_density
-                logger.info(f"Compression ratio: {self.data.comp_ratio:.2f}")
-                # In-flight CR = R0 / R_ablfront at peak velocity
-                pv_idx = getattr(self.data, 'peak_velocity_index', None)
-                if (pv_idx is not None
-                        and self.data.ablation_front_radius is not None
-                        and self.data.ablation_front_radius[pv_idx] > 0
-                       and self.data.region_interfaces_indices is not None):
-                    R0 = self.data.zone_boundaries[0, int(self.data.region_interfaces_indices[0, 0])]
-                    Rf = self.data.ablation_front_radius[pv_idx]
-                    self.data.cr_inflight = R0 / Rf
-                    logger.info(f"In-flight CR = R0/Rf: {R0:.4f} cm / {Rf:.4f} cm = {self.data.cr_inflight:.2f}")
+        # Stagnation CR = R0 / R_hs_at_stagnation (CLAUDE.md convention 12)
+        if (self.data.zone_boundaries is not None
+                and self.data.region_interfaces_indices is not None
+                and self.data.stag_time > 0):
+            stag_idx = np.argmin(np.abs(self.data.time - self.data.stag_time))
+            R0 = self.data.zone_boundaries[0, int(self.data.region_interfaces_indices[0, 0])]
+            R_hs = self.data.zone_boundaries[stag_idx, int(self.data.region_interfaces_indices[stag_idx, 0])]
+            if R_hs > 0:
+                self.data.comp_ratio = R0 / R_hs
+                logger.info(f"Stagnation CR = R0/R_hs: {R0:.4f} cm / {R_hs:.4f} cm = {self.data.comp_ratio:.2f}")
+        # In-flight CR = R0 / R_hs_at_peak_velocity (CLAUDE.md convention 12)
+        pv_idx = getattr(self.data, "peak_velocity_index", None)
+        if (pv_idx is not None
+                and self.data.zone_boundaries is not None
+                and self.data.region_interfaces_indices is not None):
+            R0 = self.data.zone_boundaries[0, int(self.data.region_interfaces_indices[0, 0])]
+            Rf = self.data.zone_boundaries[pv_idx, int(self.data.region_interfaces_indices[pv_idx, 0])]
+            if Rf > 0:
+                self.data.cr_inflight = R0 / Rf
+                logger.info(f"In-flight CR = R0/Rf: {R0:.4f} cm / {Rf:.4f} cm = {self.data.cr_inflight:.2f}")
 
         # ---- Mass fractions (require region interfaces + ablation front) ----
         ri = self.data.region_interfaces_indices
