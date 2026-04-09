@@ -80,6 +80,7 @@ class ICFRunData:
         self.alpha_heating_power: Optional[np.ndarray] = None     # (n_times, n_zones)
         self.alpha_heating_ion: Optional[np.ndarray] = None       # (n_times, n_zones) particle → ion
         self.alpha_heating_ele: Optional[np.ndarray] = None       # (n_times, n_zones) particle → elec
+        self.eos_models: list = None                              # [{region, type, file}]
         self.dt_neutron_count: Optional[np.ndarray] = None        # time-integrated DT neutron yield
         self.dd_neutron_count: Optional[np.ndarray] = None        # time-integrated DD neutron yield
         self.dt_neutron_count_zone: Optional[np.ndarray] = None   # (n_times, n_zones) zone-resolved
@@ -297,15 +298,10 @@ def build_run_data(
         data.laser_peak_start_ns       = rhw_config.laser_peak_start_ns
         data.laser_peak_end_ns         = rhw_config.laser_peak_end_ns
         data.laser_pulse_duration_ns   = rhw_config.laser_pulse_duration_ns
-    if rhw_config is not None:
-        data.laser_wavelength_um       = rhw_config.laser_wavelength_um
-        data.laser_spot_size_cm        = rhw_config.laser_spot_size_cm
-        data.laser_half_cone_angle_deg = rhw_config.laser_half_cone_angle_deg
-        data.laser_focus_position_cm   = rhw_config.laser_focus_position_cm
-        data.laser_power_multiplier    = rhw_config.laser_power_multiplier
-        data.laser_spatial_profile     = rhw_config.laser_spatial_profile
-    data.drive_temperature = drive_temperature
+        data.eos_models                = rhw_config.eos_models
+        
     data.drive_time = drive_time
+    data.drive_temperature = drive_temperature
 
     # ------------------------------------------------------------------
     # Time array
