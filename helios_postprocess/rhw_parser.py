@@ -36,6 +36,7 @@ class RHWConfiguration:
     laser_peak_start_ns: float = 0.0
     laser_peak_end_ns: float = 0.0
     laser_pulse_duration_ns: float = 0.0
+    eos_models: list = None  # [{region, type, file}, ...]
     drive_time: Optional[np.ndarray] = None
     drive_temperature: Optional[np.ndarray] = None
     source_file: Optional[str] = None
@@ -80,6 +81,7 @@ class RHWParser:
         is_direct_drive = self._parse_direct_drive(lines)
         burn_enabled = self._parse_burn_status(lines)
         laser_params = self._parse_laser_geometry(lines)
+        eos_models = self._parse_eos_models(lines)
         
         # Extract drive temperature data
         drive_time, drive_temp = self._parse_drive_temperature(lines)
@@ -102,7 +104,8 @@ class RHWParser:
             laser_foot_end_ns=laser_params.get("foot_end_ns", 0.0),
             laser_peak_start_ns=laser_params.get("peak_start_ns", 0.0),
             laser_peak_end_ns=laser_params.get("peak_end_ns", 0.0),
-            laser_pulse_duration_ns=laser_params.get("pulse_duration_ns", 0.0)
+            laser_pulse_duration_ns=laser_params.get("pulse_duration_ns", 0.0),
+            eos_models=eos_models,
         )
         
         logger.info(f"Configuration: {config.drive_type}, "
