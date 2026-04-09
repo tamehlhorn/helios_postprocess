@@ -116,6 +116,37 @@ class RHWParser:
         
         return config
     
+    def _parse_eos_models(self, lines: list) -> list:
+        """Parse EOS model type and file for each spatial region."""
+        models = []
+        current_region = None
+        eos_type = None
+        eos_file = None
+        for line in lines:
+            s = line.strip()
+            if s.startswith('Parameters for Region ='):
+                if current_region and eos_type is not None:
+                    models.append({
+                        'region': current_region,
+                        'type': 'SESAME' if eos_type == 1 else 'PROPACEOS',
+                        'file': eos_file or ''
+                    })
+                current_region = s.split('=', 1)[-1].strip()
+                eos_type = None
+                eos_file = None
+            elif s.startswith('EOS data type'):
+                try: eos_type = int(s.split('=')[-1].strip())
+                except: pass
+            elif s.startswith('EOS filepath'):
+                eos_file = s.split('=', 1)[-1].strip()
+        if current_region and eos_type is not None:
+            models.append({
+                'region': current_region,
+                'type': 'SESAME' if eos_type == 1 else 'PROPACEOS',
+                'file': eos_file or ''
+            })
+        return models if models else None
+
     def _parse_laser_geometry(self, lines: list) -> dict:
         """Parse beam-1 ray-trace parameters from [Laser Source Data] block."""
         import re
