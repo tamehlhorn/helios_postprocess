@@ -126,7 +126,7 @@ class ICFOutputGenerator:
             burn_str = "Non-local transport"
         else:
             burn_str = "Disabled"
-        _a(self._metric('Alpha burn model', burn_str, ''))
+        _a(f"  {'Alpha burn model':<36s} {burn_str}")
         _a('')
 
         # ---- Timing ----
