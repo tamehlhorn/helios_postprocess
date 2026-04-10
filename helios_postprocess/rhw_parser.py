@@ -122,18 +122,32 @@ class RHWParser:
         return config
     
     def _parse_alpha_transport(self, lines: list) -> tuple:
-        """Parse alpha deposition flags from [Hydro Data] block."""
+        """Parse burn model from fusion transport and alpha deposition flags.
+        
+        Classification:
+          Fusion transport = 0              -> No burn
+          Fusion transport = 1, alpha dep=1 -> Local (instantaneous)
+          Fusion transport = 1, alpha dep=0 -> Non-local transport
+        """
+        fusion_transport = False
         alpha_local = False
-        alpha_nonlocal = False
         for line in lines:
             s = line.strip()
-            if s.startswith('Use alpha deposition'):
-                try: alpha_local = int(s.split('=')[-1].strip()) == 1
+            if s.startswith('Fusion transport on'):
+                try:
+                    if int(s.split('=')[-1].strip()) == 1:
+                        fusion_transport = True
                 except: pass
-            elif s.startswith('Use non alpha deposition'):
-                try: alpha_nonlocal = int(s.split('=')[-1].strip()) == 1
+            elif s.startswith('Use alpha deposition'):
+                try:
+                    if int(s.split('=')[-1].strip()) == 1:
+                        alpha_local = True
                 except: pass
-        return alpha_local, alpha_nonlocal
+        if not fusion_transport:
+            return False, False   # no burn
+        if alpha_local:
+            return True, False    # local instantaneous
+        return False, True        # non-local transport
     
     def _parse_eos_models(self, lines: list) -> list:
         """Parse EOS model type and file for each spatial region."""

@@ -121,9 +121,9 @@ class ICFOutputGenerator:
         if _local and _nonlocal:
             burn_str = "Full (local + non-local transport)"
         elif _local:
-            burn_str = "Local only (instantaneous)"
+            burn_str = "Local only (instantaneous — use with caution)"
         elif _nonlocal:
-            burn_str = "Non-local transport"
+            burn_str = "Non-local transport (time/space dependent)"
         else:
             burn_str = "Disabled"
         _a(f"  {'Alpha burn model':<36s} {burn_str}")
