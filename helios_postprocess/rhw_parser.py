@@ -37,6 +37,8 @@ class RHWConfiguration:
     laser_peak_end_ns: float = 0.0
     laser_pulse_duration_ns: float = 0.0
     eos_models: list = None  # [{region, type, file}, ...]
+    alpha_deposition_local: bool = False     # Use alpha deposition = 1
+    alpha_deposition_nonlocal: bool = False  # Use non alpha deposition = 1
     drive_time: Optional[np.ndarray] = None
     drive_temperature: Optional[np.ndarray] = None
     source_file: Optional[str] = None
@@ -82,6 +84,7 @@ class RHWParser:
         burn_enabled = self._parse_burn_status(lines)
         laser_params = self._parse_laser_geometry(lines)
         eos_models = self._parse_eos_models(lines)
+        alpha_local, alpha_nonlocal = self._parse_alpha_transport(lines)
         
         # Extract drive temperature data
         drive_time, drive_temp = self._parse_drive_temperature(lines)
@@ -106,6 +109,8 @@ class RHWParser:
             laser_peak_end_ns=laser_params.get("peak_end_ns", 0.0),
             laser_pulse_duration_ns=laser_params.get("pulse_duration_ns", 0.0),
             eos_models=eos_models,
+            alpha_deposition_local=alpha_local,
+            alpha_deposition_nonlocal=alpha_nonlocal,
         )
         
         logger.info(f"Configuration: {config.drive_type}, "
@@ -115,6 +120,20 @@ class RHWParser:
                        f"{drive_time[0]:.3e} to {drive_time[-1]:.3e} s")
         
         return config
+    
+    def _parse_alpha_transport(self, lines: list) -> tuple:
+        """Parse alpha deposition flags from [Hydro Data] block."""
+        alpha_local = False
+        alpha_nonlocal = False
+        for line in lines:
+            s = line.strip()
+            if s.startswith('Use alpha deposition'):
+                try: alpha_local = int(s.split('=')[-1].strip()) == 1
+                except: pass
+            elif s.startswith('Use non alpha deposition'):
+                try: alpha_nonlocal = int(s.split('=')[-1].strip()) == 1
+                except: pass
+        return alpha_local, alpha_nonlocal
     
     def _parse_eos_models(self, lines: list) -> list:
         """Parse EOS model type and file for each spatial region."""

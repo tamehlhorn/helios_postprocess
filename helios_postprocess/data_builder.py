@@ -93,6 +93,8 @@ class ICFRunData:
         self.laser_peak_start_ns: float = 0.0
         self.laser_peak_end_ns: float = 0.0
         self.laser_pulse_duration_ns: float = 0.0
+        self.alpha_deposition_local: bool = False
+        self.alpha_deposition_nonlocal: bool = False
         self.eos_models: list = None                              # [{region, type, file}]
         self.dt_neutron_count: Optional[np.ndarray] = None        # time-integrated DT neutron yield
         self.dd_neutron_count: Optional[np.ndarray] = None        # time-integrated DD neutron yield
@@ -312,6 +314,8 @@ def build_run_data(
         data.laser_peak_end_ns         = rhw_config.laser_peak_end_ns
         data.laser_pulse_duration_ns   = rhw_config.laser_pulse_duration_ns
         data.eos_models                = rhw_config.eos_models
+        data.alpha_deposition_local    = rhw_config.alpha_deposition_local
+        data.alpha_deposition_nonlocal = rhw_config.alpha_deposition_nonlocal
         
     data.drive_time = drive_time
     data.drive_temperature = drive_temperature

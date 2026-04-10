@@ -114,6 +114,20 @@ class ICFOutputGenerator:
                 else:
                     _a(f'    {i+1}. {name}')
         _a('')
+        
+        # ---- Alpha burn model ----
+        _local    = getattr(d, 'alpha_deposition_local',    False)
+        _nonlocal = getattr(d, 'alpha_deposition_nonlocal', False)
+        if _local and _nonlocal:
+            burn_str = "Full (local + non-local transport)"
+        elif _local:
+            burn_str = "Local only (instantaneous)"
+        elif _nonlocal:
+            burn_str = "Non-local transport"
+        else:
+            burn_str = "Disabled"
+        _a(self._metric('Alpha burn model', burn_str, ''))
+        _a('')
 
         # ---- Timing ----
         _a('TIMING')
@@ -186,6 +200,14 @@ class ICFOutputGenerator:
                 _a(f"    {'Peak power':<28} {d.laser_peak_power_TW:>10.1f} TW"
                    f"  ({d.laser_peak_start_ns:.2f} – {d.laser_peak_end_ns:.2f} ns)")
                 _a(f"    {'Pulse duration':<28} {d.laser_pulse_duration_ns:>10.2f} ns")
+            _a('')
+
+        # ---- EOS models ----
+        if getattr(d, 'eos_models', None):
+            _a('EOS MODELS')
+            _a('-' * width)
+            for m in d.eos_models:
+                _a(f"  {m['region']:<25} {m['type']:<10} {m['file']}")
             _a('')
 
         # ---- Mass fractions ----
