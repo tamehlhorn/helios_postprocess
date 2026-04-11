@@ -192,7 +192,7 @@ def main(base_path: str):
         print("-" * 80)
 
         try:
-            with open(published_path, 'r') as f:
+            with open(published_path, 'r', encoding='utf-8-sig', errors='replace') as f:
                 pub_raw = json.load(f)
 
             pub_laser = pub_raw.pop('laser_energy_MJ', None)
