@@ -183,8 +183,8 @@ Each entry is `[value, uncertainty]`. Entries with `[0.0, 0.0]` are skipped.
       R0 = initial inner shell radius = zbnd[0, ri[0,0]]
       R_hs = hot-spot boundary radius at stagnation = zbnd[stag_idx, ri[stag_idx,0]]
       Validated: Olson_PDD_9 gives 29.6 vs published 29.0 (2.1%)
-    - `cr_inflight` = R0 / R_hs_at_peak_velocity (in-flight shell diagnostic)
-      Currently uses HS boundary node -- see Open Items for known issue.
+    - `cr_inflight` = R0 / R_ablfront_at_peak_velocity. Uses ablation_front_radius[pv_idx].
+      Validated ~4.5-4.6 for TM/26-series (physically correct). FIXED April 2026.
     - DO NOT use density ratio for CR -- that was the old incorrect implementation,
       now fixed as of April 2026.
 
@@ -361,26 +361,26 @@ grep -A 25 "COMPARISON WITH PUBLISHED" \
 
 ## Open Items
 
-### Priority 1 -- cr_inflight definition (known bug)
+### Priority 1 -- cr_inflight (FIXED April 2026)
+- Now uses ablation_front_radius[pv_idx]. Value ~4.5-4.6 is physically correct.
+- Old reference of 2.16 was from wrong (pre-alpha-onset-fix) timestep.
+
 - Currently uses HS boundary radius at peak velocity: R0/R_hs = 6.3 for PDD_9
 - CLAUDE.md convention 12 specifies R0 / R_ablfront_at_peak_velocity = 2.16
 - The ablation front radius at peak v (~0.0930 cm) is the correct denominator
 - Fix: change Rf line in compute_performance_metrics() to use
   `ablation_front_radius[pv_idx]` not `zone_boundaries[pv_idx, ri[pv_idx,0]]`
 
-### Priority 2 -- Hot-spot radius inconsistency
-- `_compute_hot_spot_properties()` returns 0.1786 cm at stagnation for PDD_9
-- Correct value is 0.0068 cm (reported correctly by stagnation finder)
-- These two are inconsistent -- hot spot pressure and internal energy may also
-  be affected. Needs investigation of what radius definition is being used in
-  `_compute_hot_spot_properties()`.
+### Priority 2 -- Hot-spot properties (FIXED April 2026)
+- _compute_hot_spot_properties() now uses ri[stag_idx,0] instead of T mask.
+- Validated: PDD_9 radius=0.0068 cm, pressure=208 Gbar, IE=40.75 kJ.
 
-### Priority 3 -- PDD calibration (active)
-- Rerun PDD_28 with fixed postprocessor to get correct peak velocity
-- Run PDD_29 (d=0.20 cm, uniform, norm=1.0) as clean comparison to PDD_22
-- If geometric approach insufficient, test flux limiter f=0.08-0.12
-- Obtain reference absorbed-energy histories from HYDRA/LILAC to anchor
-  empirical time-dependent power correction
+### Priority 3 -- PDD calibration (active, cone=20 deg geometry)
+- 26b: CR=29.6, imploded DT=0.60 mg, v=478 km/s -- geometry matched
+- Adiabat 1.43 vs 3.0 is sole remaining deficit
+- 26c running: cone=20, foot=45-50 TW -- mapping foot/adiabat lever
+- If foot lever insufficient: time-dependent peak power reduction (~0.75x after 9 ns)
+- Longer term: obtain LILAC absorbed-energy history to anchor empirical correction
 
 ### Priority 4 -- Physics Module Integration
 - `energetics`, `neutron_downscatter`, `pressure_gradients` work standalone
