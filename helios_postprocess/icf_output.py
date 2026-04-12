@@ -226,7 +226,13 @@ class ICFOutputGenerator:
         _a(self._metric('In-flight CR', getattr(d, 'cr_inflight', None), '', fmt='.1f'))
         _a(self._metric('Mass-avg adiabat (ice)',   d.adiabat_mass_averaged_ice,    '',     fmt='.2f'))
         _a('')
-
+        if (hasattr(data, 'alpha_onset_time_ns') and
+             data.alpha_onset_time_ns > 0 and
+             data.alpha_onset_time_ns < data.stag_time * 1e9):
+         f.write(f"  Alpha onset time                     "
+            f"{data.alpha_onset_time_ns:.3f} ns\n")
+         f.write(f"  (implosion metrics evaluated pre-onset)\n")
+         
         # ---- Burn propagation (Olson et al. convention) ----
         _a('BURN PROPAGATION (T_ion > 4.5 keV)')
         _a('-' * width)

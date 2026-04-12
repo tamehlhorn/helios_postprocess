@@ -232,17 +232,79 @@ class ICFAnalyzer:
     # - analyze_burn_phase()
     # - compute_performance_metrics()
     # - All helper methods (_track_shock_fronts, etc.)
-    
+
+    def _find_alpha_onset_index(self, threshold: float = 0.15) -> int:
+    """
+    Find the first timestep where alpha heating power exceeds `threshold`
+    fraction of absorbed laser power. Returns that index as the upper
+    bound for implosion metric evaluation, so that peak velocity, adiabat,
+    and IFAR are always measured before alpha heating significantly
+    modifies the shell dynamics.
+
+    Falls back to stag_time_index if alpha data are absent (burn disabled)
+    or if alpha never exceeds the threshold (negligible burn).
+    """
+    stag_idx = int(np.argmin(np.abs(self.data.time - self.data.stag_time))) \
+        if self.data.stag_time > 0 else len(self.data.time) - 1
+
+    # Require both alpha heating arrays
+    if (not hasattr(self.data, 'alpha_heating_ion') or
+            self.data.alpha_heating_ion is None or
+            not hasattr(self.data, 'alpha_heating_ele') or
+            self.data.alpha_heating_ele is None):
+        return stag_idx
+
+    alpha_power = (self.data.alpha_heating_ion +
+                   self.data.alpha_heating_ele).sum(axis=1)   # (n_times,)
+
+    if not hasattr(self.data, 'laser_power_source') or \
+            self.data.laser_power_source is None:
+        return stag_idx
+
+    laser_power = self.data.laser_power_source.sum(axis=1)    # (n_times,)
+    laser_max = laser_power.max()
+    if laser_max == 0:
+        return stag_idx
+
+    # Only consider times when laser is meaningfully on
+    laser_on = laser_power > laser_max * 0.01
+    with np.errstate(divide='ignore', invalid='ignore'):
+        ratio = np.where(laser_power > 0, alpha_power / laser_power, 0.0)
+
+    onset_candidates = np.where((ratio > threshold) & laser_on)[0]
+
+    if len(onset_candidates) == 0:
+        logger.info("Alpha onset: not detected (burn negligible or disabled)")
+        return stag_idx
+
+    onset = int(onset_candidates[0])
+    logger.info(
+        f"Alpha onset: t={self.data.time_ns[onset]:.3f} ns "
+        f"(index {onset}, alpha/laser={ratio[onset]:.2f})"
+    )
+    return onset
+
     def analyze_implosion_phase(self):
         """Analyze implosion: velocity, shocks, adiabat."""
         logger.info("Analyzing implosion phase...")
         
         # Track peak implosion velocity (only before bang time)
         if self.data.velocity is not None:
+# Upper bound: earliest of bang time and alpha onset
+            # This prevents alpha-driven acceleration from contaminating
+            # the peak implosion velocity in runs with burn transport.
+            alpha_onset_idx = self._find_alpha_onset_index()
+            self.data.alpha_onset_index = alpha_onset_idx
+            self.data.alpha_onset_time_ns = float(self.data.time_ns[alpha_onset_idx])
+
             if self.data.bang_time > 0:
-                pre_bang = self.data.time < self.data.bang_time   # strict < avoids stagnation spike
+                bang_idx = int(np.argmin(np.abs(self.data.time - self.data.bang_time)))
+                search_end_idx = min(alpha_onset_idx, bang_idx)
             else:
-                pre_bang = np.ones(len(self.data.time), dtype=bool)
+                search_end_idx = alpha_onset_idx
+
+            pre_bang = np.zeros(len(self.data.time), dtype=bool)
+            pre_bang[:search_end_idx] = True
             pre_bang_indices = np.where(pre_bang)[0]
 
             # Restrict to shell zones (outside hot-spot boundary) to avoid the
@@ -381,13 +443,17 @@ class ICFAnalyzer:
                 else:
                     min_v_per_time = np.min(v_zone, axis=1)
 
-                # Restrict to times before stagnation to avoid post-bounce
-                stag_t = self.data.stag_time if self.data.stag_time > 0 else self.data.time[-1]
-                pre_stag = self.data.time < stag_t
-                if np.any(pre_stag):
-                    masked_v = min_v_per_time.copy()
-                    masked_v[~pre_stag] = 0.0  # zero out post-stagnation
-                    eval_idx = np.argmin(masked_v)
+ # Restrict to times before stagnation AND before alpha onset
+                    stag_t = self.data.stag_time if self.data.stag_time > 0 else self.data.time[-1]
+                    alpha_onset_idx = getattr(self.data, 'alpha_onset_index', len(self.data.time))
+                    stag_idx = int(np.argmin(np.abs(self.data.time - stag_t)))
+                    search_end_idx = min(alpha_onset_idx, stag_idx)
+                    pre_stag = np.zeros(len(self.data.time), dtype=bool)
+                    pre_stag[:search_end_idx] = True
+                    if np.any(pre_stag):
+                        masked_v = min_v_per_time.copy()
+                        masked_v[~pre_stag] = 0.0
+                        eval_idx = np.argmin(masked_v)
                 else:
                     eval_idx = np.argmin(min_v_per_time)
             else:
