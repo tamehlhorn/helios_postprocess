@@ -809,24 +809,33 @@ class ICFAnalyzer:
         logger.info(f"Computing hot spot properties at stagnation "
                     f"(t = {self.data.time[stag_idx]:.3f} ns, index {stag_idx})")
         
-        temp_threshold = self.config.get('hot_spot_temp_threshold', 1000.0)  # eV
-        
         try:
-            temperatures = self.data.ion_temperature[stag_idx]
-            hot_spot_mask = temperatures > temp_threshold
-            
+            ri = self.data.region_interfaces_indices
+            boundaries = self.data.zone_boundaries[stag_idx]
+
+            # Use region interface to define hot-spot zones (Convention #13).
+            # Temperature mask is unreliable for igniting capsules — alpha
+            # heating warms the dense shell above 1 keV, giving unphysically
+            # large radii (e.g. 0.15 cm > R_hs_true for 26b_burn).
+            if ri is not None:
+                hs_bnd = int(ri[stag_idx, 0])          # node index of HS boundary
+                n_zones = self.data.mass_density.shape[1]
+                hot_spot_mask = np.zeros(n_zones, dtype=bool)
+                hot_spot_mask[:hs_bnd] = True
+                # HS outer radius = zone_boundaries at the boundary node
+                self.data.core_radius = float(boundaries[hs_bnd])
+                self.data.stagnation_hot_spot_radius = self.data.core_radius
+            else:
+                # Fallback only when region data absent
+                temp_threshold = self.config.get('hot_spot_temp_threshold', 1000.0)
+                temperatures = self.data.ion_temperature[stag_idx]
+                hot_spot_mask = temperatures > temp_threshold
+                if np.any(hot_spot_mask):
+                    hot_zone_indices = np.where(hot_spot_mask)[0]
+                    self.data.core_radius = float(boundaries[hot_zone_indices[-1] + 1])
+                    self.data.stagnation_hot_spot_radius = self.data.core_radius
+
             if np.any(hot_spot_mask):
-                boundaries = self.data.zone_boundaries[stag_idx]
-                radii = (boundaries[:-1] + boundaries[1:]) / 2
-                
-                # Hot spot radius (outermost hot zone)
-                hot_radii = radii[hot_spot_mask]
-                self.data.stagnation_hot_spot_radius = np.max(hot_radii)
-                
-                # Core radius = outer boundary of the outermost hot-spot zone
-                hot_zone_indices = np.where(hot_spot_mask)[0]
-                self.data.core_radius = boundaries[hot_zone_indices[-1] + 1]
-                
                 # Hot spot pressure (mass-averaged)
                 # CLAUDE.md: report pressure in Gbar.  1 Gbar = 1e8 J/cm³
                 pressure_Gbar = (self.data.ion_pressure[stag_idx] + 
@@ -1331,7 +1340,18 @@ class ICFAnalyzer:
                 and self.data.zone_boundaries is not None
                 and self.data.region_interfaces_indices is not None):
             R0 = self.data.zone_boundaries[0, int(self.data.region_interfaces_indices[0, 0])]
-            Rf = self.data.zone_boundaries[pv_idx, int(self.data.region_interfaces_indices[pv_idx, 0])]
+            # Use ablation front radius at peak velocity (Convention #12).
+            # The HS boundary radius gives cr_inflight ~ 6-7 (wrong);
+            # the ablation front gives ~ 2.16 for PDD_9 (correct).
+            abl_radius = getattr(self.data, 'ablation_front_radius', None)
+            abl_indices = getattr(self.data, 'ablation_front_indices', None)
+            if abl_radius is not None and float(abl_radius[pv_idx]) > 0:
+                Rf = float(abl_radius[pv_idx])
+            elif abl_indices is not None and int(abl_indices[pv_idx]) > 0:
+                abl_idx = int(abl_indices[pv_idx])
+                Rf = float(self.data.zone_boundaries[pv_idx, abl_idx + 1])
+            else:
+                Rf = self.data.zone_boundaries[pv_idx, int(self.data.region_interfaces_indices[pv_idx, 0])]
             if Rf > 0:
                 self.data.cr_inflight = R0 / Rf
                 logger.info(f"In-flight CR = R0/Rf: {R0:.4f} cm / {Rf:.4f} cm = {self.data.cr_inflight:.2f}")

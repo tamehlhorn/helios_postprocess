@@ -303,6 +303,7 @@ def extract_histories_from_run_data(data) -> Dict:
         'initial_radius_um':  radii_um[0],
         # Helios-computed integrals (authoritative)
         'energy_output_MJ':   energy_output_MJ,
+        'stagnation_time_ns':  getattr(data, 'stag_time', 0.0),
         'laser_energy_MJ':    laser_energy_MJ,
         'target_gain':        target_gain,
         # Implosion metrics
@@ -421,6 +422,7 @@ def calculate_burn_averaged_metrics(histories: Dict,
 
     return {
         # Burn-averaged values
+        'stagnation_time_ns': histories.get('stagnation_time_ns', 0.0),
         'T_burn_avg':       T_burn_avg,
         'P_burn_avg':       P_burn_avg,
         'rho_burn_avg':     rho_burn_avg,
@@ -497,6 +499,8 @@ def compare_with_published(sim_metrics: Dict,
 
     # ── Implosion metrics section ──
     implosion_rows = [
+        ('Stagnation time (ns)',       sim_metrics.get('stagnation_time_ns', 0.0),
+         'stagnation_time_ns',        '.3f'),
         ('Peak velocity (km/s)',      sim_metrics.get('peak_velocity_kms', 0.0),
          'peak_velocity_kms',         '.1f'),
         ('Adiabat',                   sim_metrics.get('adiabat', 0.0),
