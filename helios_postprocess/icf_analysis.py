@@ -232,18 +232,70 @@ class ICFAnalyzer:
     # - analyze_burn_phase()
     # - compute_performance_metrics()
     # - All helper methods (_track_shock_fronts, etc.)
-    
+
+  def _find_alpha_onset_index(self, threshold: float = 0.15) -> int:
+        """
+        Find the first timestep where alpha heating power exceeds threshold
+        fraction of absorbed laser power. Returns that index as the upper
+        bound for implosion metric evaluation.
+        Falls back to stag_time_index if alpha data are absent or negligible.
+        """
+        stag_idx = int(np.argmin(np.abs(self.data.time - self.data.stag_time))) \
+            if self.data.stag_time > 0 else len(self.data.time) - 1
+
+        if (not hasattr(self.data, 'alpha_heating_ion') or
+                self.data.alpha_heating_ion is None or
+                not hasattr(self.data, 'alpha_heating_ele') or
+                self.data.alpha_heating_ele is None):
+            return stag_idx
+
+        alpha_power = (self.data.alpha_heating_ion +
+                       self.data.alpha_heating_ele).sum(axis=1)
+
+        if (not hasattr(self.data, 'laser_power_source') or
+                self.data.laser_power_source is None):
+            return stag_idx
+
+        laser_power = self.data.laser_power_source.sum(axis=1)
+        laser_max = laser_power.max()
+        if laser_max == 0:
+            return stag_idx
+
+        laser_on = laser_power > laser_max * 0.01
+        with np.errstate(divide='ignore', invalid='ignore'):
+            ratio = np.where(laser_power > 0, alpha_power / laser_power, 0.0)
+
+        onset_candidates = np.where((ratio > threshold) & laser_on)[0]
+
+        if len(onset_candidates) == 0:
+            logger.info("Alpha onset: not detected (burn negligible or disabled)")
+            return stag_idx
+
+        onset = int(onset_candidates[0])
+        logger.info(
+            f"Alpha onset: t={self.data.time_ns[onset]:.3f} ns "
+            f"(index {onset}, alpha/laser={ratio[onset]:.2f})"
+        )
+        return onset
+  
     def analyze_implosion_phase(self):
         """Analyze implosion: velocity, shocks, adiabat."""
         logger.info("Analyzing implosion phase...")
         
         # Track peak implosion velocity (only before bang time)
-        if self.data.velocity is not None:
+            alpha_onset_idx = self._find_alpha_onset_index()
+            self.data.alpha_onset_index = alpha_onset_idx
+            self.data.alpha_onset_time_ns = float(self.data.time_ns[alpha_onset_idx])
+
             if self.data.bang_time > 0:
-                pre_bang = self.data.time < self.data.bang_time   # strict < avoids stagnation spike
+                bang_idx = int(np.argmin(np.abs(self.data.time - self.data.bang_time)))
+                search_end_idx = min(alpha_onset_idx, bang_idx)
             else:
-                pre_bang = np.ones(len(self.data.time), dtype=bool)
-            pre_bang_indices = np.where(pre_bang)[0]
+                search_end_idx = alpha_onset_idx
+
+            pre_bang = np.zeros(len(self.data.time), dtype=bool)
+            pre_bang[:search_end_idx] = True
+            pre_bang_indices = np.where(pre_bang)[0]        
 
             # Restrict to shell zones (outside hot-spot boundary) to avoid the
             # large inward velocity spike of converging vapor at ignition.
