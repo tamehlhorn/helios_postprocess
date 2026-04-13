@@ -56,6 +56,9 @@ class ICFPlotter:
         # Set plotting style
         plt.style.use('seaborn-v0_8-darkgrid')
         self.default_figsize = (10, 7)
+        import matplotlib
+        matplotlib.rcParams['path.simplify'] = True
+        matplotlib.rcParams['path.simplify_threshold'] = 0.5
         
     def create_full_report(self, output_path: str):
         """
@@ -104,12 +107,16 @@ class ICFPlotter:
             if self.data.drive_temperature is not None:
                 self._plot_drive_temperature(pdf)
             
-            # Contour plots
-            self._plot_density_contour(pdf)
-            self._plot_pressure_contour(pdf)
-            self._plot_velocity_contour(pdf)
-            self._plot_temperature_contour(pdf)
-            
+            # Contour plots (optional — disabled by default, set include_contours=True in config)
+            if self.config.get('include_contours', False):
+                self._plot_density_contour(pdf)
+                self._plot_pressure_contour(pdf)
+                self._plot_velocity_contour(pdf)
+                self._plot_temperature_contour(pdf)
+                logger.info("Contour plots included (include_contours=True)")
+            else:
+                logger.info("Contour plots skipped (include_contours=False)")
+
             # Pressure gradient and shocks
             self._plot_pressure_gradient_contour(pdf)
             self._plot_shock_tracking(pdf)
@@ -469,7 +476,7 @@ class ICFPlotter:
         plt.tight_layout()
         
         save_path = output_path / 'critical_density_position.png'
-        plt.savefig(save_path, dpi=150, bbox_inches='tight')
+        plt.savefig(save_path, dpi=100, bbox_inches='tight')
         plt.close()
         
         return fig
@@ -604,7 +611,7 @@ class ICFPlotter:
         plt.tight_layout()
         
         save_path = output_path / 'time_histories_with_critical_density.png'
-        plt.savefig(save_path, dpi=150, bbox_inches='tight')
+        plt.savefig(save_path, dpi=100, bbox_inches='tight')
         plt.close()
         
         return fig
