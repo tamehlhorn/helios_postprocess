@@ -13,6 +13,13 @@ Usage
 -----
     python run_analysis.py <base_path>
 
+Environment
+-----------
+    MacBook:    use "python"  (Anaconda, ~/anaconda3)
+    Mac Studio: use "python3" (system Python with packages)
+    DO NOT use "python3" on MacBook -- it is system Python with no packages.
+
+
 where <base_path> is the path WITHOUT extension.  All files are derived:
     <base_path>.exo               — EXODUS simulation output (required)
     <base_path>.rhw               — RHW input file (optional)
@@ -25,13 +32,14 @@ where <base_path> is the path WITHOUT extension.  All files are derived:
 Examples
 --------
     python run_analysis.py ~/Sims/Xcimer/Olson_PDD/Olson_PDD_9/Olson_PDD_9
-    python run_analysis.py ~/Sims/Xcimer/Vulcan_HDD/VI_6/VI_6
+    python run_analysis.py ~/Sims/Xcimer/Vulcan_HDD/VI_6/VI_6 --contours
 
 Author: Prof T
 Date: March 2026
 """
 
 import sys
+import argparse
 import json
 import logging
 from pathlib import Path
@@ -54,7 +62,7 @@ from helios_postprocess.burn_averaged_metrics import (
 )
 
 
-def main(base_path: str):
+def main(base_path: str, include_contours: bool = False):
     """Run full post-processing pipeline."""
     base = Path(base_path).expanduser().resolve()
     name = base.name
@@ -132,7 +140,7 @@ def main(base_path: str):
     print("STEP 3: Generating PDF report")
     print("-" * 80)
 
-    plotter = ICFPlotter(data, {})
+    plotter = ICFPlotter(data, {'include_contours': args.contours})
     plotter.create_full_report(str(report_path))
     print(f"  Report: {report_path}")
     print()
@@ -487,8 +495,13 @@ def _pub_val(published_metrics, key):
 
 
 if __name__ == '__main__':
-    if len(sys.argv) < 2:
-        print(__doc__)
-        sys.exit(1)
-
-    main(sys.argv[1])
+    parser = argparse.ArgumentParser(
+        description='Helios ICF post-processing runner',
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+    )
+    parser.add_argument('base_path',
+                        help='Simulation base path (without extension)')
+    parser.add_argument('--contours', action='store_true', default=False,
+                        help='Include contour plots in PDF report (slower, larger file)')
+    args = parser.parse_args()
+    main(args.base_path, include_contours=args.contours)
