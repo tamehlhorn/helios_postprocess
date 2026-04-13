@@ -429,3 +429,35 @@ All standard keys plus:
 ### Ignition criterion:
 Hot-spot rhoR (absolute) >= 0.3 g/cm² (Olson et al. convention).
 T_ion > 4.5 keV mask used only for burn propagation plot, not for scalar thresholds.
+
+### PDF report improvements (April 12, 2026)
+- path.simplify + threshold=0.5 added to icf_plotting.py (reduces vector complexity)
+- DPI reduced 150->100 for all savefig calls
+- Contour plots now off by default (include_contours=False in config)
+- --contours CLI flag added to run_analysis.py via argparse (default off)
+- MacBook must use "python" not "python3" (Anaconda vs system Python)
+
+### run_analysis.py usage (updated April 2026)
+    # Mac Studio
+    python3 ~/helios_postprocessor/examples/run_analysis.py <base_path>
+    python3 ~/helios_postprocessor/examples/run_analysis.py <base_path> --contours
+
+    # MacBook
+    python ~/Codes/helios_postprocessor/examples/run_analysis.py <base_path>
+    python ~/Codes/helios_postprocessor/examples/run_analysis.py <base_path> --contours
+
+### PDF report improvements (April 12, 2026)
+- path.simplify + threshold=0.5 added to icf_plotting.py (reduces vector complexity)
+- DPI reduced 150->100 for all savefig calls
+- Contour plots now off by default (include_contours=False in config)
+- --contours CLI flag added to run_analysis.py via argparse (default off)
+- MacBook must use "python" not "python3" (Anaconda vs system Python)
+
+### run_analysis.py usage (updated April 2026)
+    # Mac Studio
+    python3 ~/helios_postprocessor/examples/run_analysis.py <base_path>
+    python3 ~/helios_postprocessor/examples/run_analysis.py <base_path> --contours
+
+    # MacBook
+    python ~/Codes/helios_postprocessor/examples/run_analysis.py <base_path>
+    python ~/Codes/helios_postprocessor/examples/run_analysis.py <base_path> --contours
