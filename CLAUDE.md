@@ -330,31 +330,30 @@ python3 ~/helios_postprocessor/examples/run_analysis.py \
 
 ## Open Items
 
-### Priority 1 -- Physics Module Integration (next session)
+### Priority 1 -- Olson PDD calibration (CLOSED April 2026)
+- Best match: PDD_26b (cone=20 deg, spot=0.16 cm, foot=25 TW, peak=329 TW)
+- Matched: velocity +1.7%, CR +2.1%, imploded DT ~0%, stagnation time -0.5%
+- Accepted residuals: adiabat -52%, rhoR_cf -45%, absorption +34% -- inherent 1D limits
+- Root cause: Helios 1D cannot reproduce 3D geometric miss of NIF PDD beams at late times
+- Path to closure: empirical time-dependent power multiplier anchored to LILAC
+  absorbed-energy history (data not yet obtained from Olson group)
+
+### Priority 2 -- VI_6 / Xcimer HDD calibration (ACTIVE)
+See HDD Calibration Setup section below.
+
+### Priority 3 -- Physics Module Integration
 - `energetics`, `neutron_downscatter`, `pressure_gradients` work standalone
   but are not yet wired into `ICFAnalyzer` or `ICFPlotter`.
-- Start by inspecting `def` signatures in each module, then wire into
-  `ICFAnalyzer.integrate_physics_modules()` (new method), then add plotter pages
-  and output sections.
+- Add `ICFAnalyzer.integrate_physics_modules()`, plotter pages, output sections.
 - Cross-check: `energetics.py` KE_inward should match `burn_averaged_metrics.py`
   hydro efficiency (both give 9.2% for VI_6).
 
-### Priority 2 -- VI_6 Laser Deposition Fix
-- Over-ablation issue: simulated velocity 763 vs published 410 km/s.
-- Low adiabat (1.13 vs published 6.0) and low remaining mass (2.14 vs 3.00 mg)
-  are consistent with over-ablation, not just energy scaling.
-- Published values (peak_velocity=410, adiabat=6.0) may be from a different
-  target variant -- verify which published table VI_6_published.json references.
-
-### Priority 3 -- CR_max Definition for VI_6
+### Priority 4 -- CR_max Definition for VI_6
 - Stagnation CR = 41.1 vs published 20.1 for VI_6.
 - Published value likely uses shell mid-radius at stagnation, not hot-spot boundary.
-- Olson matches well (29.6 vs 29.0) because hot-spot and shell nearly coincide
-  at stagnation for high-convergence igniting targets.
-- May need a separate `cr_shell_stag` metric using the ablation front radius
-  at stagnation rather than the hot-spot boundary.
+- May need a separate cr_shell_stag metric using ablation front radius at stagnation.
 
-### Priority 4 -- `region_interfaces_indices` Robustness
+### Priority 5 -- region_interfaces_indices Robustness
 - Currently relies on EXODUS region data; could add fallback based on
   density/composition gradients for targets without explicit region data.
 
@@ -362,3 +361,80 @@ python3 ~/helios_postprocessor/examples/run_analysis.py \
 
 **Required**: numpy, scipy, matplotlib, netCDF4
 **Optional**: scikit-learn (RANSAC shock fitting in icf_plotting.py -- guarded with `_HAS_SKLEARN`)
+
+## PDD Calibration Scan (CLOSED April 2026)
+
+Goal: reproduce LILAC peak implosion velocity ~470 km/s for Olson PDD target at 1.4x
+drive multiplier. Reference pulse: foot ~23-25 TW (0-5 ns), peak ~329 TW (9-12.7 ns).
+LILAC reference energy: 2.150 MJ.
+
+| Run | Spot (cm) | Cone (deg) | Foot/Peak (TW) | v (km/s) | Abs (%) | Adiabat | CR | t_stag (ns) | Yield (MJ) | Notes |
+|-----|-----------|------------|---------------|----------|---------|---------|-----|------------|------------|-------|
+| PDD_9   | 0.00 | 1  | 23/161  | 504 | 100  | 3.03 | 29.6 | 12.60 | 20.6    | Lower-energy pulse |
+| PDD_22  | 0.12 | 35 | 23/329  | 587 | 87.5 | 1.22 | 34.5 | 13.50 | 75.6    | Ignites; over-velocity |
+| PDD_25  | 0.16 | 35 | 23/329  | 563 | 82.4 | 1.05 |  --  |  --   | 58.4    | Larger spot |
+| PDD_26  | 0.16 | 15 | 25/329  | 556 | 87.2 | 1.09 |  --  |  --   | 59.5    | Narrow cone |
+| PDD_26b | 0.16 | 20 | 25/329  | 478 | ~87  | 1.43 | 29.6 | ~13.4 | ignites | BEST MATCH |
+| PDD_26c | 0.16 | 20 | 45/329  | 462 | 83.7 | 2.25 | 26.4 | 12.91 | 0.19    | High foot kills stagnation |
+| PDD_26d | 0.16 | 20 | 30/255  | 417 | 87.9 | 2.00 | 28.2 | 13.90 | 0.94    | Reduced peak; under-energized |
+| PDD_27  | 0.16 | 11 | 23/329  | 73  | 10   |  --  |  --  |  --   | 0       | d=5.0 cm + norm=0.5 bug |
+| Ref     |  --  | -- | 23/329  | 470 | 65   | 3.0  | 29.0 | 13.47 | 87.4    | LILAC |
+
+Best match PDD_26b: velocity +1.7%, CR +2.1%, imploded DT ~0%, t_stag -0.5% -- all matched.
+Residuals (adiabat -52%, rhoR_cf -45%, abs +34%) are inherent 1D limits; cannot close without
+empirical time-dependent power multiplier anchored to LILAC absorbed-energy history.
+
+Key scanning lessons:
+- Absorption insensitive to cone/spot (87+-3%); refraction controls coupling, not geometry
+- Hydro efficiency locked ~10%; excess drive is in ablation physics, not ray geometry
+- Cone angle: weak velocity lever; narrower cone -> lower adiabat (deeper deposition)
+- Spot size: very weak lever
+- Focus d ~ R_initial: best physically motivated knob; d >> R_initial kills coupling
+- Foot power: raising foot collapses stagnation above ~40 TW at cone=20 deg
+- Beam energy normalization MUST be 1.0 for single active beam (0.5 = 2x energy deficit)
+- For HDD: flux limiter is the primary lever; cone/spot scanning not productive
+
+## HDD Calibration Setup (VI_6 / Xcimer, April 2026)
+
+Target: reproduce published Xcimer hybrid HDD design (D. Montgomery).
+Reference code: Xrage. Published design at 4.0 MJ; VI_6 baseline at 3.383 MJ.
+Peak velocity target: ~410 km/s. Over-drive gap: +86% (763 vs 410 km/s).
+
+### Step 1 -- Rerun VI_6 baseline with fixed postprocessor
+Run to get clean cr_inflight and hot-spot values after April 2026 bug fixes:
+    python3 ~/helios_postprocessor/examples/run_analysis.py \
+      ~/Sims/Xcimer/Xcimer_Sims/D_Montgomery/VI_6/VI_6
+    grep "Peak implosion\|Stagnation CR\|In-flight CR\|Adiabat\|Fraction abs\|Stagnation time" \
+      ~/Sims/Xcimer/Xcimer_Sims/D_Montgomery/VI_6/VI_6_summary.txt
+
+### Step 2 -- Published JSON
+Place at ~/Sims/Xcimer/Xcimer_Sims/D_Montgomery/VI_6/VI_6_published.json
+Key values (populate from Montgomery design table; [0.0, 0.0] to skip unknowns):
+    laser_energy_MJ: 4.0
+    peak_velocity_kms: [410, 0.0]
+    ifar: [20.0, 0.0]
+    hydro_efficiency_pct: [8.0, 0.0]
+    inflight_KE_kJ: [300.0, 0.0]
+    fraction_absorbed_pct: [97.0, 0.0]
+    yield: [256.0, 0.0]  -- 4 MJ design value; note energy difference from baseline
+
+### Step 3 -- Calibration levers (priority order for HDD)
+1. Flux limiter f: primary lever. Baseline f=0.06; try f=0.08, f=0.10.
+   Higher f -> less conduction suppression -> lower ablation pressure -> lower velocity.
+2. EOS model: SESAME vs PROPACEOS for DT. SESAME stiffer; raises adiabat ~0.5-1.0.
+3. Focus position d: set to ~R_initial. Less critical than PDD.
+4. Cone/spot: low priority -- weak levers per PDD lessons.
+
+### Step 4 -- First calibration runs
+| Run | f | EOS DT | Purpose |
+|-----|---|--------|---------|
+| VI_6_f06 | 0.06 | PROPACEOS | Clean baseline (rerun) |
+| VI_6_f08 | 0.08 | PROPACEOS | Primary flux lever test |
+| VI_6_f10 | 0.10 | PROPACEOS | Upper flux bound |
+| VI_6_ses | 0.06 | SESAME    | EOS effect isolated |
+
+Notes:
+- CD ablator (not CH foam) -- different opacity and ablation physics than PDD
+- Xrage is the reference code (not LILAC)
+- Normalize energy comparisons carefully (3.383 vs 4.0 MJ)
+- CR_max issue: stagnation CR=41.1 vs published 20.1 -- may need cr_shell_stag metric
