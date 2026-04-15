@@ -638,3 +638,194 @@ def comprehensive_pressure_gradient_analysis(
     results['RT_unstable_fraction'] = np.sum(RT_unstable) / len(RT_unstable)
     
     return results
+
+
+def analyze_first_shock(
+    pressure: np.ndarray,
+    zone_boundaries: np.ndarray,
+    density: np.ndarray,
+    time: np.ndarray,
+    ablator_outer_zone: int,
+    fuel_inner_zone: int,
+    search_inner_zone: int = 0,
+    gamma: float = 5.0 / 3.0,
+    dP_dr_threshold: float = 1e10,
+    smoothing_sigma: float = 1.5,
+) -> Dict[str, np.ndarray]:
+    """
+    Track first (outermost) shock through the shell and compute strength metrics.
+
+    The first shock is the outermost pressure discontinuity in the ablator at
+    each timestep. It is identified as the shock with the largest radius among
+    all shocks found by identify_shocks(). Shock velocity is computed by
+    differentiating the shock radius history. Rankine-Hugoniot relations for a
+    gamma-law gas give Mach number and density jump from the pressure ratio.
+
+    Parameters
+    ----------
+    pressure : np.ndarray
+        Total pressure [J/cm³], shape (n_times, n_zones).
+        Use ion_pressure + rad_pressure from ICFRunData.
+    zone_boundaries : np.ndarray
+        Zone boundary radii [cm], shape (n_times, n_zones+1)
+    density : np.ndarray
+        Mass density [g/cm³], shape (n_times, n_zones)
+    time : np.ndarray
+        Time array [ns], shape (n_times,)
+    ablator_outer_zone : int
+        Zone index of outer ablator boundary (outermost zone to search for shock).
+        Typically ri[0, -2] - 1 (fuel/ablator interface node index minus 1).
+    fuel_inner_zone : int
+        Zone index of fuel/ablator interface (inner ablator boundary).
+        Used to detect shock breakout into fuel. Typically ri[0, -2].
+    gamma : float, default=5/3
+        Adiabatic index for Rankine-Hugoniot relations. Use 5/3 for DT.
+    dP_dr_threshold : float, default=1e10
+        Minimum |dP/dr| to identify a shock [J/cm⁴].
+    smoothing_sigma : float, default=1.5
+        Gaussian smoothing width [zones] for pressure gradient.
+
+    Returns
+    -------
+    dict with keys:
+        'time' : np.ndarray [ns]
+            Time array (same as input).
+        'shock_radius' : np.ndarray [cm]
+            Outermost shock radius at each timestep. NaN if no shock found.
+        'shock_velocity' : np.ndarray [cm/ns]
+            Shock propagation velocity (d r_shock / dt). NaN where undefined.
+        'P_ratio' : np.ndarray
+            Post-shock / pre-shock pressure ratio (compression ratio proxy).
+        'P_jump_Gbar' : np.ndarray
+            Pressure jump across shock [Gbar].
+        'mach_number' : np.ndarray
+            Shock Mach number from Rankine-Hugoniot (gamma-law).
+        'density_jump' : np.ndarray
+            Post/pre density jump ratio from Rankine-Hugoniot.
+        'shock_pressure_Gbar' : np.ndarray
+            Absolute post-shock pressure [Gbar].
+        'breakout_time_ns' : float
+            Time when shock first crosses fuel_inner_zone [ns].
+            NaN if breakout not observed in simulation window.
+        'breakout_pressure_Gbar' : float
+            Post-shock pressure at breakout time [Gbar].
+        'breakout_mach' : float
+            Mach number at breakout time.
+
+    Notes
+    -----
+    Rankine-Hugoniot for gamma-law gas:
+        M^2 = [(gamma+1)*P_ratio + (gamma-1)] / (2*gamma)
+        rho2/rho1 = (gamma+1)*M^2 / [(gamma-1)*M^2 + 2]
+
+    For strong shocks (M >> 1):
+        P_ratio -> (2*gamma*M^2) / (gamma+1)
+        rho2/rho1 -> (gamma+1) / (gamma-1) = 4 for gamma=5/3
+
+    Shock velocity is computed using central differences on the shock radius
+    history, with forward/backward differences at the endpoints. Time is in ns
+    so velocity is in cm/ns = 10^7 cm/s = 100 km/s.
+
+    Examples
+    --------
+    >>> from helios_postprocess.pressure_gradients import analyze_first_shock
+    >>> result = analyze_first_shock(
+    ...     pressure=data.ion_pressure + data.rad_pressure,
+    ...     zone_boundaries=data.zone_boundaries,
+    ...     density=data.density,
+    ...     time=data.time,
+    ...     ablator_outer_zone=data.region_interfaces_indices[0, -1] - 1,
+    ...     fuel_inner_zone=data.region_interfaces_indices[0, -2],
+    ... )
+    >>> print(f"Breakout time:     {result['breakout_time_ns']:.3f} ns")
+    >>> print(f"Breakout pressure: {result['breakout_pressure_Gbar']:.1f} Gbar")
+    >>> print(f"Breakout Mach:     {result['breakout_mach']:.1f}")
+    """
+    n_times = len(time)
+
+    shock_radius   = np.full(n_times, np.nan)
+    P_ratio        = np.full(n_times, np.nan)
+    P_jump_Gbar    = np.full(n_times, np.nan)
+    mach_number    = np.full(n_times, np.nan)
+    density_jump   = np.full(n_times, np.nan)
+    shock_pressure_Gbar = np.full(n_times, np.nan)
+
+    # Zone center radii at each timestep
+    zone_centers_all = 0.5 * (zone_boundaries[:, :-1] + zone_boundaries[:, 1:])
+
+    for i in range(n_times):
+        # Search only within the ablator (zones up to ablator_outer_zone)
+        p_slice  = pressure[i, search_inner_zone:ablator_outer_zone + 1]
+        zb_slice = zone_boundaries[i, search_inner_zone:ablator_outer_zone + 2]
+
+        shocks = identify_shocks(
+            p_slice, zb_slice,
+            dP_dr_threshold=dP_dr_threshold,
+            smoothing_sigma=smoothing_sigma,
+        )
+
+        if not shocks:
+            continue
+
+        # First shock = outermost (largest radius)
+        first = max(shocks, key=lambda s: s['radius'])
+
+        shock_radius[i] = first['radius']
+        pr = first['P_ratio']
+        P_ratio[i] = pr
+        P_jump_Gbar[i] = first['P_jump'] * 1e-8  # J/cm³ -> Gbar
+
+        # Post-shock absolute pressure [Gbar]
+        # find zone nearest shock radius
+        zc = zone_centers_all[i, :ablator_outer_zone + 1]
+        nearest = int(np.argmin(np.abs(zc - first['radius'])))
+        shock_pressure_Gbar[i] = pressure[i, nearest] * 1e-8
+
+        # Rankine-Hugoniot
+        pr = max(pr, 1.0 / pr) if pr > 0 else pr  # inward shock: compressed side at lower radius
+        P_ratio[i] = pr
+        if pr > 1.0:
+            m2 = ((gamma + 1.0) * pr + (gamma - 1.0)) / (2.0 * gamma)
+            if m2 > 0:
+                mach_number[i] = np.sqrt(m2)
+                density_jump[i] = ((gamma + 1.0) * m2) / ((gamma - 1.0) * m2 + 2.0)
+
+    # Shock velocity: d(r_shock)/dt using np.gradient (central differences)
+    # Only where shock_radius is valid
+    valid = ~np.isnan(shock_radius)
+    shock_velocity = np.full(n_times, np.nan)
+    if np.sum(valid) >= 2:
+        t_valid = time[valid]
+        r_valid = shock_radius[valid]
+        v_valid = np.gradient(r_valid, t_valid)  # cm/ns
+        shock_velocity[valid] = v_valid
+
+    # Breakout detection: shock radius crosses below fuel/ablator interface radius
+    # Interface radius = zone boundary at fuel_inner_zone node index
+    breakout_time_ns       = np.nan
+    breakout_pressure_Gbar = np.nan
+    breakout_mach          = np.nan
+
+    for i in range(n_times):
+        if np.isnan(shock_radius[i]):
+            continue
+        interface_radius = zone_boundaries[i, fuel_inner_zone]
+        if shock_radius[i] <= interface_radius:
+            breakout_time_ns       = time[i]
+            breakout_pressure_Gbar = shock_pressure_Gbar[i]
+            breakout_mach          = mach_number[i] if not np.isnan(mach_number[i]) else np.nan
+            break
+
+    return {
+        'time':                  time,
+        'shock_radius':          shock_radius,
+        'shock_velocity':        shock_velocity,
+        'P_ratio':               P_ratio,
+        'P_jump_Gbar':           P_jump_Gbar,
+        'mach_number':           mach_number,
+        'density_jump':          density_jump,
+        'shock_pressure_Gbar':   shock_pressure_Gbar,
+        'breakout_time_ns':      breakout_time_ns,
+        'breakout_pressure_Gbar': breakout_pressure_Gbar,
+        'breakout_mach':         breakout_mach,
+    }
