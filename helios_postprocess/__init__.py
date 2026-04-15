@@ -75,6 +75,7 @@ from .burn_averaged_metrics import (
 from . import energetics
 from . import neutron_downscatter
 from . import pressure_gradients
+from . import adiabat_history
 
 # RHW parser (optional — only needed if .rhw files are available)
 try:
