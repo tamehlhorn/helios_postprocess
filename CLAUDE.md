@@ -280,23 +280,24 @@ Keys starting with `_` are treated as comments.
 - Unablated fuel: 0.1262 (12.6%), Unablated ablator: 0.000 (all CH ablated)
 - Stagnated fuel: 0.1219, Imploded DT: ~0.60 mg
 
-### VI_6 Reference Values (work in progress -- laser deposition over-ablating target)
+### VI_6 Reference Values (updated April 2026 -- postprocessor fixes applied)
 - Laser energy: 3.383 MJ (absorbed); published design is 4.0 MJ
 - Stagnation time: 14.630 ns (min HS radius = 0.0046 cm)
 - Peak density: 221.84 g/cc (at t = 14.700 ns)
 - Bang time: 14.670 ns
 - Hot spot pressure: 88.20 Gbar
-- Stagnation CR: 41.1 (R0=0.1890 cm, R_hs=0.0046 cm)
+- Stagnation CR: 41.1 (R0=0.1890 cm, R_hs=0.0046 cm); published 20.1 uses shell mid-radius
 - In-flight CR: 2.49 (R0=0.1890 cm, Rf=0.0759 cm at peak v)
-- Peak implosion velocity: 763.1 km/s (published 410 km/s -- over-ablation)
+- Peak implosion velocity: 579.0 km/s (published 410 km/s -- +41% over-drive)
 - In-flight KE: 311.6 kJ, Hydro efficiency: 9.2%
 - IFAR: 18.1 (density-based, rho > rho_peak/e)
-- Adiabat: 1.13 (cold fuel at peak v_imp); published 6.0 -- different target variant
+- Adiabat: 0.75 (cold fuel at peak v, rho>rho0 mask); published 6.0
 - Fusion yield: 28.811 MJ, Target gain: 8.516
 - Burn-averaged: T=29.9 keV, P=340 Gbar, rhoR=0.88 g/cm2
 - Initial DT mass: 3.709 mg, Initial ablator mass: 2.548 mg
 - Unablated fuel: 0.5771 (57.7%), Unablated ablator: 0.000 (all CD ablated)
 - Imploded DT: 2.14 mg (published 3.00 mg -- energy/ablation difference)
+- NOTE: Adiabat fix (rho>rho0 density mask) validated April 2026; PDD_9 gives 3.03 vs 3.00
 
 ## Simulation Paths
 
