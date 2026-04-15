@@ -481,7 +481,13 @@ class ICFAnalyzer:
                 alpha = p_Mbar / p_fermi
                 alpha[~np.isfinite(alpha)] = 0.0
 
-            self.data.adiabat_mass_averaged_ice = np.average(alpha, weights=mass)
+            # Exclude hot-spot gas zones (rho < rho0) -- these are not cold fuel
+            cold_mask = rho >= rho0
+            if np.any(cold_mask):
+                self.data.adiabat_mass_averaged_ice = np.average(
+                    alpha[cold_mask], weights=mass[cold_mask])
+            else:
+                self.data.adiabat_mass_averaged_ice = np.average(alpha, weights=mass)
             logger.info(f"Mass-averaged adiabat (cold fuel, t={self.data.time[eval_idx]:.2f} ns): "
                         f"{self.data.adiabat_mass_averaged_ice:.2f}")
 

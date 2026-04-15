@@ -155,13 +155,15 @@ def compute_adiabat_history(
                 alpha_zones = p_Mbar / p_fermi
                 alpha_zones[~np.isfinite(alpha_zones)] = np.nan
 
-            valid = np.isfinite(alpha_zones) & (mass > 0)
+            # Exclude hot-spot gas zones (rho < rho0) -- not cold fuel
+            cold_mask = rho >= rho0
+            valid = np.isfinite(alpha_zones) & (mass > 0) & cold_mask
             if not np.any(valid):
                 continue
 
             adiabat[i]     = np.average(alpha_zones[valid], weights=mass[valid])
-            adiabat_min[i] = np.nanmin(alpha_zones)
-            adiabat_max[i] = np.nanmax(alpha_zones)
+            adiabat_min[i] = np.nanmin(alpha_zones[valid])
+            adiabat_max[i] = np.nanmax(alpha_zones[valid])
             P_mean_Gbar[i] = np.average(p_tot[valid] * 1e-8, weights=mass[valid])
             rho_mean[i]    = np.average(rho[valid], weights=mass[valid])
 
