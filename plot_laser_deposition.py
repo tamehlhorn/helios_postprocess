@@ -78,7 +78,8 @@ for k, (idx, tt, col, ls, al) in enumerate(zip(
 
 # Mark initial region boundaries
 for col_idx, node_col in enumerate(range(ri.shape[1])):
-    r_bnd_um = zbnd[0, int(ri[0, col_idx])] * 1e4
+    node = min(int(ri[0, col_idx]), zbnd.shape[1]-1)
+    r_bnd_um = zbnd[0, node] * 1e4
     lbl_names = ['HS / vapor', 'DT ice', 'foam', 'CH skin']
     ax1.axvline(r_bnd_um, color='gray', lw=0.7, ls=':', alpha=0.5)
     ax1.text(r_bnd_um + 5, ax1.get_ylim()[1] if ax1.get_ylim()[1] > 0 else 1,
@@ -109,7 +110,8 @@ for k, (idx, tt, col, ls, al) in enumerate(zip(
 
 # Mark region boundaries at reference time
 for col_idx in range(ri.shape[1]):
-    r_bnd_um = zbnd[0, int(ri[0, col_idx])] * 1e4
+    node = min(int(ri[0, col_idx]), zbnd.shape[1]-1)
+    r_bnd_um = zbnd[0, node] * 1e4
     ax2.axvline(r_bnd_um, color='gray', lw=0.7, ls=':', alpha=0.5)
 
 ax2.set_xlabel('Radius (µm)', fontsize=11)
@@ -151,7 +153,8 @@ ax3.grid(True, alpha=0.25)
 # Re-annotate region boundaries with correct ylim
 ymax1 = ax1.get_ylim()[1]
 for col_idx in range(ri.shape[1]):
-    r_bnd_um = zbnd[0, int(ri[0, col_idx])] * 1e4
+    node = min(int(ri[0, col_idx]), zbnd.shape[1]-1)
+    r_bnd_um = zbnd[0, node] * 1e4
     lbl_names = ['HS bnd', 'ice bnd', 'foam bnd', 'outer']
     ax1.text(r_bnd_um + 5, ymax1 * 0.95,
              lbl_names[col_idx], fontsize=7, color='gray', rotation=90, va='top')
