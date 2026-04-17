@@ -162,6 +162,10 @@ class ICFRunData:
         self.peak_implosion_velocity: float = 0.0  # km/s
         self.ifar: float = 0.0                      # in-flight aspect ratio at peak v_imp
         self.adiabat_mass_averaged_ice: float = 0.0
+        self.shock_breakout_time_ns: float = 0.0     # ns  (first shock exits DT ice into hot spot)
+        self.shock_breakout_pressure_Gbar: float = 0.0  # Gbar (post-shock pressure at breakout)
+        self.shock_breakout_mach: float = 0.0        # Mach number at breakout
+        self.shock_foot_pressure_Gbar: float = 0.0   # Gbar (peak pressure in DT ice at foot end)
 
         # Critical density tracking (populated by ICFAnalyzer)
         self.critical_density_value: float = 0.0

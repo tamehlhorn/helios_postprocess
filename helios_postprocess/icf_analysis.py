@@ -323,7 +323,10 @@ class ICFAnalyzer:
         
         # Compute adiabat
         self._compute_adiabat()
-        
+
+        # Compute first shock breakout in DT ice
+        self._compute_shock_breakout()
+
         # Track ablation front position
         self._track_ablation_front()
 
