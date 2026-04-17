@@ -127,12 +127,14 @@ for t_mark, label, col in [
     (t_stag,       'Stagnation',  'darkred'),
 ]:
     ax1.axvline(t_mark, color=col, lw=1, ls=':', alpha=0.7)
-    ax1.text(t_mark+0.05, ax1.get_ylim()[1]*0.92 if ax1.get_ylim()[1] > 0 else 8,
-             label, fontsize=7, color=col, rotation=90, va='top')
+    ax1.text(t_mark+0.05, 0.97, label, fontsize=7, color=col,
+             rotation=90, va='top', transform=ax1.get_xaxis_transform())
 
 ax1.set_xlabel('Time (ns)', fontsize=12)
 ax1.set_ylabel(r'Fuel adiabat $\alpha$', fontsize=12, color='royalblue')
 ax2.set_ylabel(r'Mean pressure in DT ice (Gbar)', fontsize=11, color='firebrick')
+ax2.set_yscale('log')
+ax2.set_ylim(1e-4, None)
 ax1.tick_params(axis='y', labelcolor='royalblue')
 ax2.tick_params(axis='y', labelcolor='firebrick')
 ax1.set_xlim(4.0, t_stag + 0.3)
