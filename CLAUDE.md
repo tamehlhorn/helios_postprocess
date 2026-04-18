@@ -439,3 +439,74 @@ Notes:
 - Xrage is the reference code (not LILAC)
 - Normalize energy comparisons carefully (3.383 vs 4.0 MJ)
 - CR_max issue: stagnation CR=41.1 vs published 20.1 -- may need cr_shell_stag metric
+
+## New Diagnostic Scripts (April 2026)
+
+| Script | Location | Purpose |
+|--------|----------|---------|
+| `plot_adiabat_shock.py` | repo root | Adiabat history + first shock plots for any target with DT ice layer |
+| `plot_laser_deposition.py` | repo root | Laser energy deposition spatial profile at multiple timesteps |
+| `helios_postprocessor_guide.docx` | repo root | User guide for collaborators |
+
+## Laser Coupling Analysis (April 2026)
+
+Key finding from EXODUS variable analysis on Olson_PDD_2021_01a:
+- LaserPwrOnTarget / LaserPwrDelivered = 1.0000 at every timestep -- confirmed zero geometric miss in Helios 1D
+- Absorption falls 99.3% -> 91% over pulse due to refraction (not geometry)
+- LaserEnTimeIntg shows deposition correctly tracks ablation surface throughout drive
+- Root cause of over-drive: absent 3D geometric miss + excess ablation pressure efficiency (flux limiter)
+
+Key EXODUS variables for laser coupling diagnostics:
+- LaserPwrOnTargetForBeam (425,1) -- geometric coupling efficiency numerator
+- LaserPwrDeliveredForBeam (425,1) -- delivered power
+- LaserEnTimeIntg (425,440) -- cumulative deposited energy per zone [J]
+- LaserPwrSrc (425,440) -- instantaneous power density per zone [W/cm3]
+- laserAttinuationCoeff (425,1,442) -- IB attenuation coefficient at zone boundaries [cm-1]
+- EnLaserDepositedTimeIntg (425,) -- cumulative absorbed energy [J]
+- LaserEnDeliveredTimeInt (425,) -- cumulative delivered energy [J]
+- logLambda_laser (425,441) -- Coulomb logarithm for absorption
+
+## Laser Intensity Reconstruction (NEXT SESSION -- not yet implemented)
+
+To reconstruct I(r,t) in W/cm2 from EXODUS data:
+
+Method 1 (exact): I(r) = LaserPwrSrc(r) / laserAttinuationCoeff(r)
+  -- exact because P_src = alpha * I by definition
+
+Method 2 (Beer-Lambert): I(r) = I_outer * exp(-integral_r^R_outer alpha dr')
+  where I_outer = LaserPwrOnTargetForBeam / (4*pi*R_outer^2)
+
+Note: group velocity v_g = c*sqrt(1 - ne/ncr) is implicit in alpha.
+Do NOT multiply LaserPwrSrc by density to get W/cm2 -- P_src is already W/cm3.
+Critical density for wavelength lam_um: ncr = 1.115e21 / lam_um^2  [cm-3]
+
+Script to write: plot_laser_intensity.py (companion to plot_laser_deposition.py)
+
+## Recommended Test Problems for Flux Limiter Scan (NEXT SESSION)
+
+1. Laser-heated foil: thin CH/DT planar geometry, flat-top pulse; measure ablation velocity vs f
+2. Shock timing in DT ice slab: foot pulse only; measure first shock breakout time vs f
+3. NIF Rev 5 CH ablator: 4-shock pulse, compare to Omega shock timing data (if available)
+4. Heat front propagation: pre-formed plasma, no laser; compare to analytic self-similar solution
+5. Full capsule flux scan: Olson_PDD_2021_01a at f=0.06, 0.08, 0.10, 0.12
+
+Key metric for each: adiabat at peak velocity, imploded DT mass, deposition profile width.
+If adiabat difference < 0.2 between f=0.06 and f=0.10, flux limiter alone cannot close the gap.
+
+## Olson 2021 vs 2026 Paper Distinction
+
+Olson 2021 (Phys. Plasmas 28, 122704): 230 TW peak, 1.44 MJ absorbed, 2D HYDRA, Table I
+  -- 3-region target (no separate DT ice in original), adiabat def uses DT+CH mixed EOS
+  -- Baseline run: Olson_PDD_2021_01a (added DT ice layer back for adiabat diagnostics)
+  -- Path: ~/Sims/Xcimer/Olson_PDD/Olson_PDD_2021_01a/Olson_PDD_2021_01a
+
+Olson 2026 (Nucl. Fusion 66, 026002): 329 TW peak, 2.15 MJ, igniting design
+  -- 4-region target with separate DT ice, standard Lindl adiabat convention
+  -- Best match run: PDD_26b (v=478 km/s, CR=29.6) -- CLOSED April 2026
+  -- Path: ~/Sims/Xcimer/Olson_PDD/Olson_PDD_<N>/Olson_PDD_<N>
+
+## Foam Target Adiabat Convention Warning
+
+Lindl DT convention (rho0=0.205 g/cc) is INVALID for DT-CH foam mixed ablator targets.
+Set adiabat=[0.0,0.0] in published JSON for any 3-region foam target (no DT ice layer).
+The published alpha=7.4 in Olson 2021 uses DT+CH mixed EOS cold curve (not implemented).
