@@ -248,6 +248,18 @@ def plot_report(data: dict,
     tidx = pick_timesteps(P_del, ntimes)
 
     # ---- Page 1: I(r) at selected times, both methods
+    # Compute a sensible y-range from the finite, physically meaningful data
+    # (exclude the exp(-tau) underflow region inside the critical surface).
+    finite_vals = np.concatenate([
+        I1[I1 > 1.0].ravel(),
+        I2[I2 > 1.0].ravel(),
+    ])
+    if finite_vals.size > 0:
+        ylim_hi = 10 ** np.ceil(np.log10(np.nanmax(finite_vals)) + 0.3)
+        ylim_lo = max(1.0, ylim_hi / 1e8)      # 8 decades of dynamic range
+    else:
+        ylim_lo, ylim_hi = 1e10, 1e17
+
     rows = 2
     cols = int(np.ceil(len(tidx) / rows))
     fig, axes = plt.subplots(rows, cols, figsize=(4.2 * cols, 7), sharey=True)
@@ -264,6 +276,7 @@ def plot_report(data: dict,
         ax.set_ylabel("I (W/cm$^2$)")
         ax.set_title(f"t = {time_ns[ti]:.2f} ns,  "
                      f"P = {P_del[ti]/1e12:.1f} TW")
+        ax.set_ylim(ylim_lo, ylim_hi)
         ax.grid(True, which="both", alpha=0.3)
         ax.legend(fontsize=8, loc="lower right")
     # hide unused axes
@@ -272,18 +285,37 @@ def plot_report(data: dict,
     fig.suptitle(f"Laser intensity reconstruction   (lambda = {lam_um} um)")
     fig.tight_layout()
 
-    # ---- Page 2: time history of I at critical surface and at R_out
+    # ---- Page 2: time history of I at critical surface and peak coronal I
     fig2, ax2 = plt.subplots(figsize=(10, 5.5))
-    ax2.semilogy(time_ns, I_outer, lw=1.6, ls="--", label=r"$I_{\rm outer}$ (incident)")
+    ax2.semilogy(time_ns, I_outer, lw=1.6, ls="--",
+                 label=r"$I_{\rm outer}$ (incident)")
+
+    # Peak I (Method 2) at each time -- "peak coronal intensity" history
+    I_peak_t = np.full(len(time_ns), np.nan)
+    for t in range(len(time_ns)):
+        row = I2[t]
+        mask = np.isfinite(row) & (row > 0)
+        if mask.any():
+            I_peak_t[t] = np.nanmax(row[mask])
+    ax2.semilogy(time_ns, I_peak_t, lw=1.8, color="C2",
+                 label="peak coronal I (Method 2)")
+
     if r_crit is not None:
         I_crit_t = np.full(len(time_ns), np.nan)
         for t in range(len(time_ns)):
             if np.isfinite(r_crit[t]):
-                row = I2[t]
-                mask = np.isfinite(row) & (row > 0)
-                if mask.any():
-                    I_crit_t[t] = np.interp(r_crit[t], zcen[t, mask], row[mask])
-        ax2.semilogy(time_ns, I_crit_t, lw=1.8, label="I at critical surface")
+                # Find the zone index matching r_crit and read I2 there directly.
+                # Avoid np.interp across the exp(-tau) cliff at r_crit.
+                idx = int(np.argmin(np.abs(zcen[t] - r_crit[t])))
+                # Step outward by one zone if we landed in the opaque region
+                while idx < I2.shape[1] - 1 and not (np.isfinite(I2[t, idx])
+                                                      and I2[t, idx] > 0):
+                    idx += 1
+                if np.isfinite(I2[t, idx]) and I2[t, idx] > 0:
+                    I_crit_t[t] = I2[t, idx]
+        ax2.semilogy(time_ns, I_crit_t, lw=1.8, color="C1",
+                     label=r"I at $r_{\rm crit}$ (first transparent zone)")
+
     ax2.set_xlabel("time (ns)")
     ax2.set_ylabel("I (W/cm$^2$)")
     ax2.set_title("Laser intensity history")
@@ -354,8 +386,26 @@ def main(argv=None):
     if data["ne"] is not None:
         r_crit, ncr = find_critical_radius(data["ne"], data["zcen"],
                                            args.wavelength_um)
-        print(f"[crit]  lambda = {args.wavelength_um} um  ->  "
-              f"ncr = {ncr:.3e} cm^-3")
+        print(f"[crit]  from NumElecDensity, lambda = {args.wavelength_um} um  "
+              f"->  ncr = {ncr:.3e} cm^-3")
+    else:
+        # Fallback: use the innermost non-opaque zone as the critical-surface
+        # proxy. Helios flags opaque zones (past r_crit) with alpha = 1e30,
+        # which we clip to 1e6 cm^-1 in read_exodus. So the boundary between
+        # transparent and opaque is the r_crit proxy.
+        alpha = data["alpha_zone"]
+        zcen_arr = data["zcen"]
+        nt = alpha.shape[0]
+        r_crit = np.full(nt, np.nan)
+        OPAQUE_FLOOR = 9.0e5
+        for t in range(nt):
+            transparent = np.where(alpha[t] < OPAQUE_FLOOR)[0]
+            if transparent.size > 0:
+                # Innermost transparent zone = boundary with opaque region
+                r_crit[t] = zcen_arr[t, int(transparent.min())]
+        ncr = N_CR_COEFF / (args.wavelength_um ** 2)
+        print(f"[crit]  fallback from alpha sentinel (NumElecDensity not found) "
+              f"-> ncr = {ncr:.3e} cm^-3")
 
     print(f"[plot]  {args.output}")
     plot_report(data, I1, I2, I_outer, r_crit, ncr,
