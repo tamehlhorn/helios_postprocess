@@ -149,12 +149,36 @@ def read_exodus(exo_path: str) -> dict:
 
 def intensity_method1(pwr_src: np.ndarray, alpha_zone: np.ndarray) -> np.ndarray:
     """
-    I = P_src / alpha, masked to NaN where alpha <= 0 or where alpha is at the
-    opaque-sentinel ceiling (zones the laser cannot reach).
+    I = P_src / alpha, masked to NaN in zones where the ratio is not
+    physically meaningful:
+      - alpha <= 0 (no absorption mechanism)
+      - alpha at the opaque-sentinel ceiling (laser cannot reach)
+      - alpha or P_src too small to carry useful signal (numerical noise
+        in tenuous outer corona where both are tiny)
+
+    The noise filter requires both alpha and P_src to be at least 1% of
+    their respective maxima within the laser-active region. Zones where
+    just one of them is tiny, or where both are near the floor, get
+    masked to NaN so they don't pollute the plot with spurious values.
     """
-    OPAQUE_FLOOR = 0.9e6   # matches ALPHA_MAX used when clipping in read_exodus
+    OPAQUE_FLOOR = 0.9e6
     with np.errstate(divide="ignore", invalid="ignore"):
-        valid = (alpha_zone > 0.0) & (alpha_zone < OPAQUE_FLOOR)
+        # Per-timestep maxima for thresholding
+        alpha_active = alpha_zone.copy()
+        alpha_active[alpha_active >= OPAQUE_FLOOR] = 0.0
+        alpha_max_t = np.nanmax(alpha_active, axis=1, keepdims=True)
+        pwr_max_t = np.nanmax(pwr_src, axis=1, keepdims=True)
+
+        # Avoid division by zero in threshold check
+        alpha_thresh = np.where(alpha_max_t > 0, 0.01 * alpha_max_t, 0.0)
+        pwr_thresh = np.where(pwr_max_t > 0, 0.01 * pwr_max_t, 0.0)
+
+        valid = (
+            (alpha_zone > 0.0)
+            & (alpha_zone < OPAQUE_FLOOR)
+            & (alpha_zone > alpha_thresh)
+            & (pwr_src > pwr_thresh)
+        )
         I = np.where(valid, pwr_src / alpha_zone, np.nan)
     return I
 
@@ -321,6 +345,19 @@ def plot_report(data: dict,
     ax2.set_title("Laser intensity history")
     ax2.grid(True, which="both", alpha=0.3)
     ax2.legend()
+    # Clip y-axis to physically meaningful range (I_outer and I_peak_t).
+    # Avoid letting any rogue zone near the critical surface drag the scale
+    # to ~1e-300 from exp(-tau) underflow.
+    y_candidates = []
+    for arr in (I_outer, I_peak_t):
+        a = arr[np.isfinite(arr) & (arr > 0)]
+        if a.size > 0:
+            y_candidates.append(a)
+    if y_candidates:
+        all_y = np.concatenate(y_candidates)
+        y_hi = 10 ** np.ceil(np.log10(np.nanmax(all_y)) + 0.3)
+        y_lo = max(1.0, y_hi / 1e8)
+        ax2.set_ylim(y_lo, y_hi)
     fig2.tight_layout()
 
     # ---- Page 3: method cross-check, I1/I2 at a representative time
@@ -389,23 +426,37 @@ def main(argv=None):
         print(f"[crit]  from NumElecDensity, lambda = {args.wavelength_um} um  "
               f"->  ncr = {ncr:.3e} cm^-3")
     else:
-        # Fallback: use the innermost non-opaque zone as the critical-surface
-        # proxy. Helios flags opaque zones (past r_crit) with alpha = 1e30,
-        # which we clip to 1e6 cm^-1 in read_exodus. So the boundary between
-        # transparent and opaque is the r_crit proxy.
+        # Fallback strategies for locating the critical surface when
+        # NumElecDensity is not in the EXODUS file:
+        #   (a) outermost opaque zone + 1 (works when 1e30 sentinels tag a layer
+        #       inside the critical surface)
+        #   (b) if no sentinels found, use the innermost zone with significant
+        #       laser deposition -- P_src peaks at the absorption layer which
+        #       sits just outside r_crit.
         alpha = data["alpha_zone"]
+        pwr_src = data["laser_pwr_src"]
         zcen_arr = data["zcen"]
-        nt = alpha.shape[0]
+        nt, nz = alpha.shape
         r_crit = np.full(nt, np.nan)
         OPAQUE_FLOOR = 9.0e5
         for t in range(nt):
-            transparent = np.where(alpha[t] < OPAQUE_FLOOR)[0]
-            if transparent.size > 0:
-                # Innermost transparent zone = boundary with opaque region
-                r_crit[t] = zcen_arr[t, int(transparent.min())]
+            opaque = np.where(alpha[t] > OPAQUE_FLOOR)[0]
+            if opaque.size > 0:
+                idx = int(opaque.max()) + 1    # first zone OUTSIDE opaque region
+                if idx < nz:
+                    r_crit[t] = zcen_arr[t, idx]
+                    continue
+            # Strategy (b): use innermost zone with significant deposition
+            p = pwr_src[t]
+            if p.max() > 0:
+                active = np.where(p > 0.01 * p.max())[0]
+                if active.size > 0:
+                    r_crit[t] = zcen_arr[t, int(active.min())]
         ncr = N_CR_COEFF / (args.wavelength_um ** 2)
-        print(f"[crit]  fallback from alpha sentinel (NumElecDensity not found) "
-              f"-> ncr = {ncr:.3e} cm^-3")
+        n_found = np.isfinite(r_crit).sum()
+        print(f"[crit]  fallback from alpha sentinel / P_src peak "
+              f"({n_found}/{nt} timesteps resolved)")
+        print(f"[crit]  ncr(lambda={args.wavelength_um} um) = {ncr:.3e} cm^-3")
 
     print(f"[plot]  {args.output}")
     plot_report(data, I1, I2, I_outer, r_crit, ncr,
