@@ -95,10 +95,15 @@ def read_exodus(exo_path: str) -> dict:
             P_on_target = P_on_target[:, 0]
             P_delivered = P_delivered[:, 0]
 
-        try:
-            ne = np.array(ds.variables["NumElecDensity"][:])
-        except KeyError:
-            ne = None
+        # Electron density: Helios writes this as 'elec_density' (lowercase,
+        # units '# per cm3'). Legacy/alternate names kept as fallbacks in case
+        # Helios variant or older build uses a different convention.
+        ne = None
+        for ne_name in ("elec_density", "NumElecDensity", "ElecDensity",
+                        "electron_density"):
+            if ne_name in ds.variables:
+                ne = np.array(ds.variables[ne_name][:])
+                break
 
     # Derived
     nt, nzone_p1 = zbnd.shape
@@ -418,7 +423,7 @@ def main(argv=None):
     if data["ne"] is not None:
         r_crit, ncr = find_critical_radius(data["ne"], data["zcen"],
                                            args.wavelength_um)
-        print(f"[crit]  from NumElecDensity, lambda = {args.wavelength_um} um  "
+        print(f"[crit]  from elec_density, lambda = {args.wavelength_um} um  "
               f"->  ncr = {ncr:.3e} cm^-3")
     else:
         # Fallback strategies for locating the critical surface when
