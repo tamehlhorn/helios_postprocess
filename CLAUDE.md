@@ -338,7 +338,7 @@ drive multiplier. Reference pulse: foot ~23-25 TW (0-5 ns), ramp 5-9 ns, peak ~3
   laser-coupling diagnostics.
 
 #### Critical-surface trajectory (measured via plot_laser_intensity.py, April 2026)
-Using the `att < 9e5` fallback (NumElecDensity not in VI_6.exo):
+Using `elec_density` crossing (primary method, confirmed April 2026):
 
 | t (ns) | P (TW) | r_crit (um) | R_outer (cm) | R_out/r_crit |
 |---|---|---|---|---|
@@ -375,6 +375,21 @@ scripts that go straight to the .exo file.
 | `zone_boundaries` | (nt, nzone+1) | cm | Zone boundary radii. Internal alias: `zbnd` |
 | `radius_squared` | (nt, nzone+1) | cm^2 | Redundant with `zone_boundaries` |
 | `zone_mass` | (nt, nzone) | g | Per-zone mass (Lagrangian, time-constant) |
+
+### Plasma state
+| EXODUS name | Shape | Units | Notes |
+|---|---|---|---|
+| `elec_density` | (nt, nzone) | # per cm^3 | Electron number density. Use for n_crit crossing. |
+| `ion_density` | (nt, nzone) | # per cm^3 | Ion number density |
+| `mean_charge` | (nt, nzone) | dimensionless | Zbar; self-consistency: ne ~= Zbar * ni |
+| `mass_density` | (nt, nzone) | g per cm^3 | Internal alias: `rho` |
+| `elec_temperature` | (nt, nzone) | eV | Electron temperature |
+| `elec_pressure` | (nt, nzone) | J per cm^3 | Electron pressure (x 1e-8 for Gbar) |
+
+NOTE: the variable name is lowercase `elec_density`, NOT `NumElecDensity`.
+An older CLAUDE.md note claimed `NumElecDensity` was absent from Xcimer EXODUS
+files; that name was never correct. `elec_density` is present in all Helios
+outputs verified to date (PDD_9, VI_6, PDD_26b).
 
 ### Laser
 | EXODUS name | Shape | Units | Notes |
@@ -423,7 +438,7 @@ scripts that go straight to the .exo file.
 | Zone widths | `np.diff(zbnd, axis=1)` |
 | Critical density | `n_crit = 1.115e21 / lambda_um^2`  [cm^-3] |
 | Incident intensity | `I_outer = LaserPwrOnTargetForBeam / (4*pi*R_outer^2)` |
-| Critical radius | Innermost r where `NumElecDensity >= n_crit`, OR innermost r where `att < 1e20` |
+| Critical radius | Outermost r where `elec_density >= n_crit` (primary); OR first zone outside `att >= 1e20` opaque sentinel (fallback) |
 
 ### Timestep selection for laser diagnostics
 EXODUS output is **not uniformly spaced in time**. Helios concentrates timesteps
@@ -513,6 +528,43 @@ disagreement is diagnostic:
 - tau at peak-I location ~= 0.44 -- ~35% absorbed before reaching critical surface
 - Geometric amplification (R_out/r_crit)^2 ~= 17
 
+### Peak coronal intensity across targets (ne-based r_crit, April 2026)
+
+First three targets run with validated `elec_density` r_crit (not sentinel fallback):
+
+| Target | P_peak (TW) | I_outer (W/cm^2) | I_M2 peak (W/cm^2) | I at r_crit (W/cm^2) | I/TW at r_crit |
+|---|---|---|---|---|---|
+| Olson_PDD_9 | 315 | 5.07e13 | 2.05e15 | 2.05e15 | 6.50e12 |
+| Olson_PDD_26b | 329 | 4.03e13 | 1.55e15 | 1.46e15 | 4.45e12 |
+| VI_6 (HDD) | 610 | 6.63e13 | 2.83e15 | 2.65e15 | 4.35e12 |
+
+Two effects visible:
+
+**Beam-geometry effect (PDD_9 vs PDD_26b):** Both are Olson PDD targets at
+essentially the same peak power, but PDD_9 (pencil beam: cone=1 deg, spot=0)
+delivers 1.46x higher I/TW at r_crit than PDD_26b (realistic NIF PDD: cone=20 deg,
+spot=0.16 cm Gaussian). Normal-incidence pencil-beam rays deposit all their power
+concentrated at the strict critical surface; oblique cone rays spread deposition
+and turn at ne = n_crit * cos^2(theta). The diagnostic is sensitive to a real
+geometric difference between the two laser-source specs, validating the
+ne-based method.
+
+**Turning-point offset (M2-peak vs at-r_crit):** Gap is 0% for PDD_9 (pencil
+beam, M2 peak coincides with strict r_crit), 6% for PDD_26b (cone=20 deg),
+7% for VI_6 (realistic cone). Consistent with oblique-incidence rays turning
+slightly outside strict critical density; M2-peak sits just outside r_crit
+where (R_out/r)^2 geometric amplification hasn't yet been killed by exp(-tau)
+at the turning region.
+
+**HDD coronal deposition null result:** PDD_26b and VI_6 have statistically
+identical I/TW at r_crit (4.45e12 vs 4.35e12 W/cm^2/TW, 2% agreement).
+Per-incident-watt coronal coupling is the same for PDD and HDD geometries at
+lambda=0.351 um. HDD over-drive is therefore NOT in the coronal deposition
+channel -- absorption per delivered watt is consistent between drive types.
+The over-drive has to be downstream, in ablation-pressure conversion or
+thermal conduction structure. Consistent with the existing note that hydro
+efficiency is locked near 10% regardless of geometry.
+
 ### Diagnostic Scripts (repo root)
 | Script | Purpose |
 |---|---|
@@ -532,22 +584,29 @@ python3 ~/helios_postprocessor/plot_laser_intensity.py \
 
 ### Critical-surface location as cross-check
 Two independent ways to locate the critical surface:
-1. Electron density: innermost r where `NumElecDensity >= n_crit`
-2. Attenuation: innermost r where `att < 1e20` (i.e. not an opaque-sentinel zone)
+1. Electron density (primary): outermost r where `elec_density >= n_crit`
+2. Attenuation sentinel (fallback): first zone outside opaque-sentinel region (`att >= 1e20`)
 
-These should agree to within one zone. If they don't, that points at either (a) a
-subtle issue in how Helios handles the critical-surface turning point, or (b) a
-non-LTE electron population where the simple plasma-frequency cutoff doesn't apply.
+Sentinel fallback validated against `elec_density` method on Olson_PDD_9:
+agreement within 1 zone during laser-on (median offset -0.50 zones,
+max 2.31 zones at t=2.2 ns during early corona formation before a clean
+coronal shelf is established). Safe to use as a fallback when
+`elec_density` is not available, though no Helios output verified to date
+lacks it. Post-laser-off (t > ~13 ns for PDD_9), r_crit from EITHER
+method is NOT physically meaningful -- sentinel field is stale and ne
+tracks disassembling stagnation region. Mask laser-on in any
+r_crit-trajectory plot.
 
 ### Script implementation lessons (April 2026)
 Hard-won during debugging the April 2026 VI_6 run:
 
-1. **r_crit fallback when NumElecDensity is absent**: use `opaque.max() + 1`
-   (outermost opaque zone, step one outward), NOT `transparent.min()`. The 1e30
-   sentinel tags only the turning-point region, not every inner zone, so the
-   "innermost transparent zone" is some arbitrary central zone well below r_crit.
-   VI_6 observed failure: `transparent.min()` returned 0.026 cm vs. actual
-   r_crit of 0.2 cm (8x off).
+1. **r_crit primary method is `elec_density`**; sentinel fallback (`att < 1e20`)
+   is a safe substitute. In the fallback, use `opaque.max() + 1` (outermost
+   opaque zone, step one outward), NOT `transparent.min()`. The 1e30 sentinel
+   tags only the turning-point region, not every inner zone, so the
+   "innermost transparent zone" is some arbitrary central zone well below
+   r_crit. VI_6 observed failure (before `elec_density` was loaded correctly):
+   `transparent.min()` returned 0.026 cm vs. actual r_crit of 0.2 cm (8x off).
 
 2. **Method 1 (P_src/alpha) filter**: alpha > 1% of per-timestep max alpha.
    Without this filter, M1 returns 10^18+ W/cm^2 in the tenuous outer corona
