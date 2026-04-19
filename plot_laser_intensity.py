@@ -153,31 +153,26 @@ def intensity_method1(pwr_src: np.ndarray, alpha_zone: np.ndarray) -> np.ndarray
     physically meaningful:
       - alpha <= 0 (no absorption mechanism)
       - alpha at the opaque-sentinel ceiling (laser cannot reach)
-      - alpha or P_src too small to carry useful signal (numerical noise
-        in tenuous outer corona where both are tiny)
+      - alpha < 1% of per-timestep maximum (tenuous outer corona where
+        both alpha and P_src are numerical noise)
 
-    The noise filter requires both alpha and P_src to be at least 1% of
-    their respective maxima within the laser-active region. Zones where
-    just one of them is tiny, or where both are near the floor, get
-    masked to NaN so they don't pollute the plot with spurious values.
+    In the outer corona where alpha is orders of magnitude below peak,
+    the ratio P_src/alpha becomes noise-dominated and can return
+    unphysical values (10^18+ W/cm^2). Filtering on alpha relative to
+    its per-timestep maximum keeps the absorbing-layer signal while
+    excluding the noisy far corona.
     """
     OPAQUE_FLOOR = 0.9e6
     with np.errstate(divide="ignore", invalid="ignore"):
-        # Per-timestep maxima for thresholding
         alpha_active = alpha_zone.copy()
         alpha_active[alpha_active >= OPAQUE_FLOOR] = 0.0
         alpha_max_t = np.nanmax(alpha_active, axis=1, keepdims=True)
-        pwr_max_t = np.nanmax(pwr_src, axis=1, keepdims=True)
-
-        # Avoid division by zero in threshold check
         alpha_thresh = np.where(alpha_max_t > 0, 0.01 * alpha_max_t, 0.0)
-        pwr_thresh = np.where(pwr_max_t > 0, 0.01 * pwr_max_t, 0.0)
 
         valid = (
             (alpha_zone > 0.0)
             & (alpha_zone < OPAQUE_FLOOR)
             & (alpha_zone > alpha_thresh)
-            & (pwr_src > pwr_thresh)
         )
         I = np.where(valid, pwr_src / alpha_zone, np.nan)
     return I

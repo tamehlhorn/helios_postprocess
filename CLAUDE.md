@@ -337,6 +337,30 @@ drive multiplier. Reference pulse: foot ~23-25 TW (0-5 ns), ramp 5-9 ns, peak ~3
   off. Always use `np.argmax(P_on_target)` to pick peak-drive timestep for
   laser-coupling diagnostics.
 
+#### Critical-surface trajectory (measured via plot_laser_intensity.py, April 2026)
+Using the `att < 9e5` fallback (NumElecDensity not in VI_6.exo):
+
+| t (ns) | P (TW) | r_crit (um) | R_outer (cm) | R_out/r_crit |
+|---|---|---|---|---|
+| 4.50 | 65 | 214 | 0.35 | 16 |
+| 6.40 | 65 | 209 | 0.45 | 22 |
+| 8.40 | 295 | 198 | 0.60 | 30 |
+| 10.30 | 610 | 176 | 0.80 | 45 |
+| 12.30 | 610 | 129 | 1.15 | 89 |
+| 14.30 | 560 | 64 | 1.50 | 234 |
+| 14.63 (stag) | 0 | ~46 | -- | -- |
+
+Critical surface shrinks 214 -> 64 um during drive (3.3x), then converges another
+1.4x to stagnation radius. Peak coronal intensity occurs at **laser turn-off**, not
+at peak power, because (R_out/r_crit)^2 grows faster than P_delivered falls.
+
+#### Confirmed intensity metrics (plot_laser_intensity.py, April 2026)
+- Peak I_outer                = 6.63e13 W/cm^2
+- Peak I (Method 2, max over t,r) = 2.83e15 W/cm^2 (at late-time r_crit)
+- Peak I at r_crit (time history peak) = 2.01e15 W/cm^2
+- These match the 0.22 cm snapshot analysis (6.3e14 at peak power) after
+  accounting for the late-time geometric convergence boost.
+
 ## EXODUS Variable Reference
 
 Real variable names as they appear in Helios EXODUS output, with array shapes and
@@ -515,6 +539,35 @@ These should agree to within one zone. If they don't, that points at either (a) 
 subtle issue in how Helios handles the critical-surface turning point, or (b) a
 non-LTE electron population where the simple plasma-frequency cutoff doesn't apply.
 
+### Script implementation lessons (April 2026)
+Hard-won during debugging the April 2026 VI_6 run:
+
+1. **r_crit fallback when NumElecDensity is absent**: use `opaque.max() + 1`
+   (outermost opaque zone, step one outward), NOT `transparent.min()`. The 1e30
+   sentinel tags only the turning-point region, not every inner zone, so the
+   "innermost transparent zone" is some arbitrary central zone well below r_crit.
+   VI_6 observed failure: `transparent.min()` returned 0.026 cm vs. actual
+   r_crit of 0.2 cm (8x off).
+
+2. **Method 1 (P_src/alpha) filter**: alpha > 1% of per-timestep max alpha.
+   Without this filter, M1 returns 10^18+ W/cm^2 in the tenuous outer corona
+   where both alpha (~1e-7 cm^-1) and P_src are noise-dominated. The 1% cutoff
+   keeps the absorbing-layer signal (where IB alpha is significant) and masks
+   the numerical-noise region.
+
+3. **Y-axis auto-scaling**: matplotlib's semilogy will span 300+ decades when
+   exp(-tau) underflows inside the opaque region (giving I ~= 10^-300 values).
+   Always clip with `ax.set_ylim(y_hi/1e8, y_hi)` using finite data only.
+
+4. **I-at-r_crit lookup**: use direct zone-index lookup, NOT np.interp across
+   the exp(-tau) cliff. np.interp produces garbage when interpolating a curve
+   that drops 280 decades in one zone.
+
+5. **Peak coronal intensity grows through the pulse**, not at peak power. The
+   (R_out/r_crit)^2 geometric factor accelerates as r_crit shrinks, outpacing
+   the drop in delivered power after peak. Relevant for parametric-instability
+   threshold analysis.
+
 
 
 ### Priority 1 -- cr_inflight (FIXED April 2026)
@@ -550,25 +603,47 @@ non-LTE electron population where the simple plasma-frequency cutoff doesn't app
 ### Priority 6 -- Laser diagnostic workstream (ACTIVE April 2026)
 Ongoing analysis using `plot_laser_intensity.py` and EXODUS direct access.
 
-Immediate next steps:
-1. **M1/M2 agreement on VI_6**: run full `plot_laser_intensity.py` on VI_6.exo,
-   examine page 3 (ratio plot). If M1/M2 != 1 in absorbing zones, investigate.
-2. **Critical-surface cross-check**: compare `att < 1e20` boundary vs
-   `NumElecDensity >= n_crit` boundary at peak power. Should agree within 1 zone.
-3. **Flux limiter scan (DT ice slab test problem)**: set up planar-equivalent
+**COMPLETED April 2026**:
+- VI_6 full pipeline: r_crit trajectory extracted, peak intensities confirmed
+  (I_outer 6.6e13, peak coronal 2.8e15, at r_crit 2.0e15 W/cm^2).
+- Script gotchas identified and fixed: r_crit fallback logic, M1 filter,
+  y-axis clipping. See Laser Intensity Diagnostics > Script lessons.
+
+**NEXT**:
+1. **Olson PDD comparison suite**: run plot_laser_intensity.py on three
+   targets to contrast with VI_6:
+   - Olson_PDD_9 (4-region igniting baseline, LILAC comparison target).
+     First check whether NumElecDensity is present -- if so, cross-check
+     the `att < 1e20` fallback against the direct ne-based r_crit.
+   - Olson_PDD_2021_01a (230 TW peak, 1.44 MJ, Olson 2021 paper baseline).
+     Lower intensity; direct comparison of deposition profile shape.
+   - Olson_PDD_26b (BEST MATCH PDD calibration, cone=20 deg).
+     Key comparison for HDD over-drive diagnosis: is peak I at r_crit
+     similar to VI_6 (=> flux-limiter signature) or different
+     (=> other physics in play)?
+
+2. **M1 vs M2 comparison across targets**: on VI_6 pages 1/3, Method 1 is
+   largely masked by the 1% filter leaving only a narrow band at r_crit.
+   Check whether M1/M2 ~= 1 holds for Olson targets too, and whether the
+   outer-corona M1 explosion observed in early VI_6 diagnostics (10^19
+   W/cm^2) is VI_6-specific or universal to Helios.
+
+3. **Critical-surface cross-check (if ne available)**: compare
+   `att < 1e20` r_crit vs `ne >= n_crit` r_crit on any target that has
+   NumElecDensity in EXODUS. Agreement to ~1 zone validates the fallback.
+
+4. **Flux limiter scan (DT ice slab test problem)**: set up planar-equivalent
    DT slab (R=0.5 cm, 100 um DT ice, 25 TW flat foot, burn off) at f = 0.06,
    0.08, 0.10, 0.12. Decision rule: if d(adiabat)/d(f) < 0.2 over f=[0.06, 0.10],
    flux limiter alone cannot close HDD adiabat gap and we pivot to EOS/empirical.
-4. **VI_6 at f=0.08**: HDD calibration run. Expect velocity DROP (not rise) and
+
+5. **VI_6 at f=0.08**: HDD calibration run. Expect velocity DROP (not rise) and
    modest adiabat rise if flux limiter is a useful lever for HDD geometry.
-5. **Olson PDD_2021_01a coupling analysis**: re-run `plot_laser_intensity.py`
-   on the 2021 baseline to compare intensity profiles vs VI_6 at peak power.
-   Target: quantify how much of the HDD over-drive is geometric coupling vs
-   ablation-physics efficiency.
 
 Longer-term:
 - Extend plot_laser_intensity.py with time-dependent view: I at r_crit(t), not
-  just spatial snapshots.
+  just spatial snapshots. (DONE April 2026 -- added peak coronal I and I-at-r_crit
+  to Page 2 of the PDF.)
 - Integrate I-profile output into ICFAnalyzer as an optional page in the main PDF.
 
 ## Dependencies
