@@ -267,6 +267,7 @@ drive multiplier. Reference pulse: foot ~23-25 TW (0-5 ns), ramp 5-9 ns, peak ~3
 | PDD_26a| 0.16 | 15 | Gaussian | 0.20 | — | 1226 | 87.2 | 130 | 102 | Local burn -- discard |
 | PDD_27 | 0.16 | 11 | Uniform | 5.00 | 0.5 | 73 | 10 | 0 | — | Focus too far + norm=0.5 bug |
 | PDD_28 | 0.02 | 35 | Uniform | 0.23 | 1.0 | ~1226 | 87.2 | 127 | 111 | Over-driven (peak v bug was active) |
+| DM_01b | 0.00 | 3.5 | Uniform | -2.50 | 1.0 | 405 | 90.9 | 1.58 | 1.56 | Inverted focus + narrow cone; matches LILAC v within 10%; 1.365 MJ drive |
 
 **Key findings:**
 - Hydro efficiency locked at ~10.5% regardless of geometry -- excess drive is in ablation physics
@@ -564,6 +565,44 @@ channel -- absorption per delivered watt is consistent between drive types.
 The over-drive has to be downstream, in ablation-pressure conversion or
 thermal conduction structure. Consistent with the existing note that hydro
 efficiency is locked near 10% regardless of geometry.
+
+NOTE (refined April 2026): the 4.45e12 vs 4.35e12 "cluster" is NOT a
+universal Helios property -- both PDD_26b and VI_6 use forward-focused
+realistic-cone geometry. DM_01b (cone=3.5 deg, d=-2.5 cm, inverted focus)
+gives I/TW at r_crit = 2.77e12 W/cm^2/TW, 38% below the cluster. Per-watt
+coronal coupling depends on beam geometry, not just drive type; the null
+result applies between targets with similar effective incidence angle.
+
+### Two paths to reference velocity (April 2026)
+
+DM_01b (inverted focus, d=-2.5 cm, cone=3.5 deg, 230 TW, 1.365 MJ) matches
+LILAC reference velocity (405 vs 370 km/s, +9.4%) via a different mechanism
+than PDD_26b (forward focus, d=0.20 cm, cone=20 deg, 329 TW, 2.15 MJ, matches
+470 km/s within 2%). DM_01b has LOWER coronal I/TW but HIGHER fractional
+absorption (91% vs 87%) -- diverging-beam geometry spreads absorption over
+a larger coronal volume, with longer ray paths at lower local intensity.
+
+Both runs hit reference velocity; both MISS reference ablation-physics
+metrics by the same rough amount (adiabat ~1.5 vs 7.4; IFAR ~3 vs 18;
+imploded DT ~0.60 vs 1.68 mg). The shared residual across two different
+geometric paths to velocity match is the strongest evidence to date that
+the ablation-physics deficit is not a laser-coupling issue. Flux limiter
+and EOS remain the primary calibration levers per existing HDD Calibration
+Setup notes.
+
+DM_01b also has a much larger turning-point offset (M2 peak / at-r_crit gap
+= 29%) than the forward-focused targets (0-7%). Effective local incidence
+angle -- not nominal cone -- drives the offset, consistent with rays
+fanning out over 2.5 cm before hitting plasma.
+
+Peak-coronal-intensity table (updated with DM_01b):
+
+| Target | Cone | Focus d | P_peak (TW) | I at r_crit (W/cm^2) | I/TW at r_crit | M2/r_crit gap |
+|---|---|---|---|---|---|---|
+| PDD_9 | 1 deg | 0 | 315 | 2.05e15 | 6.50e12 | 0% |
+| PDD_26b | 20 deg | 0.20 | 329 | 1.46e15 | 4.45e12 | 6% |
+| VI_6 | realistic | - | 610 | 2.65e15 | 4.35e12 | 7% |
+| DM_01b | 3.5 deg | -2.50 | 230 | 6.36e14 | 2.77e12 | 29% |
 
 ### Diagnostic Scripts (repo root)
 | Script | Purpose |
