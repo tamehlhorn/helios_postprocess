@@ -100,7 +100,7 @@ class ICFPlotter:
             # Laser/drive
             if self.data.laser_energy_deposited is not None:
                 self._plot_laser_deposition(pdf)
-        self._plot_laser_intensity(pdf)
+            self._plot_laser_intensity(pdf)
             if self.data.laser_power_delivered is not None:
                 self._plot_laser_power(pdf)
             
