@@ -130,6 +130,7 @@ def main(base_path: str, include_contours: bool = False):
 
     analyzer = ICFAnalyzer(data)
     analyzer.analyze_drive_phase()
+    analyzer.analyze_laser_intensity()
     analyzer.analyze_stagnation_phase()
     analyzer.analyze_burn_phase()
     analyzer.compute_performance_metrics()

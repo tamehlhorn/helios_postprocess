@@ -55,6 +55,92 @@ class ICFAnalyzer:
         self.data = data
         self.config = config or {}
         
+    def analyze_laser_intensity(self):
+        """
+        Reconstruct laser intensity I(r, t) and summary diagnostics.
+
+        Called after analyze_drive_phase so that the drive-phase logger
+        output (critical density, absorbed energy) precedes intensity
+        metrics in the run log.
+
+        Stores on self.data:
+          Scalars:
+            I_outer_peak, I_at_crit_peak, I_at_crit_at_peak_power,
+            I_peak_coronal, t_peak_power_ns, ncr_intensity
+          Histories (nt,):
+            r_crit_intensity_history, I_at_crit_history, I_outer_history
+          2D arrays (cached for plotter, not persisted):
+            self.data._laser_intensity_arrays dict
+
+        Graceful no-op with warning if required inputs absent.
+        """
+        from .laser_intensity import analyze_laser_intensity as _ali
+        import numpy as _np
+
+        logger.info("Analyzing laser intensity...")
+
+        wavelength_um = getattr(self.data, 'laser_wavelength_um', 0.351)
+        if not wavelength_um or wavelength_um <= 0:
+            wavelength_um = 0.351
+        result = _ali(self.data, wavelength_um=wavelength_um)
+
+        if result is None:
+            logger.warning("  Skipping: required inputs missing "
+                           "(laser_power_source, laser_attenuation_coeff, "
+                           "laser_power_on_target, or zone_boundaries).")
+            # Populate with None so downstream code can check cleanly
+            for k in ('I_outer_peak', 'I_at_crit_peak', 'I_at_crit_at_peak_power',
+                      'I_peak_coronal', 't_peak_power_ns', 'ncr_intensity',
+                      'r_crit_intensity_history', 'I_at_crit_history',
+                      'I_outer_history'):
+                setattr(self.data, k, None)
+            self.data._laser_intensity_arrays = None
+            return
+
+        # Scalars
+        self.data.I_outer_peak            = result['peak_I_outer']
+        self.data.I_at_crit_peak          = result['peak_I_at_crit']
+        self.data.I_at_crit_at_peak_power = result['I_at_crit_at_peak_power']
+        self.data.I_peak_coronal          = result['peak_I_coronal']
+        self.data.t_peak_power_ns         = result['t_peak_power_ns']
+        self.data.ncr_intensity           = result['ncr']
+
+        # Histories
+        self.data.r_crit_intensity_history = result['r_crit']
+        self.data.I_at_crit_history        = result['I_at_crit_vs_t']
+        self.data.I_outer_history          = result['I_outer']
+
+        # Cached 2D arrays for plotter (not persisted)
+        self.data._laser_intensity_arrays = dict(
+            I1=result['I1'],
+            I2=result['I2'],
+            alpha_zone=result['alpha_zone'],
+            r_crit=result['r_crit'],
+            I_peak_coronal_vs_t=result['I_peak_coronal_vs_t'],
+        )
+
+        # Report
+        logger.info(f"  Wavelength: {result['wavelength_um']:.3f} um  "
+                    f"(n_crit = {result['ncr']:.3e} cm^-3)")
+        t_pk = result['t_peak_power_ns']
+        if _np.isfinite(t_pk):
+            # Find r_crit at peak power for cross-check against drive-phase value
+            try:
+                t_idx = int(_np.argmin(_np.abs(self.data.time - t_pk)))
+                r_crit_at_peak = result['r_crit'][t_idx]
+                if _np.isfinite(r_crit_at_peak):
+                    logger.info(f"  r_crit at peak power (t={t_pk:.2f} ns): "
+                                f"{r_crit_at_peak:.4f} cm  "
+                                f"(cross-check vs drive-phase formula method)")
+            except Exception:
+                pass
+        logger.info(f"  Peak I_outer                    : "
+                    f"{result['peak_I_outer']:.3e} W/cm^2")
+        logger.info(f"  Peak I at critical surface      : "
+                    f"{result['peak_I_at_crit']:.3e} W/cm^2")
+        logger.info(f"  I at r_crit at peak laser power : "
+                    f"{result['I_at_crit_at_peak_power']:.3e} W/cm^2")
+
     def analyze_drive_phase(self):
         """Analyze drive: laser energy, absorption."""
         logger.info("Analyzing drive phase...")

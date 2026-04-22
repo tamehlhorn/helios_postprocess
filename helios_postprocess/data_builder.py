@@ -384,11 +384,13 @@ def build_run_data(
     # ------------------------------------------------------------------
     if data.laser_power_delivered is not None and data.laser_power_delivered.ndim > 1:
         data.laser_power_delivered = data.laser_power_delivered.squeeze()
+        if verbose:
+            logger.info(f"  ✓ laser_power_delivered      squeezed → {data.laser_power_delivered.shape}")
     if data.laser_power_on_target is not None and data.laser_power_on_target.ndim > 1:
         # (n_times, n_beam) -> (n_times,) by taking beam 0
         data.laser_power_on_target = data.laser_power_on_target[:, 0]
         if verbose:
-            logger.info(f"  ✓ laser_power_delivered      squeezed → {data.laser_power_delivered.shape}")
+            logger.info(f"  ✓ laser_power_on_target      squeezed → {data.laser_power_on_target.shape}")
 
     # ------------------------------------------------------------------
     # rad_pressure: non-ion pressure component
