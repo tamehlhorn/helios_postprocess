@@ -609,16 +609,25 @@ Peak-coronal-intensity table (updated with DM_01b):
 |---|---|
 | `plot_adiabat_shock.py` | Adiabat history + first shock plots (any target with DT ice layer) |
 | `plot_laser_deposition.py` | Laser energy deposition spatial profile at multiple timesteps |
-| `plot_laser_intensity.py` | I(r,t) reconstruction using Methods 1 & 2; 3-page PDF with cross-check |
 | `helios_postprocessor_guide.docx` | User guide for collaborators |
+
+*(`plot_laser_intensity.py` retired April 2026 -- fully integrated into pipeline; see `helios_postprocess/laser_intensity.py` and the `analyze_laser_intensity` phase in `ICFAnalyzer`.)*
 
 Standard usage (all scripts accept .exo path as first positional arg):
 ```bash
-python3 ~/helios_postprocessor/plot_laser_intensity.py \
+# Standalone diagnostic scripts (still supported):
+python3 ~/helios_postprocessor/plot_adiabat_shock.py \
   ~/Sims/Xcimer/Xcimer_Sims/D_Montgomery/VI_6/VI_6.exo
-python3 ~/helios_postprocessor/plot_laser_intensity.py \
-  ~/Sims/Xcimer/Olson_PDD/Olson_PDD_2021_01a/Olson_PDD_2021_01a.exo \
-  --wavelength_um 0.351 --ntimes 6
+python3 ~/helios_postprocessor/plot_laser_deposition.py \
+  ~/Sims/Xcimer/Olson_PDD/Olson_PDD_2021_01a/Olson_PDD_2021_01a.exo
+
+# Laser intensity now part of the main pipeline -- no separate script needed:
+python3 ~/helios_postprocessor/examples/run_analysis.py \
+  ~/Sims/Xcimer/Olson_PDD/Olson_PDD_26b_burn/Olson_PDD_26b_burn
+# produces <base>_report.pdf with 3 intensity pages,
+#          <base>_summary.txt with LASER INTENSITY section,
+#          <base>_comparison.pdf with intensity rows (if _published.json
+#            includes "I_at_crit_peak_Wcm2")
 ```
 
 ### Critical-surface location as cross-check
@@ -665,6 +674,56 @@ Hard-won during debugging the April 2026 VI_6 run:
    (R_out/r_crit)^2 geometric factor accelerates as r_crit shrinks, outpacing
    the drop in delivered power after peak. Relevant for parametric-instability
    threshold analysis.
+
+### Pipeline integration (April 2026 -- Task 2)
+
+All logic above lives in the automated pipeline. The standalone
+`plot_laser_intensity.py` has been retired; reconstruction runs as part
+of `run_analysis.py`.
+
+| Layer | Contribution |
+|---|---|
+| `data_builder.py` | Loads `laser_attenuation_coeff` + `laser_power_on_target` via `_VARIABLE_MAP`; squeezes beam axis with labeled log line |
+| `helios_postprocess/laser_intensity.py` | Module with `clean_attenuation`, `compute_method1`, `compute_method2`, `find_critical_radius_*`, `analyze_laser_intensity` entry point |
+| `ICFAnalyzer.analyze_laser_intensity()` | Called after `analyze_drive_phase`; populates scalars and histories on `data`; caches 2D arrays in `_laser_intensity_arrays` for the plotter |
+| `ICFPlotter._plot_laser_intensity()` | 3 PDF pages (log10 I(r,t) heatmap with r_crit overlay; P_laser + I histories; Method 1 vs 2 cross-check at peak power) |
+| `ICFOutputGenerator` | `LASER INTENSITY` section in `<name>_summary.txt`, between `LASER CONFIGURATION` and `EOS MODELS` |
+| `burn_averaged_metrics.py` | `I_at_crit_peak_Wcm2` and `I_grid_outer_peak_Wcm2` keys plumbed through `histories` -> `sim_metrics` -> `compare_with_published` |
+
+**Renamed attribute:** `I_outer_*` -> `I_grid_outer_*` throughout the
+pipeline code. The simulation grid extends well into vacuum (e.g., 0.8
+cm while the capsule outer radius is 0.2 cm), so `I = P / (4*pi*R_grid^2)`
+is much lower than intensity at the capsule / critical surface.
+`I at critical surface` remains the primary physical quantity;
+grid-outer is reported for audit purposes only. Inside
+`laser_intensity.py` the local variable is still named `I_outer` since
+it is the incident ray at the grid outer boundary (Method 2
+Beer-Lambert's starting point); all attributes, log messages, and
+summary output use `I_grid_outer`.
+
+**M1 filter change:** the old standalone script's threshold
+(`alpha > 0.01 * alpha_max_t`) cut at ~100 cm^-1 at the critical
+surface, masking the entire absorbing layer. Replaced with an absolute
+floor `ALPHA_MIN_M1 = 1e-2 cm^-1` in
+`helios_postprocess/laser_intensity.py`. Coronal-noise exclusion is
+preserved without losing the absorbing layer itself.
+
+**Published-JSON keys:**
+
+    "I_at_crit_peak_Wcm2":     [value, unc]   # primary comparison target
+    "I_grid_outer_peak_Wcm2":  [0.0, 0.0]     # leave at 0; geometry-dependent,
+                                              # not cross-code comparable
+
+**Graceful degradation:** if a simulation lacks `LaserPwrOnTargetForBeam`
+or `laserAttinuationCoeff` (pre-upgrade `.exo`), `analyze_laser_intensity`
+logs a warning and `None`-populates attributes. Plotter emits a
+placeholder page; summary block is omitted; compare rows are filtered by
+the zero-skip rule. No crashes.
+
+**Cross-check:** on `Olson_PDD_26b_burn`, the pipeline's peak-power
+r_crit (0.099 cm / 992 um) sits inside the drive-phase formula-method
+1-sigma band (0.079 +/- 0.039 cm), consistent with r_crit expanding
+outward at peak drive relative to the all-timesteps mean.
 
 
 
