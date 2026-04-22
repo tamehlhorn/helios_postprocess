@@ -39,6 +39,8 @@ class RHWConfiguration:
     eos_models: list = None  # [{region, type, file}, ...]
     alpha_deposition_local: bool = False     # Use alpha deposition = 1
     alpha_deposition_nonlocal: bool = False  # Use non alpha deposition = 1
+    flux_limiter: float = 0.0                # Flux limiter mult. (from .rhw; 0 if off)
+    flux_limiter_enabled: bool = False       # Use flux limiter = 1
     drive_time: Optional[np.ndarray] = None
     drive_temperature: Optional[np.ndarray] = None
     source_file: Optional[str] = None
@@ -85,6 +87,7 @@ class RHWParser:
         laser_params = self._parse_laser_geometry(lines)
         eos_models = self._parse_eos_models(lines)
         alpha_local, alpha_nonlocal = self._parse_alpha_transport(lines)
+        flux_enabled, flux_value = self._parse_flux_limiter(lines)
         
         # Extract drive temperature data
         drive_time, drive_temp = self._parse_drive_temperature(lines)
@@ -111,6 +114,8 @@ class RHWParser:
             eos_models=eos_models,
             alpha_deposition_local=alpha_local,
             alpha_deposition_nonlocal=alpha_nonlocal,
+            flux_limiter=flux_value,
+            flux_limiter_enabled=flux_enabled,
         )
         
         logger.info(f"Configuration: {config.drive_type}, "
@@ -149,6 +154,53 @@ class RHWParser:
             return True, False    # local instantaneous
         return False, True        # non-local transport
     
+    def _parse_flux_limiter(self, lines: list) -> tuple:
+        """
+        Parse electron thermal flux limiter from the .rhw file.
+
+        The .rhw has four copies of the flux-limiter block — one per region
+        (DT vapor, DT ice, CH skin, foam). Pattern:
+
+            Use flux limiter       = 1
+            Flux limiter mult.     = 0.06
+
+        Normally identical across regions. Take the first (enabled, value)
+        pair seen. Warn once if a later block has a different value.
+
+        Returns
+        -------
+        (enabled, value) : (bool, float)
+            (False, 0.0) if no flux-limiter line is present.
+        """
+        import warnings as _w
+        enabled_first = None
+        value_first = None
+        warned = False
+        for line in lines:
+            lstrip = line.strip().lower()
+            if lstrip.startswith('use flux limiter'):
+                try:
+                    v = int(line.split('=')[-1].strip())
+                except (ValueError, IndexError):
+                    continue
+                if enabled_first is None:
+                    enabled_first = (v == 1)
+            elif lstrip.startswith('flux limiter mult'):
+                try:
+                    f = float(line.split('=')[-1].strip())
+                except (ValueError, IndexError):
+                    continue
+                if value_first is None:
+                    value_first = f
+                elif abs(f - value_first) > 1e-9 and not warned:
+                    _w.warn(
+                        f'RHW flux limiter varies across regions '
+                        f'(first={value_first}, later={f}); reporting first.',
+                        stacklevel=2)
+                    warned = True
+        return (bool(enabled_first) if enabled_first is not None else False,
+                float(value_first) if value_first is not None else 0.0)
+
     def _parse_eos_models(self, lines: list) -> list:
         """Parse EOS model type and file for each spatial region."""
         models = []

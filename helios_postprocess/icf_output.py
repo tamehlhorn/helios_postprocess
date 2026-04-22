@@ -191,6 +191,13 @@ class ICFOutputGenerator:
             _a(self._metric('Half-cone angle',  d.laser_half_cone_angle_deg, 'deg', fmt='.2f'))
             _a(f"  {'Spot radius':<30} {d.laser_spot_size_cm:>15.4f} cm  ({d.laser_spatial_profile})")
             _a(self._metric('Power multiplier', d.laser_power_multiplier,    '',    fmt='.4f'))
+            # Flux limiter: bypass _metric (0.06 is a valid value; _metric renders 0.0 as '—')
+            if getattr(d, 'flux_limiter_enabled', False):
+                _a(f"  {'Flux limiter (f)':<36s} {d.flux_limiter:>10.3f}")
+            elif getattr(d, 'flux_limiter', 0.0) > 0:
+                _a(f"  {'Flux limiter (f)':<36s} {d.flux_limiter:>10.3f}  (flag off)")
+            else:
+                _a(f"  {'Flux limiter (f)':<36s} {'(not set)':>10s}")
             # Pulse shape
             if d.laser_peak_power_TW > 0:
                 _a(f"  {'Pulse shape (beam 1)':<30}")
