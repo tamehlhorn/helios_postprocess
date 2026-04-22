@@ -519,6 +519,11 @@ def compare_with_published(sim_metrics: Dict,
          'P_hs_ignition_Gbar',       '.1f'),
         ('HS radius at ignition (μm)',    sim_metrics.get('hs_radius_ignition_um', 0.0),
          'hs_radius_ignition_um',    '.1f'),
+        # --- Laser intensity diagnostics (Task 2 Stage C) ---
+        ('I at r_crit peak (W/cm²)', sim_metrics.get('I_at_crit_peak_Wcm2', 0.0),
+         'I_at_crit_peak_Wcm2',       '.2e'),
+        ('I grid outer peak (W/cm²)', sim_metrics.get('I_grid_outer_peak_Wcm2', 0.0),
+         'I_grid_outer_peak_Wcm2',    '.2e'),
     ]
 
     has_implosion = False

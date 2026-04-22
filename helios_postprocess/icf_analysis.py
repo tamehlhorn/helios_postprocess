@@ -89,16 +89,16 @@ class ICFAnalyzer:
                            "(laser_power_source, laser_attenuation_coeff, "
                            "laser_power_on_target, or zone_boundaries).")
             # Populate with None so downstream code can check cleanly
-            for k in ('I_outer_peak', 'I_at_crit_peak', 'I_at_crit_at_peak_power',
+            for k in ('I_grid_outer_peak', 'I_at_crit_peak', 'I_at_crit_at_peak_power',
                       'I_peak_coronal', 't_peak_power_ns', 'ncr_intensity',
                       'r_crit_intensity_history', 'I_at_crit_history',
-                      'I_outer_history'):
+                      'I_grid_outer_history'):
                 setattr(self.data, k, None)
             self.data._laser_intensity_arrays = None
             return
 
         # Scalars
-        self.data.I_outer_peak            = result['peak_I_outer']
+        self.data.I_grid_outer_peak       = result['peak_I_grid_outer']
         self.data.I_at_crit_peak          = result['peak_I_at_crit']
         self.data.I_at_crit_at_peak_power = result['I_at_crit_at_peak_power']
         self.data.I_peak_coronal          = result['peak_I_coronal']
@@ -108,7 +108,7 @@ class ICFAnalyzer:
         # Histories
         self.data.r_crit_intensity_history = result['r_crit']
         self.data.I_at_crit_history        = result['I_at_crit_vs_t']
-        self.data.I_outer_history          = result['I_outer']
+        self.data.I_grid_outer_history     = result['I_grid_outer']
 
         # Cached 2D arrays for plotter (not persisted)
         self.data._laser_intensity_arrays = dict(
@@ -134,8 +134,8 @@ class ICFAnalyzer:
                                 f"(cross-check vs drive-phase formula method)")
             except Exception:
                 pass
-        logger.info(f"  Peak I_outer                    : "
-                    f"{result['peak_I_outer']:.3e} W/cm^2")
+        logger.info(f"  Peak I at grid outer boundary   : "
+                    f"{result['peak_I_grid_outer']:.3e} W/cm^2")
         logger.info(f"  Peak I at critical surface      : "
                     f"{result['peak_I_at_crit']:.3e} W/cm^2")
         logger.info(f"  I at r_crit at peak laser power : "

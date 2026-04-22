@@ -209,13 +209,13 @@ def analyze_laser_intensity(data, wavelength_um: float = LAMBDA_UM_DEFAULT
 
     Returns dict with:
       I1, I2                     (nt, nz)    Method-1 and Method-2 intensities
-      I_outer                    (nt,)       Incident outer-boundary intensity
+      I_grid_outer               (nt,)       Incident intensity at grid outer boundary
       alpha_zone                 (nt, nz)    Cleaned, zone-centered attenuation
       r_crit                     (nt,)       Critical-surface radius [cm]
       ncr                        float       [1/cm^3]
       I_at_crit_vs_t             (nt,)       I at first transparent zone outside r_crit
       I_peak_coronal_vs_t        (nt,)       max I2(r) over zones
-      peak_I_outer               float       max over t
+      peak_I_grid_outer          float       max over t (at grid outer boundary)
       peak_I_at_crit             float       max over t
       peak_I_coronal             float       max over (t, r)
       I_at_crit_at_peak_power    float       I_at_crit at t = argmax(P_on_target)
@@ -273,11 +273,11 @@ def analyze_laser_intensity(data, wavelength_um: float = LAMBDA_UM_DEFAULT
                  if hasattr(data, 'time') and data.time is not None else np.nan)
 
     return dict(
-        I1=I1, I2=I2, I_outer=I_outer, alpha_zone=alpha_zone,
+        I1=I1, I2=I2, I_grid_outer=I_outer, alpha_zone=alpha_zone,
         r_crit=r_crit, ncr=ncr,
         I_at_crit_vs_t=I_at_crit_vs_t,
         I_peak_coronal_vs_t=I_peak_coronal_vs_t,
-        peak_I_outer=peak_I_outer,
+        peak_I_grid_outer=peak_I_outer,
         peak_I_at_crit=peak_I_at_crit,
         peak_I_coronal=peak_I_coronal,
         I_at_crit_at_peak_power=I_at_crit_at_peak_power,
