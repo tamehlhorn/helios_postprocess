@@ -76,6 +76,9 @@ class ICFRunData:
         self.laser_power_source: Optional[np.ndarray] = None      # (n_times, n_zones) W/cm³
         self.laser_power_delivered: Optional[np.ndarray] = None   # (n_times,) W — total laser power on target
         self.electron_density: Optional[np.ndarray] = None        # (n_times, n_zones) cm⁻³
+        # Laser intensity reconstruction inputs (raw from EXODUS; cleaned in laser_intensity.py)
+        self.laser_attenuation_coeff: Optional[np.ndarray] = None  # (n_times, n_beam, n_bnd) 1/cm
+        self.laser_power_on_target: Optional[np.ndarray] = None    # (n_times,) W  -- LaserPwrOnTargetForBeam, beam 0
         self.neutron_production_rate: Optional[np.ndarray] = None # (n_times, n_zones)
         self.alpha_heating_power: Optional[np.ndarray] = None     # (n_times, n_zones)
         self.alpha_heating_ion: Optional[np.ndarray] = None       # (n_times, n_zones) particle → ion
@@ -224,6 +227,10 @@ _VARIABLE_MAP = [
     ("laser_power_delivered", ["LaserPwrDeliveredForBeam",
                                "laser_power_delivered"],                           False),
     ("electron_density",      ["electron_density", "elec_density", "n_e"],        False),
+    ("laser_power_on_target", ["LaserPwrOnTargetForBeam",
+                               "laser_power_on_target"],                           False),
+    ("laser_attenuation_coeff", ["laserAttinuationCoeff",
+                                 "laser_attenuation_coeff"],                       False),
     ("neutron_production_rate", ["neutron_production_rate", "neutron_rate",
                                  "FusionRate_DD_nHe3"],                           False),
     ("alpha_heating_power",   ["alpha_heating_power", "alpha_power",
@@ -377,6 +384,9 @@ def build_run_data(
     # ------------------------------------------------------------------
     if data.laser_power_delivered is not None and data.laser_power_delivered.ndim > 1:
         data.laser_power_delivered = data.laser_power_delivered.squeeze()
+    if data.laser_power_on_target is not None and data.laser_power_on_target.ndim > 1:
+        # (n_times, n_beam) -> (n_times,) by taking beam 0
+        data.laser_power_on_target = data.laser_power_on_target[:, 0]
         if verbose:
             logger.info(f"  ✓ laser_power_delivered      squeezed → {data.laser_power_delivered.shape}")
 
