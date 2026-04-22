@@ -317,6 +317,9 @@ def extract_histories_from_run_data(data) -> Dict:
         'hydro_efficiency_pct':  hydro_efficiency_pct,
         'imploded_DT_mass_mg':   imploded_DT_mass_mg,
         'CR_max':                getattr(data, 'comp_ratio', 0.0),
+        # Laser intensity metrics (from analyze_laser_intensity); 0.0 if skipped
+        'I_at_crit_peak_Wcm2':    getattr(data, 'I_at_crit_peak', None) or 0.0,
+        'I_grid_outer_peak_Wcm2': getattr(data, 'I_grid_outer_peak', None) or 0.0,
     }
 
 
@@ -449,6 +452,9 @@ def calculate_burn_averaged_metrics(histories: Dict,
         'inflight_KE_kJ':       histories.get('inflight_KE_kJ', 0.0),
         'hydro_efficiency_pct':  histories.get('hydro_efficiency_pct', 0.0),
         'imploded_DT_mass_mg':   histories.get('imploded_DT_mass_mg', 0.0),
+        # Laser intensity metrics (pass through from histories)
+        'I_at_crit_peak_Wcm2':    histories.get('I_at_crit_peak_Wcm2',    0.0),
+        'I_grid_outer_peak_Wcm2': histories.get('I_grid_outer_peak_Wcm2', 0.0),
         # Burn-rate weighting profile
         'burn_fraction':    burn_fraction,
         'burn_rate':        burn_rate,
