@@ -401,8 +401,11 @@ class ICFAnalyzer:
             peak_idx_in_prebang = np.argmin(min_velocities)
             self.data.peak_velocity_index = int(pre_bang_indices[peak_idx_in_prebang])
             self.data.peak_implosion_velocity = float(min_velocities[peak_idx_in_prebang]) * 1e-5
+            # Time of peak velocity (data.time is already in ns per data_builder)
+            self.data.t_peak_velocity_ns = float(self.data.time[self.data.peak_velocity_index])
             logger.info(f"Peak implosion velocity (pre-bang): "
-                        f"{abs(self.data.peak_implosion_velocity):.2f} km/s")
+                        f"{abs(self.data.peak_implosion_velocity):.2f} km/s "
+                        f"at t={self.data.t_peak_velocity_ns:.3f} ns")
             
         # Detect and track shock fronts
         self._track_shock_fronts()
@@ -702,7 +705,31 @@ class ICFAnalyzer:
                         f"min radius: {np.min(valid_radii):.4f} cm")
         else:
             logger.warning("No valid ablation front positions found")
-    
+
+        # ---- Ablation pressure history (Task 3.A Stage 1) ----
+        # Total pressure (ion + rad, where rad already includes electron+radiation
+        # per the 3-component convention in data_builder) at ablation-front zone.
+        # Converts J/cm^3 -> Gbar via the 1e-8 factor used throughout.
+        if (self.data.ion_pressure is not None
+                and self.data.rad_pressure is not None
+                and ablation_front_indices is not None):
+            total_p = self.data.ion_pressure + self.data.rad_pressure
+            n_t = len(self.data.time)
+            p_abl = np.zeros(n_t)
+            for t in range(n_t):
+                i_abl = int(ablation_front_indices[t])
+                if i_abl > 0:
+                    p_abl[t] = total_p[t, i_abl] * 1e-8  # J/cm^3 -> Gbar
+            self.data.ablation_pressure_Gbar = p_abl
+            valid_p = p_abl[p_abl > 0]
+            if len(valid_p) > 0:
+                self.data.P_abl_peak_Gbar = float(np.max(valid_p))
+                logger.info(f"Peak ablation pressure: "
+                            f"{self.data.P_abl_peak_Gbar:.2f} Gbar")
+            else:
+                self.data.P_abl_peak_Gbar = 0.0
+                logger.warning("Ablation pressure history is all zero")
+
     def _compute_ifar(self):
         """
         Compute In-Flight Aspect Ratio (IFAR) at peak implosion velocity.

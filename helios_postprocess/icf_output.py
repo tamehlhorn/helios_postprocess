@@ -134,6 +134,7 @@ class ICFOutputGenerator:
         _a('-' * width)
         _a(self._metric('Stagnation time',      d.stag_time,   'ns',   fmt='.3f'))
         _a(self._metric('Bang time',            d.bang_time,   'ns',   fmt='.3f'))
+        _a(self._metric('Peak velocity time',   d.t_peak_velocity_ns, 'ns', fmt='.3f'))
         _a(self._metric('Burn width (FWHM)',    d.burn_width,  'ns',   fmt='.4f'))
         _a('')
 
