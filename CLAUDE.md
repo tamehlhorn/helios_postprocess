@@ -801,7 +801,83 @@ Longer-term:
 - Extend plot_laser_intensity.py with time-dependent view: I at r_crit(t), not
   just spatial snapshots. (DONE April 2026 -- added peak coronal I and I-at-r_crit
   to Page 2 of the PDF.)
-- Integrate I-profile output into ICFAnalyzer as an optional page in the main PDF.
+- Integrate I-profile output into ICFAnalyzer as an optional page in the main PDF. (DONE April 2026 -- Task 2 Stage C.2, see `_plot_laser_intensity` in icf_plotting.py.)
+
+## Implosion & Ablation Diagnostics (Task 3.A, April 2026)
+
+Timing milestones and ablation-physics scalars. Collaborator request
+in this priority order:
+
+1. First shock breakout from fuel to gas
+2. Second shock breakout (same interface)
+3. Subsequent shock breakouts (3+ shock designs)
+4. Shock flash at r=0
+5. Time of peak velocity
+6. Ablation pressure in ablator (CH / foam phase)
+7. Ablation pressure in fuel (when ablator fully consumed)
+
+### Stage 1 (shipped April 2026)
+
+Three additions wired through `ICFAnalyzer` and summary:
+
+| Attribute on ICFRunData | Source | Exposure |
+|---|---|---|
+| `t_peak_velocity_ns` | `time[peak_velocity_index]` during `analyze_implosion_phase` | Augmented "Peak implosion velocity" log line; new "Peak velocity time" row in TIMING summary |
+| `ablation_pressure_Gbar` | `(ion + rad pressure)[t, ablation_front_indices[t]] * 1e-8` for each timestep | History on `data`, available to plotters |
+| `P_abl_peak_Gbar` | `max(ablation_pressure_Gbar)` over valid timesteps | New "Peak ablation pressure" log line at end of `_track_ablation_front` |
+
+**PDD_26b_burn reference values (Stage 1 validation):**
+
+    t_peak_velocity_ns          12.000 ns
+    P_abl_peak_Gbar             176.69 Gbar
+
+### Important semantic note on `P_abl_peak_Gbar`
+
+Stage 1 measures **total pressure at the ablation-front zone**, where
+the ablation front is defined as the steepest negative density gradient
+outside the hot spot. This tracks the outer boundary of the DENSE shell,
+which sits inside the compressed region and is closer to shell pressure
+than to the classical Lindl momentum-balance ablation pressure.
+
+Lindl's scaling `P_abl = 57 (I/1e14)^(2/3) (lambda/um)^(-2/3)` Mbar
+at PDD_26b's peak critical-surface intensity (I_crit = 1.46e15 W/cm^2,
+lambda = 0.35 um) predicts 6.77 Gbar -- about 26x lower than the
+176.69 Gbar reported here. The difference is physical, not a bug:
+shell pressure > ablation drive pressure by the time the shell is
+converging. Stage 4 (material-split) will clarify the interpretation
+by separating ablator-phase and fuel-phase averages.
+
+### Stage 2-10 queued
+
+- **Stage 2:** Debug `_compute_shock_breakout` -- currently returns
+  zeros for PDD_26b due to `self.data.time * 1e9` double-multiplication
+  (`data.time` is already in ns per `data_builder.py:344`).
+- **Stage 3:** Extend shock breakout to N-shock detection, producing
+  `shock_breakout_times_ns` list + per-shock scalars.
+- **Stage 4:** Material-split `P_abl` via
+  `material_index[ablation_front_indices[t]]`; adds
+  `P_abl_ablator_peak_Gbar`, `P_abl_fuel_peak_Gbar`,
+  `t_fuel_ablation_start_ns`, `fuel_mass_ablated_mg`.
+- **Stage 5:** Shock flash at r=0 -- peak pressure at innermost zone
+  before stagnation -> `t_shock_flash_ns`.
+- **Stage 6:** TIMING MILESTONES and ABLATION sections in summary text;
+  comparison JSON keys for the new scalars.
+- **Stage 7:** New ABLATION plotter page with material-phase shading.
+- **Stage 8:** Wire `adiabat_history.py` module into `ICFAnalyzer`.
+- **Stage 9:** Integrate `plot_adiabat_shock.py` into pipeline
+  (overlaps with Stages 2-5).
+- **Stage 10:** Integrate `plot_laser_deposition.py` into pipeline.
+
+### Note on shock breakout bug
+
+The `analyze_first_shock` call in `_compute_shock_breakout` converts
+`self.data.time * 1e9`, which would be correct if `data.time` were in
+seconds. But `data_builder.py` line 344 already multiplies by 1e9
+during load, so `data.time` is in nanoseconds. The double-multiplication
+makes every timestep ~1e10, which fails the foot-pulse mask
+`(t_ns >= 4.0) & (t_ns <= 6.0)` trivially. Result: NaN breakout values,
+which the error handler converts to 0.0. Stage 2 will fix this with a
+one-line change.
 
 ## Dependencies
 
