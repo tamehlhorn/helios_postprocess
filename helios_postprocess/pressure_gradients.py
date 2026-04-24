@@ -652,7 +652,8 @@ def analyze_first_shock(
     dP_dr_threshold: float = 1e10,
     smoothing_sigma: float = 1.5,
     min_time_ns: Optional[float] = None,
-    min_P_ratio: float = 2.0,
+    min_P_ratio: float = 1.5,
+    lookback_steps: int = 5,
 ) -> Dict[str, np.ndarray]:
     """
     Track first (outermost) shock through the shell and compute strength metrics.
@@ -818,20 +819,35 @@ def analyze_first_shock(
 
     t_floor = min_time_ns if min_time_ns is not None else (time[0] + 1e-3)
 
+    # Breakout criterion: first timestep where the tracked shock has crossed the
+    # gas-cavity interface (r_sh <= r_interface), AND a real shock was present
+    # in the shell within the preceding `lookback_steps` timesteps.
+    #
+    # Look-back on P_ratio is required because at the moment of crossing the
+    # transmitted wave into the low-density gas cavity is weak (P_ratio ~ 1)
+    # due to impedance mismatch — the *incoming* shock strength (just before
+    # crossing) is the relevant diagnostic. This matches the ICF convention
+    # and handles weak-first-shock designs (e.g., CH foam ablators) where the
+    # peak P_ratio in the shell is modest (~2-4), not the 5-50 of HDC-style
+    # strong-first-shock designs.
     for i in range(n_times):
         if time[i] < t_floor:
             continue
         if np.isnan(shock_radius[i]):
             continue
-        pr_i = P_ratio[i]
-        if np.isnan(pr_i) or pr_i < min_P_ratio:
-            continue
         interface_radius = zone_boundaries[i, fuel_inner_zone]
-        if shock_radius[i] <= interface_radius:
-            breakout_time_ns       = time[i]
-            breakout_pressure_Gbar = shock_pressure_Gbar[i]
-            breakout_mach          = mach_number[i] if not np.isnan(mach_number[i]) else np.nan
-            break
+        if shock_radius[i] > interface_radius:
+            continue
+        # Crossing candidate: check that a real shock was present just before.
+        lo = max(0, i - lookback_steps)
+        pr_window = P_ratio[lo:i + 1]
+        pr_valid = pr_window[~np.isnan(pr_window)]
+        if pr_valid.size == 0 or np.max(pr_valid) < min_P_ratio:
+            continue
+        breakout_time_ns       = time[i]
+        breakout_pressure_Gbar = shock_pressure_Gbar[i]
+        breakout_mach          = mach_number[i] if not np.isnan(mach_number[i]) else np.nan
+        break
 
     return {
         'time':                  time,

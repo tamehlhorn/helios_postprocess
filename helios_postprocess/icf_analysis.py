@@ -622,7 +622,6 @@ class ICFAnalyzer:
                 search_inner_zone=ice_inner_node,
                 dP_dr_threshold=1e9,
                 min_time_ns=float(t_breakout_floor),
-                min_P_ratio=2.0,
             )
             bt = result["breakout_time_ns"]
             self.data.shock_breakout_time_ns = float(bt) if not np.isnan(bt) else 0.0
