@@ -9,7 +9,10 @@ Produces two files from a populated ICFRunData object:
 
 Unit conventions (per CLAUDE.md):
   - Temperatures: keV  (except ion_temperature arrays which stay in eV)
-  - Pressures:    Gbar (1 Gbar = 1e8 J/cm³)
+  - Pressures:    Mbar for pre-stagnation (shock breakout, ablation, foot)
+                  Gbar for stagnation-era (hot spot, burn-averaged, ignition)
+                  Internal attributes keep their *_Gbar suffix; display
+                  conversion (x1000) happens at the _metric() call site.
   - Velocities:   km/s
   - Areal density: g/cm²
   - Drive temperature: eV
@@ -276,11 +279,13 @@ class ICFOutputGenerator:
         if getattr(d, 'adiabat_at_breakout', 0.0) > 0:
             _a(self._metric('Base adiabat (at breakout)', d.adiabat_at_breakout,       '',     fmt='.2f'))
         if getattr(d, 'shock_breakout_time_ns', 0.0) > 0:
-            _a(self._metric('Shock breakout time',          d.shock_breakout_time_ns,       'ns',   fmt='.3f'))
-            _a(self._metric('Shock breakout P (gas side)',  d.shock_breakout_P_gas_Gbar,    'Gbar', fmt='.4f'))
-            _a(self._metric('Shock breakout P (ice side)',  getattr(d, 'shock_breakout_P_ice_Gbar', 0.0), 'Gbar', fmt='.4f'))
+            # Pre-stagnation pressures shown in Mbar (1 Gbar = 1000 Mbar).
+            # Stored attributes keep Gbar units; conversion is display-only.
+            _a(self._metric('Shock breakout time',          d.shock_breakout_time_ns,                               'ns',   fmt='.3f'))
+            _a(self._metric('Shock breakout P (gas side)',  1000.0 * d.shock_breakout_P_gas_Gbar,                   'Mbar', fmt='.2f'))
+            _a(self._metric('Shock breakout P (ice side)',  1000.0 * getattr(d, 'shock_breakout_P_ice_Gbar', 0.0),  'Mbar', fmt='.2f'))
         if getattr(d, 'shock_foot_pressure_Gbar', 0.0) > 0:
-            _a(self._metric('Ice-side foot peak pressure',  d.shock_foot_pressure_Gbar,     'Gbar', fmt='.4f'))
+            _a(self._metric('Ice-side foot peak pressure',  1000.0 * d.shock_foot_pressure_Gbar,                    'Mbar', fmt='.2f'))
         _a('')
         if (hasattr(d, 'alpha_onset_time_ns') and
                 d.alpha_onset_time_ns is not None and
