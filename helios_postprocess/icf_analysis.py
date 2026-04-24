@@ -608,6 +608,10 @@ class ICFAnalyzer:
             total_pressure = self.data.ion_pressure + self.data.rad_pressure
             # data.time is already in ns (data_builder normalizes at load time)
             t_ns = self.data.time
+            # Skip t=0 IC discontinuity; start breakout search after foot launch.
+            # Default 0.1 ns handles the vast majority of laser-drive pulses; if a
+            # specific foot-start time is known (laser_foot_start_ns), use that.
+            t_breakout_floor = getattr(self.data, "laser_foot_start_ns", None) or 0.1
             result = analyze_first_shock(
                 pressure=total_pressure,
                 zone_boundaries=self.data.zone_boundaries,
@@ -617,6 +621,8 @@ class ICFAnalyzer:
                 fuel_inner_zone=ice_inner_node,
                 search_inner_zone=ice_inner_node,
                 dP_dr_threshold=1e9,
+                min_time_ns=float(t_breakout_floor),
+                min_P_ratio=2.0,
             )
             bt = result["breakout_time_ns"]
             self.data.shock_breakout_time_ns = float(bt) if not np.isnan(bt) else 0.0

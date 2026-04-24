@@ -651,6 +651,8 @@ def analyze_first_shock(
     gamma: float = 5.0 / 3.0,
     dP_dr_threshold: float = 1e10,
     smoothing_sigma: float = 1.5,
+    min_time_ns: Optional[float] = None,
+    min_P_ratio: float = 2.0,
 ) -> Dict[str, np.ndarray]:
     """
     Track first (outermost) shock through the shell and compute strength metrics.
@@ -800,14 +802,29 @@ def analyze_first_shock(
         v_valid = np.gradient(r_valid, t_valid)  # cm/ns
         shock_velocity[valid] = v_valid
 
-    # Breakout detection: shock radius crosses below fuel/ablator interface radius
-    # Interface radius = zone boundary at fuel_inner_zone node index
+    # Breakout detection: first shock crosses the gas-cavity interface (node fuel_inner_zone).
+    # ICF definition: the foot-launched shock traversing ablator + foams + ice/wetted-foam
+    # breaks out into the central gas cavity, beginning cavity compression and heating.
+    # This breakout time sets the base adiabat for the cold shell.
+    #
+    # Two gates protect against spurious detections at t=0:
+    #   (1) min_time_ns - skip initial-condition discontinuities; defaults to time[0]
+    #       + 1e-3 ns so the very first step is always excluded.
+    #   (2) min_P_ratio - a real foot shock has P_post/P_pre >> 1 (typically 5-50);
+    #       static IC steps have P_ratio ~ 1.
     breakout_time_ns       = np.nan
     breakout_pressure_Gbar = np.nan
     breakout_mach          = np.nan
 
+    t_floor = min_time_ns if min_time_ns is not None else (time[0] + 1e-3)
+
     for i in range(n_times):
+        if time[i] < t_floor:
+            continue
         if np.isnan(shock_radius[i]):
+            continue
+        pr_i = P_ratio[i]
+        if np.isnan(pr_i) or pr_i < min_P_ratio:
             continue
         interface_radius = zone_boundaries[i, fuel_inner_zone]
         if shock_radius[i] <= interface_radius:
