@@ -606,7 +606,8 @@ class ICFAnalyzer:
             if self.data.ion_pressure is None or self.data.mass_density is None:
                 return
             total_pressure = self.data.ion_pressure + self.data.rad_pressure
-            t_ns = self.data.time * 1e9
+            # data.time is already in ns (data_builder normalizes at load time)
+            t_ns = self.data.time
             result = analyze_first_shock(
                 pressure=total_pressure,
                 zone_boundaries=self.data.zone_boundaries,
