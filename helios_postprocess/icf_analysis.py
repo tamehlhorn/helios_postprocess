@@ -410,11 +410,15 @@ class ICFAnalyzer:
         # Detect and track shock fronts
         self._track_shock_fronts()
         
-        # Compute adiabat
+        # Compute shock breakout from fuel shell into gas cavity
+        # (must run before adiabat routines -- base adiabat uses breakout time)
+        self._compute_shock_breakout()
+
+        # Compute adiabat at peak implosion velocity (legacy definition)
         self._compute_adiabat()
 
-        # Compute first shock breakout in DT ice
-        self._compute_shock_breakout()
+        # Compute base adiabat at breakout time (Olson convention)
+        self._compute_adiabat_at_breakout()
 
         # Track ablation front position
         self._track_ablation_front()
@@ -544,26 +548,50 @@ class ICFAnalyzer:
                 stag_t = self.data.stag_time if self.data.stag_time > 0 else self.data.time[-1] / 2
                 eval_idx = np.argmin(np.abs(self.data.time - stag_t * 0.5))
 
-            # -- Zone range: cold fuel = between hot-spot and ablator boundaries --
-            if ri is not None and ri.shape[1] >= 2:
-                z_start = int(ri[eval_idx, 0])           # outer edge of hot spot
-                z_end   = int(ri[eval_idx, 1])            # outer edge of cold fuel (exclude ablated region)
+            # -- Zone selection: density-based shell (same criterion as IFAR) --
+            # Cold fuel = zones where rho > rho_peak / e, restricted to the
+            # fuel-candidate range (between gas/fuel interface and the fuel/ablator
+            # interface). This is target-geometry-agnostic: if a nominally-fuel
+            # region has partially ablated, its low-density zones fall below the
+            # density threshold and are correctly excluded. Works for 2-region,
+            # 3-region, or 5-region targets without special casing.
+            if ri is not None and ri.shape[1] >= 3:
+                fuel_lo = int(ri[eval_idx, 0])            # gas/fuel interface
+                fuel_hi = int(ri[eval_idx, -2])           # fuel/ablator interface (outermost fuel)
+            elif ri is not None and ri.shape[1] == 2:
+                fuel_lo = int(ri[eval_idx, 0])
+                fuel_hi = int(ri[eval_idx, -1])           # no ablator: fuel to outer edge
             else:
-                z_start = 0
-                z_end   = n_zones // 2
+                fuel_lo = 0
+                fuel_hi = n_zones
 
-            if z_end <= z_start:
-                logger.warning("Cold fuel region is empty -- cannot compute adiabat")
+            if fuel_hi <= fuel_lo:
+                logger.warning("Fuel-candidate range is empty -- cannot compute adiabat")
                 return
 
-            # -- Total pressure in Mbar --
-            p_tot = self.data.ion_pressure[eval_idx, z_start:z_end]
+            rho_candidate  = self.data.mass_density[eval_idx, fuel_lo:fuel_hi]
+            rho_peak       = float(np.max(rho_candidate))
+            rho_threshold  = rho_peak / np.e
+            shell_mask_loc = rho_candidate > rho_threshold
+
+            if not np.any(shell_mask_loc):
+                logger.warning("Density-based shell is empty -- cannot compute adiabat")
+                return
+
+            # -- Total pressure in Mbar over the shell mask --
+            p_tot = self.data.ion_pressure[eval_idx, fuel_lo:fuel_hi][shell_mask_loc]
             if self.data.rad_pressure is not None:
-                p_tot = p_tot + self.data.rad_pressure[eval_idx, z_start:z_end]
+                p_tot = p_tot + self.data.rad_pressure[eval_idx, fuel_lo:fuel_hi][shell_mask_loc]
             p_Mbar = p_tot * 1e-5                        # J/cm3 -> Mbar
 
-            rho  = self.data.mass_density[eval_idx, z_start:z_end]   # g/cc
-            mass = self.data.zone_mass[eval_idx, z_start:z_end]
+            rho  = rho_candidate[shell_mask_loc]
+            mass = self.data.zone_mass[eval_idx, fuel_lo:fuel_hi][shell_mask_loc]
+
+            logger.info(
+                f"Adiabat shell (density-based): {int(np.sum(shell_mask_loc))} zones "
+                f"[within fuel-candidate zones {fuel_lo}..{fuel_hi - 1}], "
+                f"rho_peak={rho_peak:.3f} g/cc, threshold={rho_threshold:.3f} g/cc"
+            )
 
             # -- Fermi pressure for equimolar DT --
             rho0 = 0.205                                  # g/cc (DT ice density)
@@ -573,13 +601,10 @@ class ICFAnalyzer:
                 alpha = p_Mbar / p_fermi
                 alpha[~np.isfinite(alpha)] = 0.0
 
-            # Exclude hot-spot gas zones (rho < rho0) -- these are not cold fuel
-            cold_mask = rho >= rho0
-            if np.any(cold_mask):
-                self.data.adiabat_mass_averaged_ice = np.average(
-                    alpha[cold_mask], weights=mass[cold_mask])
-            else:
-                self.data.adiabat_mass_averaged_ice = np.average(alpha, weights=mass)
+            # Density-based shell selection above already ensures we have
+            # compressed cold fuel (rho > rho_peak / e), so no additional
+            # cold_mask is needed. Averaging over the full shell.
+            self.data.adiabat_mass_averaged_ice = float(np.average(alpha, weights=mass))
             logger.info(f"Mass-averaged adiabat (cold fuel, t={self.data.time[eval_idx]:.2f} ns): "
                         f"{self.data.adiabat_mass_averaged_ice:.2f}")
 
@@ -587,59 +612,184 @@ class ICFAnalyzer:
             logger.warning(f"Could not compute adiabat: {e}")
             self.data.adiabat_mass_averaged_ice = 0.0
 
+    def _compute_adiabat_at_breakout(self):
+        """
+        Compute mass-averaged adiabat in cold DT fuel at the moment of shock
+        breakout into the gas cavity. This is the "base adiabat" -- the
+        entropy set by the foot-launched shock sequence, before the main
+        pulse further compresses the shell. Directly comparable to the
+        base-adiabat values quoted in ICF design papers (e.g., Olson 2021).
+
+        Requires shock_breakout_index to be set by _compute_shock_breakout().
+        Stored as self.data.adiabat_at_breakout (0.0 if breakout not detected).
+
+        The difference between this and adiabat_mass_averaged_ice (evaluated
+        at peak implosion velocity) quantifies numerical entropy drift
+        during compression -- a clean compression gives agreement within
+        ~10%; larger disagreement suggests under-resolved shocks or
+        significant thermal conduction losses.
+        """
+        self.data.adiabat_at_breakout = 0.0
+
+        if self.data.ion_pressure is None or self.data.mass_density is None:
+            return
+
+        idx_b = getattr(self.data, "shock_breakout_index", -1)
+        if idx_b is None or idx_b < 0:
+            logger.info("Adiabat at breakout: breakout not detected, skipping")
+            return
+
+        try:
+            ri = self.data.region_interfaces_indices
+            n_zones = self.data.mass_density.shape[1]
+
+            # Density-based shell at the breakout timestep (same logic as _compute_adiabat)
+            if ri is not None and ri.shape[1] >= 3:
+                fuel_lo = int(ri[idx_b, 0])
+                fuel_hi = int(ri[idx_b, -2])
+            elif ri is not None and ri.shape[1] == 2:
+                fuel_lo = int(ri[idx_b, 0])
+                fuel_hi = int(ri[idx_b, -1])
+            else:
+                fuel_lo = 0
+                fuel_hi = n_zones
+
+            if fuel_hi <= fuel_lo:
+                return
+
+            rho_candidate  = self.data.mass_density[idx_b, fuel_lo:fuel_hi]
+            rho_peak       = float(np.max(rho_candidate))
+            rho_threshold  = rho_peak / np.e
+            shell_mask_loc = rho_candidate > rho_threshold
+
+            if not np.any(shell_mask_loc):
+                return
+
+            p_tot = self.data.ion_pressure[idx_b, fuel_lo:fuel_hi][shell_mask_loc]
+            if self.data.rad_pressure is not None:
+                p_tot = p_tot + self.data.rad_pressure[idx_b, fuel_lo:fuel_hi][shell_mask_loc]
+            p_Mbar = p_tot * 1e-5
+
+            rho  = rho_candidate[shell_mask_loc]
+            mass = self.data.zone_mass[idx_b, fuel_lo:fuel_hi][shell_mask_loc]
+
+            # Fermi pressure for equimolar DT (Lindl convention)
+            rho0    = 0.205
+            p_fermi = 2.17 * (rho / rho0) ** (5.0 / 3.0)
+
+            with np.errstate(divide='ignore', invalid='ignore'):
+                alpha = p_Mbar / p_fermi
+                alpha[~np.isfinite(alpha)] = 0.0
+
+            self.data.adiabat_at_breakout = float(np.average(alpha, weights=mass))
+
+            logger.info(
+                f"Base adiabat at breakout (t={self.data.shock_breakout_time_ns:.3f} ns): "
+                f"{self.data.adiabat_at_breakout:.2f}  "
+                f"[{int(np.sum(shell_mask_loc))} shell zones, "
+                f"rho_peak={rho_peak:.3f} g/cc]"
+            )
+
+        except Exception as e:
+            logger.warning(f"Could not compute base adiabat at breakout: {e}")
+
     def _compute_shock_breakout(self):
         """
-        Compute first shock breakout properties in DT ice layer.
-        Stores foot-pulse peak pressure, breakout time/pressure/Mach on ICFRunData.
-        Skipped silently if no distinct DT ice layer or data missing.
+        Detect first shock breakout from the fuel shell into the gas cavity.
+
+        Operational definition: the first timestep (after the foot-start floor)
+        where the mean pressure in the outer gas zones rises significantly
+        above its initial value, indicating that a shock originally launched
+        into the shell has crossed from the solid/fuel layer (ice or wetted
+        foam) into the gas cavity and begun to compress and heat it. This
+        time sets the base adiabat for the cold fuel shell.
+
+        This definition is target-geometry-agnostic -- it works whether the
+        shell has 1, 2, or more solid/fuel layers -- because it operates on
+        the gas cavity itself, not on tracking the shock through the shell.
+
+        Stores on ICFRunData:
+            shock_breakout_time_ns            Time of breakout [ns], 0.0 if not detected
+            shock_breakout_index              Timestep index, -1 if not detected
+            shock_breakout_P_gas_Gbar         Mean pressure in outer gas zones at breakout
+            shock_breakout_P_ice_Gbar         Mean pressure in inner ice/fuel zones at breakout
+            shock_breakout_pressure_Gbar      Alias for P_gas (backward-compat)
+            shock_breakout_mach               Set to 0.0 (not computed by this method)
+            shock_foot_pressure_Gbar          Max ice-side probe pressure before breakout
         """
+        # Initialize outputs so downstream code always sees defined values
+        self.data.shock_breakout_time_ns       = 0.0
+        self.data.shock_breakout_index         = -1
+        self.data.shock_breakout_P_gas_Gbar    = 0.0
+        self.data.shock_breakout_P_ice_Gbar    = 0.0
+        self.data.shock_breakout_pressure_Gbar = 0.0
+        self.data.shock_breakout_mach          = 0.0
+        self.data.shock_foot_pressure_Gbar     = 0.0
+
         try:
-            from .pressure_gradients import analyze_first_shock
             ri = self.data.region_interfaces_indices
             if ri is None or ri.shape[1] < 2:
                 return
-            ice_inner_node = int(ri[0, 0])
-            ice_outer_node = int(ri[0, 1])
-            if ice_outer_node - ice_inner_node < 5:
-                logger.info("Skipping shock breakout: no distinct DT ice layer")
+            if self.data.ion_pressure is None:
                 return
-            if self.data.ion_pressure is None or self.data.mass_density is None:
+
+            ice_inner = int(ri[0, 0])   # gas/fuel interface node index
+            if ice_inner < 5:
+                logger.info("Skipping shock breakout: gas cavity < 5 zones")
                 return
-            total_pressure = self.data.ion_pressure + self.data.rad_pressure
-            # data.time is already in ns (data_builder normalizes at load time)
-            t_ns = self.data.time
-            # Skip t=0 IC discontinuity; start breakout search after foot launch.
-            # Default 0.1 ns handles the vast majority of laser-drive pulses; if a
-            # specific foot-start time is known (laser_foot_start_ns), use that.
-            t_breakout_floor = getattr(self.data, "laser_foot_start_ns", None) or 0.1
-            result = analyze_first_shock(
-                pressure=total_pressure,
-                zone_boundaries=self.data.zone_boundaries,
-                density=self.data.mass_density,
-                time=t_ns,
-                ablator_outer_zone=ice_outer_node - 1,
-                fuel_inner_zone=ice_inner_node,
-                search_inner_zone=ice_inner_node,
-                dP_dr_threshold=1e9,
-                min_time_ns=float(t_breakout_floor),
+
+            total_P = self.data.ion_pressure + (
+                self.data.rad_pressure if self.data.rad_pressure is not None else 0.0
             )
-            bt = result["breakout_time_ns"]
-            self.data.shock_breakout_time_ns = float(bt) if not np.isnan(bt) else 0.0
-            bp = result["breakout_pressure_Gbar"]
-            self.data.shock_breakout_pressure_Gbar = float(bp) if not np.isnan(bp) else 0.0
-            bm = result["breakout_mach"]
-            self.data.shock_breakout_mach = float(bm) if not np.isnan(bm) else 0.0
-            # Foot-pulse peak: max shock pressure from 4 ns to foot_end+1 ns
-            t_foot_end = getattr(self.data, "laser_foot_end_ns", None) or 6.0
-            foot_mask = (t_ns >= 4.0) & (t_ns <= float(t_foot_end) + 1.0)
-            p_foot = result["shock_pressure_Gbar"][foot_mask]
-            valid = p_foot[~np.isnan(p_foot)]
-            self.data.shock_foot_pressure_Gbar = float(np.max(valid)) if len(valid) > 0 else 0.0
+            t_ns = self.data.time
+            n_zones = total_P.shape[1]
+
+            # Probes: 5 zones each side of the gas/fuel interface
+            gas_probe_lo = max(0, ice_inner - 5)
+            gas_probe_hi = ice_inner                          # exclusive
+            ice_probe_lo = ice_inner
+            ice_probe_hi = min(ice_inner + 5, n_zones)
+
+            # Mean pressure history in each probe [Gbar]
+            P_gas = np.mean(total_P[:, gas_probe_lo:gas_probe_hi], axis=1) * 1e-8
+            P_ice = np.mean(total_P[:, ice_probe_lo:ice_probe_hi], axis=1) * 1e-8
+
+            # Threshold: 10x initial gas pressure, with an absolute floor of
+            # 1e-4 Gbar (0.1 kbar / 100 bar) so that pathologically low or
+            # zero initial values don't trigger false positives on noise.
+            P_gas_initial = float(P_gas[0])
+            P_threshold = max(10.0 * P_gas_initial, 1e-4)   # Gbar
+
+            # Time floor: after foot launch, to skip IC transients
+            t_floor = getattr(self.data, "laser_foot_start_ns", None) or 0.1
+
+            hits = np.where((t_ns >= t_floor) & (P_gas > P_threshold))[0]
+            if len(hits) == 0:
+                logger.info(
+                    f"Shock breakout: not detected "
+                    f"(max gas-probe P = {np.max(P_gas):.4e} Gbar, threshold = {P_threshold:.4e} Gbar)"
+                )
+                return
+
+            i_b = int(hits[0])
+            self.data.shock_breakout_index         = i_b
+            self.data.shock_breakout_time_ns       = float(t_ns[i_b])
+            self.data.shock_breakout_P_gas_Gbar    = float(P_gas[i_b])
+            self.data.shock_breakout_P_ice_Gbar    = float(P_ice[i_b])
+            self.data.shock_breakout_pressure_Gbar = float(P_gas[i_b])  # alias
+
+            # Foot-pulse peak on the ice/fuel side: max ice-probe pressure
+            # from t_floor up to (and including) breakout
+            pre_breakout_mask = (t_ns >= t_floor) & (t_ns <= t_ns[i_b])
+            if np.any(pre_breakout_mask):
+                self.data.shock_foot_pressure_Gbar = float(np.max(P_ice[pre_breakout_mask]))
+
             logger.info(
-                f"Shock foot P={self.data.shock_foot_pressure_Gbar:.4f} Gbar, "
-                f"breakout t={self.data.shock_breakout_time_ns:.3f} ns "
-                f"P={self.data.shock_breakout_pressure_Gbar:.3f} Gbar "
-                f"M={self.data.shock_breakout_mach:.2f}"
+                f"Shock breakout at t={self.data.shock_breakout_time_ns:.3f} ns  "
+                f"(P_gas threshold = {P_threshold:.4e} Gbar);  "
+                f"P_gas={self.data.shock_breakout_P_gas_Gbar:.4f} Gbar, "
+                f"P_ice={self.data.shock_breakout_P_ice_Gbar:.4f} Gbar, "
+                f"P_ice_foot_peak={self.data.shock_foot_pressure_Gbar:.4f} Gbar"
             )
         except Exception as e:
             logger.warning(f"Could not compute shock breakout: {e}")

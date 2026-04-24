@@ -272,13 +272,15 @@ class ICFOutputGenerator:
         _a('-' * width)
         _a(self._metric('Peak implosion velocity',  abs(d.peak_implosion_velocity), 'km/s', fmt='.2f'))
         _a(self._metric('In-flight CR', getattr(d, 'cr_inflight', None), '', fmt='.1f'))
-        _a(self._metric('Mass-avg adiabat (ice)',   d.adiabat_mass_averaged_ice,    '',     fmt='.2f'))
-        if getattr(d, 'shock_foot_pressure_Gbar', 0.0) > 0:
-            _a(self._metric('Shock foot pressure (DT ice)', d.shock_foot_pressure_Gbar, 'Gbar', fmt='.4f'))
+        _a(self._metric('Mass-avg adiabat (peak-vel)', d.adiabat_mass_averaged_ice, '',     fmt='.2f'))
+        if getattr(d, 'adiabat_at_breakout', 0.0) > 0:
+            _a(self._metric('Base adiabat (at breakout)', d.adiabat_at_breakout,       '',     fmt='.2f'))
         if getattr(d, 'shock_breakout_time_ns', 0.0) > 0:
-            _a(self._metric('Shock breakout time',     d.shock_breakout_time_ns,       'ns',   fmt='.3f'))
-            _a(self._metric('Shock breakout pressure', d.shock_breakout_pressure_Gbar, 'Gbar', fmt='.3f'))
-            _a(self._metric('Shock breakout Mach',     d.shock_breakout_mach,          '',     fmt='.2f'))
+            _a(self._metric('Shock breakout time',          d.shock_breakout_time_ns,       'ns',   fmt='.3f'))
+            _a(self._metric('Shock breakout P (gas side)',  d.shock_breakout_P_gas_Gbar,    'Gbar', fmt='.4f'))
+            _a(self._metric('Shock breakout P (ice side)',  getattr(d, 'shock_breakout_P_ice_Gbar', 0.0), 'Gbar', fmt='.4f'))
+        if getattr(d, 'shock_foot_pressure_Gbar', 0.0) > 0:
+            _a(self._metric('Ice-side foot peak pressure',  d.shock_foot_pressure_Gbar,     'Gbar', fmt='.4f'))
         _a('')
         if (hasattr(d, 'alpha_onset_time_ns') and
                 d.alpha_onset_time_ns is not None and
