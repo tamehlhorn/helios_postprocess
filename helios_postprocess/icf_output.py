@@ -262,13 +262,17 @@ class ICFOutputGenerator:
             _a('')
 
         # ---- Mass fractions ----
-        _a('MASS FRACTIONS (at stagnation)')
-        _a('-' * width)
-        _a(self._metric('Initial DT mass',     d.initial_fuel_mass_mg,    'mg', fmt='.3f'))
-        _a(self._metric('Initial ablator mass',d.initial_ablator_mass_mg, 'mg', fmt='.3f'))
-        _a(self._metric('Unablated fuel',      d.unablated_fuel_mass,     '', fmt='.4f'))
-        _a(self._metric('Unablated ablator',   d.unablated_ablatar_mass,  '', fmt='.4f'))
-        _a('')
+        # These quantities require a fuel/ablator interface and stagnation time;
+        # single-region targets (e.g. CH-only slab/sphere flux-limiter tests) do
+        # not have these attributes set. Skip the entire block in that case.
+        if hasattr(d, 'initial_fuel_mass_mg'):
+            _a('MASS FRACTIONS (at stagnation)')
+            _a('-' * width)
+            _a(self._metric('Initial DT mass',     d.initial_fuel_mass_mg,    'mg', fmt='.3f'))
+            _a(self._metric('Initial ablator mass',d.initial_ablator_mass_mg, 'mg', fmt='.3f'))
+            _a(self._metric('Unablated fuel',      d.unablated_fuel_mass,     '', fmt='.4f'))
+            _a(self._metric('Unablated ablator',   d.unablated_ablatar_mass,  '', fmt='.4f'))
+            _a('')
 
         # ---- Implosion ----
         # Header always shown; individual metrics gated on attribute presence
