@@ -271,11 +271,16 @@ class ICFOutputGenerator:
         _a('')
 
         # ---- Implosion ----
+        # Header always shown; individual metrics gated on attribute presence
+        # so single-region targets get a reduced (still-meaningful) summary.
         _a('IMPLOSION')
         _a('-' * width)
-        _a(self._metric('Peak implosion velocity',  abs(d.peak_implosion_velocity), 'km/s', fmt='.2f'))
-        _a(self._metric('In-flight CR', getattr(d, 'cr_inflight', None), '', fmt='.1f'))
-        _a(self._metric('Mass-avg adiabat (peak-vel)', d.adiabat_mass_averaged_ice, '',     fmt='.2f'))
+        if hasattr(d, 'peak_implosion_velocity') and d.peak_implosion_velocity is not None:
+            _a(self._metric('Peak implosion velocity',  abs(d.peak_implosion_velocity), 'km/s', fmt='.2f'))
+        if getattr(d, 'cr_inflight', None) is not None:
+            _a(self._metric('In-flight CR',             d.cr_inflight,                  '',    fmt='.1f'))
+        if getattr(d, 'adiabat_mass_averaged_ice', None) is not None and d.adiabat_mass_averaged_ice > 0:
+            _a(self._metric('Mass-avg adiabat (peak-vel)', d.adiabat_mass_averaged_ice, '',    fmt='.2f'))
         if getattr(d, 'adiabat_at_breakout', 0.0) > 0:
             _a(self._metric('Base adiabat (at breakout)', d.adiabat_at_breakout,       '',     fmt='.2f'))
         if getattr(d, 'shock_breakout_time_ns', 0.0) > 0:
@@ -290,6 +295,7 @@ class ICFOutputGenerator:
         if (hasattr(d, 'alpha_onset_time_ns') and
                 d.alpha_onset_time_ns is not None and
                 d.alpha_onset_time_ns > 0 and
+                d.stag_time > 0 and
                 d.alpha_onset_time_ns < d.stag_time * 1e9):
             _a(self._metric('Alpha onset time', d.alpha_onset_time_ns, 'ns', fmt='.3f'))
             _a('  (implosion metrics evaluated pre-onset)')
