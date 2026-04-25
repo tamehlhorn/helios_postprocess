@@ -710,27 +710,47 @@ class ICFAnalyzer:
 
     def _compute_shock_breakout(self):
         """
-        Detect first shock breakout from the fuel shell into the gas cavity.
+        Detect first shock breakout from the laser-driven side of a target
+        through to its rear ("downstream") face.
 
         Operational definition: the first timestep (after the foot-start floor)
-        where the mean pressure in the outer gas zones rises significantly
-        above its initial value, indicating that a shock originally launched
-        into the shell has crossed from the solid/fuel layer (ice or wetted
-        foam) into the gas cavity and begun to compress and heat it. This
-        time sets the base adiabat for the cold fuel shell.
+        where the mean pressure in the rear-face probe zones rises significantly
+        above its initial value, indicating that a shock launched at the
+        laser-side outer surface has transited the full thickness of the
+        solid material and broken out at the rear face.
 
-        This definition is target-geometry-agnostic -- it works whether the
-        shell has 1, 2, or more solid/fuel layers -- because it operates on
-        the gas cavity itself, not on tracking the shock through the shell.
+        For multi-region CAPSULE targets, the rear face is the gas cavity:
+        the 5 zones immediately INSIDE the gas/fuel interface (ri[0, 0]).
+        The "drive-side" probe is the 5 zones immediately OUTSIDE that
+        interface (the innermost solid/fuel layer). This breakout time
+        sets the base adiabat for the cold fuel shell.
+
+        For single-region SOLID-SHELL targets (e.g. CH-only slab/sphere
+        flux-limiter tests), there is no gas cavity. The rear face is the
+        innermost edge of the shell (zones 0..4) and the drive-side probe
+        is the outermost edge (zones N-5..N-1).
+
+        This definition is target-geometry-agnostic — it works for capsules,
+        solid spheres, and slabs — because it operates on the rear face of
+        whatever solid material the shock is transiting.
 
         Stores on ICFRunData:
             shock_breakout_time_ns            Time of breakout [ns], 0.0 if not detected
             shock_breakout_index              Timestep index, -1 if not detected
-            shock_breakout_P_gas_Gbar         Mean pressure in outer gas zones at breakout
-            shock_breakout_P_ice_Gbar         Mean pressure in inner ice/fuel zones at breakout
+            shock_breakout_P_gas_Gbar         Mean pressure in rear-face probe at breakout
+                                              (named "_gas_" for capsule-era backward
+                                              compat; for solid shells this is the
+                                              rear-face/symmetry-axis-side probe)
+            shock_breakout_P_ice_Gbar         Mean pressure in drive-side probe at breakout
+                                              (named "_ice_" for capsule-era backward
+                                              compat; for solid shells this is the
+                                              laser-side probe)
             shock_breakout_pressure_Gbar      Alias for P_gas (backward-compat)
             shock_breakout_mach               Set to 0.0 (not computed by this method)
-            shock_foot_pressure_Gbar          Max ice-side probe pressure before breakout
+            shock_foot_pressure_Gbar          Max drive-side probe pressure before breakout
+
+        TODO: rename _P_gas_ / _P_ice_ attributes to _P_rear_ / _P_drive_
+        once the target_class refactor lands.
         """
         # Initialize outputs so downstream code always sees defined values
         self.data.shock_breakout_time_ns       = 0.0
@@ -742,15 +762,7 @@ class ICFAnalyzer:
         self.data.shock_foot_pressure_Gbar     = 0.0
 
         try:
-            ri = self.data.region_interfaces_indices
-            if ri is None or ri.shape[1] < 2:
-                return
             if self.data.ion_pressure is None:
-                return
-
-            ice_inner = int(ri[0, 0])   # gas/fuel interface node index
-            if ice_inner < 5:
-                logger.info("Skipping shock breakout: gas cavity < 5 zones")
                 return
 
             total_P = self.data.ion_pressure + (
@@ -759,52 +771,88 @@ class ICFAnalyzer:
             t_ns = self.data.time
             n_zones = total_P.shape[1]
 
-            # Probes: 5 zones each side of the gas/fuel interface
-            gas_probe_lo = max(0, ice_inner - 5)
-            gas_probe_hi = ice_inner                          # exclusive
-            ice_probe_lo = ice_inner
-            ice_probe_hi = min(ice_inner + 5, n_zones)
+            ri = self.data.region_interfaces_indices
+            n_regions = ri.shape[1] if ri is not None else 0
 
-            # Mean pressure history in each probe [Gbar]
-            P_gas = np.mean(total_P[:, gas_probe_lo:gas_probe_hi], axis=1) * 1e-8
-            P_ice = np.mean(total_P[:, ice_probe_lo:ice_probe_hi], axis=1) * 1e-8
+            # ---- Determine probe locations based on target geometry ----
+            if n_regions >= 2:
+                # CAPSULE: rear face = gas cavity, just inside gas/fuel interface
+                ice_inner = int(ri[0, 0])
+                if ice_inner < 5:
+                    logger.info("Skipping shock breakout: gas cavity < 5 zones")
+                    return
+                rear_probe_lo  = max(0, ice_inner - 5)
+                rear_probe_hi  = ice_inner                              # exclusive
+                drive_probe_lo = ice_inner
+                drive_probe_hi = min(ice_inner + 5, n_zones)
+                geometry_label = "capsule (gas cavity)"
+            else:
+                # SOLID SHELL: rear face = innermost zones, drive = outermost zones
+                if n_zones < 10:
+                    logger.info(
+                        f"Skipping shock breakout: shell has only {n_zones} zones "
+                        "(need >= 10 for non-overlapping probes)"
+                    )
+                    return
+                rear_probe_lo  = 0
+                rear_probe_hi  = 5
+                drive_probe_lo = n_zones - 5
+                drive_probe_hi = n_zones
+                geometry_label = "solid shell (rear face)"
 
-            # Threshold: 10x initial gas pressure, with an absolute floor of
-            # 1e-4 Gbar (0.1 kbar / 100 bar) so that pathologically low or
-            # zero initial values don't trigger false positives on noise.
-            P_gas_initial = float(P_gas[0])
-            P_threshold = max(10.0 * P_gas_initial, 1e-4)   # Gbar
+            # Sanity check: probes must not overlap (would happen for very thin shells)
+            if drive_probe_lo - rear_probe_hi < 5:
+                logger.warning(
+                    f"Shock breakout: probes are too close "
+                    f"(rear=[{rear_probe_lo}:{rear_probe_hi}], "
+                    f"drive=[{drive_probe_lo}:{drive_probe_hi}]) — "
+                    "results may not be physically meaningful"
+                )
+
+            # ---- Pressure histories at each probe [Gbar] ----
+            P_rear  = np.mean(total_P[:, rear_probe_lo:rear_probe_hi],   axis=1) * 1e-8
+            P_drive = np.mean(total_P[:, drive_probe_lo:drive_probe_hi], axis=1) * 1e-8
+
+            # Threshold: 10x initial rear-probe pressure, with absolute floor of
+            # 1e-4 Gbar (0.1 kbar / 100 bar) so that pathologically low or zero
+            # initial values don't trigger false positives on numerical noise.
+            P_rear_initial = float(P_rear[0])
+            P_threshold = max(10.0 * P_rear_initial, 1e-4)   # Gbar
 
             # Time floor: after foot launch, to skip IC transients
             t_floor = getattr(self.data, "laser_foot_start_ns", None) or 0.1
 
-            hits = np.where((t_ns >= t_floor) & (P_gas > P_threshold))[0]
+            hits = np.where((t_ns >= t_floor) & (P_rear > P_threshold))[0]
             if len(hits) == 0:
                 logger.info(
-                    f"Shock breakout: not detected "
-                    f"(max gas-probe P = {np.max(P_gas):.4e} Gbar, threshold = {P_threshold:.4e} Gbar)"
+                    f"Shock breakout: not detected ({geometry_label}); "
+                    f"max rear-probe P = {np.max(P_rear):.4e} Gbar, "
+                    f"threshold = {P_threshold:.4e} Gbar"
                 )
                 return
 
             i_b = int(hits[0])
             self.data.shock_breakout_index         = i_b
             self.data.shock_breakout_time_ns       = float(t_ns[i_b])
-            self.data.shock_breakout_P_gas_Gbar    = float(P_gas[i_b])
-            self.data.shock_breakout_P_ice_Gbar    = float(P_ice[i_b])
-            self.data.shock_breakout_pressure_Gbar = float(P_gas[i_b])  # alias
+            self.data.shock_breakout_P_gas_Gbar    = float(P_rear[i_b])    # rear face
+            self.data.shock_breakout_P_ice_Gbar    = float(P_drive[i_b])   # drive side
+            self.data.shock_breakout_pressure_Gbar = float(P_rear[i_b])    # alias
 
-            # Foot-pulse peak on the ice/fuel side: max ice-probe pressure
-            # from t_floor up to (and including) breakout
+            # Drive-side foot-pulse peak: max drive-probe pressure from t_floor
+            # up to (and including) breakout. For capsules this is the foot
+            # shock strength in the ice; for solid shells, the ablation drive
+            # peak. The latter should approximately match the published
+            # "ablation pressure" diagnostic (~110 Mbar for the CH sphere).
             pre_breakout_mask = (t_ns >= t_floor) & (t_ns <= t_ns[i_b])
             if np.any(pre_breakout_mask):
-                self.data.shock_foot_pressure_Gbar = float(np.max(P_ice[pre_breakout_mask]))
+                self.data.shock_foot_pressure_Gbar = float(np.max(P_drive[pre_breakout_mask]))
 
             logger.info(
                 f"Shock breakout at t={self.data.shock_breakout_time_ns:.3f} ns  "
-                f"(P_gas threshold = {P_threshold:.4e} Gbar);  "
-                f"P_gas={self.data.shock_breakout_P_gas_Gbar:.4f} Gbar, "
-                f"P_ice={self.data.shock_breakout_P_ice_Gbar:.4f} Gbar, "
-                f"P_ice_foot_peak={self.data.shock_foot_pressure_Gbar:.4f} Gbar"
+                f"({geometry_label}, threshold = {P_threshold:.4e} Gbar);  "
+                f"P_rear={self.data.shock_breakout_P_gas_Gbar:.4f} Gbar, "
+                f"P_drive={self.data.shock_breakout_P_ice_Gbar:.4f} Gbar, "
+                f"P_drive_peak={self.data.shock_foot_pressure_Gbar:.4f} Gbar"
             )
         except Exception as e:
             logger.warning(f"Could not compute shock breakout: {e}")
