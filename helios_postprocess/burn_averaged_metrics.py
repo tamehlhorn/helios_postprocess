@@ -135,6 +135,23 @@ def extract_histories_from_run_data(data) -> Dict:
     n_times = len(time_ns)
 
     ri = data.region_interfaces_indices          # (n_times, n_interfaces)
+
+    # Hot-spot averaging requires a defined gas/fuel interface (>=2 regions).
+    # Single-region targets (e.g. CH-only slab/sphere flux-limiter tests) have
+    # no hot spot to extract histories for -- return empty result.
+    if ri is None or ri.shape[1] < 2:
+        logger.info("Hot-spot history extraction: single-region target, no hot spot -- skipping")
+        return {
+            'time_ns':       np.asarray(data.time),
+            'T_hs_keV':      np.full(n_times, np.nan),
+            'P_hs_Gbar':     np.full(n_times, np.nan),
+            'rho_hs_gcc':    np.full(n_times, np.nan),
+            'rhoR_cf':       np.full(n_times, np.nan),
+            'r_hs_cm':       np.full(n_times, np.nan),
+            'v_shell_kms':   np.full(n_times, np.nan),
+            'single_region': True,
+        }
+
     T_ion = data.ion_temperature                 # (n_times, n_zones) eV
     rho   = data.mass_density                    # (n_times, n_zones) g/cm³
     P_ion = data.ion_pressure                    # (n_times, n_zones) J/cm³
