@@ -140,16 +140,26 @@ def extract_histories_from_run_data(data) -> Dict:
     # Single-region targets (e.g. CH-only slab/sphere flux-limiter tests) have
     # no hot spot to extract histories for -- return empty result.
     if ri is None or ri.shape[1] < 2:
-        logger.info("Hot-spot history extraction: single-region target, no hot spot -- skipping")
+        # Single-region target (e.g. CH-only slab/sphere flux-limiter test).
+        # Return a dict with the keys calculate_burn_averaged_metrics() expects,
+        # filled with NaN/zero so its Simpson-weighted integrals evaluate to
+        # 0 / NaN cleanly without crashing.
+        logger.info("Hot-spot history extraction: single-region target -- returning NaN stub")
+        nan_arr  = np.full(n_times, np.nan)
+        zero_arr = np.zeros(n_times)
         return {
-            'time_ns':       np.asarray(data.time),
-            'T_hs_keV':      np.full(n_times, np.nan),
-            'P_hs_Gbar':     np.full(n_times, np.nan),
-            'rho_hs_gcc':    np.full(n_times, np.nan),
-            'rhoR_cf':       np.full(n_times, np.nan),
-            'r_hs_cm':       np.full(n_times, np.nan),
-            'v_shell_kms':   np.full(n_times, np.nan),
-            'single_region': True,
+            'time_ns':            np.asarray(data.time),
+            'temperature_keV':    zero_arr,    # zero -> burn_rate = 0 -> clean zero integral
+            'pressure_Gbar':      nan_arr,
+            'density_gcc':        zero_arr,
+            'areal_density_gcm2': nan_arr,
+            'radius_um':          nan_arr,
+            'CR_max':             0.0,
+            'energy_output_MJ':   0.0,
+            'laser_energy_MJ':    getattr(data, 'laser_energy_delivered_MJ', 0.0),
+            'target_gain':        0.0,
+            'stagnation_time_ns': 0.0,
+            'single_region':      True,
         }
 
     T_ion = data.ion_temperature                 # (n_times, n_zones) eV
