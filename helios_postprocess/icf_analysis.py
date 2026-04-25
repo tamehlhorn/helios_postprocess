@@ -388,14 +388,16 @@ class ICFAnalyzer:
             # large inward velocity spike of converging vapor at ignition.
             # region_interfaces_indices[:, 0] is the hot-spot boundary NODE index;
             # zones outside the hot spot start at that node index.
+            # For single-region targets there is no hot-spot interface to mask
+            # against — fall through to the all-zones branch.
             ri = getattr(self.data, 'region_interfaces_indices', None)
-            if ri is not None:
+            if ri is not None and ri.shape[1] >= 2:
                 min_velocities = np.array([
                      np.min(self.data.velocity[ti, int(ri[ti, 0]):])
                 for ti in pre_bang_indices
                 ])
             else:
-                # Fallback: all zones (original behaviour)
+                # Fallback: all zones (single-region targets or no ri available)
                 min_velocities = np.min(self.data.velocity[pre_bang], axis=1)
 
             peak_idx_in_prebang = np.argmin(min_velocities)
@@ -548,6 +550,14 @@ class ICFAnalyzer:
                 stag_t = self.data.stag_time if self.data.stag_time > 0 else self.data.time[-1] / 2
                 eval_idx = np.argmin(np.abs(self.data.time - stag_t * 0.5))
 
+            # -- Single-region targets have no fuel layer to average over --
+            # Adiabat is a DT-fuel diagnostic; CH-only slab/sphere flux-limiter
+            # tests do not have a fuel region. Skip rather than report a CH
+            # "adiabat" that has no physical meaning.
+            if ri is not None and ri.shape[1] < 2:
+                logger.info("Adiabat: single-region target, no fuel layer — skipping")
+                return
+
             # -- Zone selection: density-based shell (same criterion as IFAR) --
             # Cold fuel = zones where rho > rho_peak / e, restricted to the
             # fuel-candidate range (between gas/fuel interface and the fuel/ablator
@@ -644,6 +654,11 @@ class ICFAnalyzer:
             n_zones = self.data.mass_density.shape[1]
 
             # Density-based shell at the breakout timestep (same logic as _compute_adiabat)
+            # Single-region targets have no fuel layer — skip cleanly.
+            if ri is not None and ri.shape[1] < 2:
+                logger.info("Base adiabat: single-region target, no fuel layer — skipping")
+                return
+
             if ri is not None and ri.shape[1] >= 3:
                 fuel_lo = int(ri[idx_b, 0])
                 fuel_hi = int(ri[idx_b, -2])
@@ -1046,7 +1061,36 @@ class ICFAnalyzer:
     def analyze_stagnation_phase(self):
         """Analyze stagnation: bang time, max compression, hot spot, implosion."""
         logger.info("Analyzing stagnation phase...")
-        
+
+        # ---- Single-region target check ----
+        # Capsule-stagnation analysis (hot spot, bang time, areal-density-by-region)
+        # only makes sense when there is a defined gas/fuel interface (>=2 regions).
+        # Single-region targets (e.g. CH-only slab/sphere flux-limiter tests) have
+        # no hot spot to converge to. We still run the implosion-phase analysis
+        # since that contains target-agnostic diagnostics (shock breakout, adiabat,
+        # ablation front).
+        # TODO (target-class refactor): replace this guard with a proper
+        # target_class attribute on ICFRunData ("capsule" | "slab" | "sphere_test")
+        # routed through dedicated analysis paths.
+        ri = self.data.region_interfaces_indices
+        if ri is None or ri.shape[1] < 2:
+            logger.info(
+                "Single-region target detected — skipping stagnation analysis "
+                "(no hot spot, bang time, or region-by-region areal densities). "
+                "Proceeding to implosion-phase diagnostics."
+            )
+            # Set stag_time/bang_time to 0.0 so downstream code knows they are
+            # undefined; this matches the existing convention used by
+            # _compute_hot_spot_properties etc. when stagnation is undetermined.
+            self.data.stag_time = 0.0
+            self.data.bang_time = 0.0
+            # Compute total areal-density history; this is geometry-agnostic
+            # and useful as a diagnostic for slab/sphere tests too.
+            self._compute_areal_densities()
+            # Implosion diagnostics still apply (shock breakout, adiabat, ablation)
+            self.analyze_implosion_phase()
+            return
+
         # Determine stagnation time (min hot-spot volume)
         self._find_stagnation_time()
         
