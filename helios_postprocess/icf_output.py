@@ -458,12 +458,16 @@ class ICFOutputGenerator:
     # ------------------------------------------------------------------
 
     def _compute_hs_radius_vs_time(self) -> np.ndarray:
-        """Hot-spot outer radius from region interface indices."""
+        """Hot-spot outer radius from region interface indices.
+
+        Undefined for single-region targets (no hot spot) — returns NaN.
+        """
         d = self.data
         n_times = len(d.time)
 
         if (d.region_interfaces_indices is None
-                or d.zone_boundaries is None):
+                or d.zone_boundaries is None
+                or d.region_interfaces_indices.shape[1] < 2):
             return np.full(n_times, np.nan)
 
         ri = d.region_interfaces_indices
@@ -475,12 +479,16 @@ class ICFOutputGenerator:
         return hs_radius
 
     def _compute_fuel_rhoR_vs_time(self) -> np.ndarray:
-        """Cold-fuel areal density vs time (between HS and fuel/ablator boundary)."""
+        """Cold-fuel areal density vs time (between HS and fuel/ablator boundary).
+
+        Undefined for single-region targets (no fuel layer) — returns NaN.
+        """
         d = self.data
         n_times = len(d.time)
 
         if (d.areal_density_vs_time is None
-                or d.region_interfaces_indices is None):
+                or d.region_interfaces_indices is None
+                or d.region_interfaces_indices.shape[1] < 2):
             return np.full(n_times, np.nan)
 
         ri = d.region_interfaces_indices
