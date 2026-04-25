@@ -1268,8 +1268,8 @@ class ICFAnalyzer:
             if np.any(hot_spot_mask):
                 # Hot spot pressure (mass-averaged)
                 # CLAUDE.md: report pressure in Gbar.  1 Gbar = 1e8 J/cm³
-                pressure_Gbar = (self.data.ion_pressure[stag_idx] + 
-                           self.data.rad_pressure[stag_idx]) * 1e-8  # J/cm³ → Gbar
+                # Plasma pressure (ion + electron) at stagnation -- conventional definition
+                pressure_Gbar = self.data.plasma_pressure[stag_idx] * 1e-8  # J/cm³ → Gbar
                 mass = self.data.zone_mass[stag_idx]
                 
                 self.data.hot_spot_pressure = np.average(
@@ -1288,15 +1288,11 @@ class ICFAnalyzer:
                 # specific_internal_energy × mass, summed over hot-spot zones,
                 # then converted J → kJ.
                 hs_energy_J = 0.0
-                if self.data.ion_pressure is not None:
-                    # E_int = P / (γ-1) × Volume  for ideal gas
-                    # Or directly: e_specific × mass  if we have SIE.
-                    # Use  E = (3/2) n k T × V  ≈ (3/2) P V  for each species
+                if self.data.plasma_pressure is not None:
+                    # E_int = (3/2) P V  for ideal gas  (P = plasma pressure = ion + electron)
                     vol = (4.0 / 3.0) * np.pi * (boundaries[1:]**3 - boundaries[:-1]**3)
-                    p_ion  = self.data.ion_pressure[stag_idx]
-                    p_elec = self.data.rad_pressure[stag_idx]  # includes elec + rad
-                    hs_energy_J = np.sum((1.5 * (p_ion[hot_spot_mask] + p_elec[hot_spot_mask]))
-                                         * vol[hot_spot_mask])
+                    p_plasma = self.data.plasma_pressure[stag_idx]
+                    hs_energy_J = np.sum((1.5 * p_plasma[hot_spot_mask]) * vol[hot_spot_mask])
                 self.data.hot_spot_internal_energy = hs_energy_J * 1e-3  # J → kJ
                 
                 logger.info(f"Core radius: {self.data.core_radius:.4f} cm")
@@ -1489,9 +1485,8 @@ class ICFAnalyzer:
                 logger.info(f"Hot-spot radius at ignition: "
                             f"{self.data.ignition_hs_radius * 1e4:.1f} μm")
 
-                # HS pressure: mass-averaged total pressure in Gbar
-                p_total = (self.data.ion_pressure[ign_idx]
-                           + self.data.rad_pressure[ign_idx]) * 1e-8  # Gbar
+                # HS pressure: mass-averaged plasma pressure (ion+electron) in Gbar
+                p_total = self.data.plasma_pressure[ign_idx] * 1e-8  # Gbar
                 mass = self.data.zone_mass[ign_idx]
                 total_hs_mass = np.sum(mass[hot_mask])
                 if total_hs_mass > 0:
@@ -1731,10 +1726,8 @@ class ICFAnalyzer:
             for t in range(n_times):
                 dt = dt_array[t]
                 for z in range(n_zones):
-                    # Include electron (rad) pressure for total pressure
-                    p_total = self.data.ion_pressure[t, z]
-                    if self.data.rad_pressure is not None:
-                        p_total += self.data.rad_pressure[t, z]
+                    # Plasma pressure (ion + electron) -- conventional
+                    p_total = self.data.plasma_pressure[t, z]
                     pressure_sum += p_total * fusion_rate[t, z] * dt
 
             neutron_ave_pressure = pressure_sum / neutron_yield

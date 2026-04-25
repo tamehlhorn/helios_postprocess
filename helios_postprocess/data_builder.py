@@ -58,6 +58,8 @@ class ICFRunData:
         self.elec_temperature: Optional[np.ndarray] = None    # (n_times, n_zones) eV
         self.ion_pressure: Optional[np.ndarray] = None        # (n_times, n_zones) J/cm³
         self.elec_pressure: Optional[np.ndarray] = None       # (n_times, n_zones) J/cm³
+        self.plasma_pressure: Optional[np.ndarray] = None     # (n_times, n_zones) J/cm³  ion + electron
+        self.rad_pressure_true: Optional[np.ndarray] = None   # (n_times, n_zones) J/cm³  radiation only
         self.rad_pressure: Optional[np.ndarray] = None        # (n_times, n_zones) J/cm³
         # NOTE: rad_pressure stores the "non-ion" component so that
         # total_pressure = ion_pressure + rad_pressure works everywhere.
@@ -432,6 +434,29 @@ def build_run_data(
             logger.warning("  ⚠ No elec/rad pressure found — rad_pressure set to zeros")
         else:
             data.rad_pressure = None
+
+    # ------------------------------------------------------------------
+    # Derived: plasma_pressure = ion + electron  (CONVENTIONAL DEFINITION)
+    # This is what should be used for shock breakout, ablation pressure,
+    # adiabat, hot-spot pressure -- all the standard ICF diagnostics.
+    # The legacy `rad_pressure` field still carries elec+rad combined for
+    # backward compatibility but should be considered deprecated.
+    # `rad_pressure_true` carries only the actual radiation pressure if
+    # available, otherwise zeros.
+    # ------------------------------------------------------------------
+    if data.ion_pressure is not None and data.elec_pressure is not None:
+        data.plasma_pressure = data.ion_pressure + data.elec_pressure
+        if verbose:
+            logger.info("  ✓ plasma_pressure           ← ion_pressure + elec_pressure (conventional)")
+    elif data.ion_pressure is not None:
+        # Fallback: assume Helios treats ion = electron locally so use ion alone
+        data.plasma_pressure = data.ion_pressure
+        logger.warning("  ⚠ No electron pressure found -- plasma_pressure = ion_pressure only")
+
+    if actual_rad is not None:
+        data.rad_pressure_true = actual_rad
+    elif data.ion_pressure is not None:
+        data.rad_pressure_true = np.zeros_like(data.ion_pressure)
 
     # ------------------------------------------------------------------
     # Region interfaces, material index, region names
