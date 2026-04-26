@@ -294,7 +294,7 @@ class ICFOutputGenerator:
             _a(self._metric('Shock breakout P (gas side)',  1000.0 * d.shock_breakout_P_gas_Gbar,                   'Mbar', fmt='.2f'))
             _a(self._metric('Shock breakout P (ice side)',  1000.0 * getattr(d, 'shock_breakout_P_ice_Gbar', 0.0),  'Mbar', fmt='.2f'))
         if getattr(d, 'shock_foot_pressure_Gbar', 0.0) > 0:
-            _a(self._metric('Ice-side foot peak pressure',  1000.0 * d.shock_foot_pressure_Gbar,                    'Mbar', fmt='.2f'))
+            _a(self._metric('Ablation pressure at breakout',  1000.0 * d.shock_foot_pressure_Gbar,                    'Mbar', fmt='.2f'))
         _a('')
         if (hasattr(d, 'alpha_onset_time_ns') and
                 d.alpha_onset_time_ns is not None and
