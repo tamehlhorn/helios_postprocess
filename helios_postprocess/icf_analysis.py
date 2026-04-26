@@ -841,20 +841,16 @@ class ICFAnalyzer:
             self.data.shock_breakout_P_ice_Gbar    = float(P_drive[i_b])   # drive side
             self.data.shock_breakout_pressure_Gbar = float(P_rear[i_b])    # alias
 
-            # Ablation pressure = spatial peak of the pressure field at any
-            # timestep up to breakout. The static drive-zone probe doesn't
-            # work for solid-shell targets because the outer Lagrangian zones
-            # blow off into corona; the actual ablation front travels inward
-            # as material ablates. Taking np.max over space captures the
-            # ablation front pressure regardless of where it currently sits.
-            # For capsules this matches the foot-shock peak in the shell;
-            # for solid shells, the steady-state ablation pressure (~110-150
-            # Mbar at 1e15 W/cm^2 drive on CH).
-            pre_breakout_mask = (t_ns >= t_floor) & (t_ns <= t_ns[i_b])
-            if np.any(pre_breakout_mask):
-                # Spatial peak at each timestep -> peak over the pre-breakout window
-                P_field_max_t = np.max(total_P[pre_breakout_mask, :], axis=1) * 1e-8  # Gbar
-                self.data.shock_foot_pressure_Gbar = float(np.max(P_field_max_t))
+            # Ablation pressure at breakout instant = spatial peak of the
+            # plasma pressure field AT the breakout timestep i_b. This is
+            # the quasi-steady ablation drive at the moment the shock
+            # reaches the rear face of the shell, which matches the
+            # typical ICF reporting convention. Time-of-peak ablation
+            # (early in the laser pulse during turn-on) is generally
+            # higher than this value (~30-40% for square-pulse drives on
+            # CH); the current convention reports the steady-state value
+            # at a well-defined physical event (shock breakout) instead.
+            self.data.shock_foot_pressure_Gbar = float(np.max(total_P[i_b, :]) * 1e-8)
 
             logger.info(
                 f"Shock breakout at t={self.data.shock_breakout_time_ns:.3f} ns  "
