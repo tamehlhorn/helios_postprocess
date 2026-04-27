@@ -558,16 +558,14 @@ class ICFAnalyzer:
                 logger.info("Adiabat: single-region target, no fuel layer — skipping")
                 return
 
-            # -- Zone selection: density-based shell (same criterion as IFAR) --
-            # Cold fuel = zones where rho > rho_peak / e, restricted to the
-            # fuel-candidate range (between gas/fuel interface and the fuel/ablator
-            # interface). This is target-geometry-agnostic: if a nominally-fuel
-            # region has partially ablated, its low-density zones fall below the
-            # density threshold and are correctly excluded. Works for 2-region,
-            # 3-region, or 5-region targets without special casing.
+            # -- Zone selection: DT ice layer only (Region 2) --
+            # Per Olson 2021 convention, adiabat is evaluated over the DT
+            # ice fuel only -- not including any foam ablator layer. For
+            # 3+ region targets ri[:, 1] is the ice/foam interface
+            # (outer edge of ice).
             if ri is not None and ri.shape[1] >= 3:
-                fuel_lo = int(ri[eval_idx, 0])            # gas/fuel interface
-                fuel_hi = int(ri[eval_idx, -2])           # fuel/ablator interface (outermost fuel)
+                fuel_lo = int(ri[eval_idx, 0])            # gas/ice interface
+                fuel_hi = int(ri[eval_idx, 1])            # ice/foam interface (outer edge of ice)
             elif ri is not None and ri.shape[1] == 2:
                 fuel_lo = int(ri[eval_idx, 0])
                 fuel_hi = int(ri[eval_idx, -1])           # no ablator: fuel to outer edge
