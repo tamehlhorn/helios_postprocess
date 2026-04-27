@@ -579,28 +579,22 @@ class ICFAnalyzer:
                 logger.warning("Fuel-candidate range is empty -- cannot compute adiabat")
                 return
 
-            rho_candidate  = self.data.mass_density[eval_idx, fuel_lo:fuel_hi]
-            rho_peak       = float(np.max(rho_candidate))
-            rho_threshold  = rho_peak / np.e
-            shell_mask_loc = rho_candidate > rho_threshold
-
-            if not np.any(shell_mask_loc):
-                logger.warning("Density-based shell is empty -- cannot compute adiabat")
-                return
-
-            # -- Total pressure in Mbar over the shell mask --
-            p_tot = self.data.ion_pressure[eval_idx, fuel_lo:fuel_hi][shell_mask_loc]
-            if self.data.rad_pressure is not None:
-                p_tot = p_tot + self.data.rad_pressure[eval_idx, fuel_lo:fuel_hi][shell_mask_loc]
+            # -- Plasma pressure (ion + electron) in Mbar over the DT ice layer --
+            # Mass-weighted average over the full ice region (no density mask).
+            # Per Olson 2021 convention: the DT ice payload is the
+            # thermonuclear fuel that needs to ignite; its adiabat is the
+            # diagnostic of interest regardless of partial-ablation state.
+            p_tot  = self.data.plasma_pressure[eval_idx, fuel_lo:fuel_hi]
             p_Mbar = p_tot * 1e-5                        # J/cm3 -> Mbar
 
-            rho  = rho_candidate[shell_mask_loc]
-            mass = self.data.zone_mass[eval_idx, fuel_lo:fuel_hi][shell_mask_loc]
+            rho  = self.data.mass_density[eval_idx, fuel_lo:fuel_hi]
+            mass = self.data.zone_mass[eval_idx, fuel_lo:fuel_hi]
 
+            n_ice = fuel_hi - fuel_lo
+            rho_peak_ice = float(np.max(rho)) if n_ice > 0 else 0.0
             logger.info(
-                f"Adiabat shell (density-based): {int(np.sum(shell_mask_loc))} zones "
-                f"[within fuel-candidate zones {fuel_lo}..{fuel_hi - 1}], "
-                f"rho_peak={rho_peak:.3f} g/cc, threshold={rho_threshold:.3f} g/cc"
+                f"Adiabat (DT ice only, plasma pressure): {n_ice} zones "
+                f"[{fuel_lo}..{fuel_hi - 1}], rho_peak_ice={rho_peak_ice:.3f} g/cc"
             )
 
             # -- Fermi pressure for equimolar DT --
@@ -611,9 +605,7 @@ class ICFAnalyzer:
                 alpha = p_Mbar / p_fermi
                 alpha[~np.isfinite(alpha)] = 0.0
 
-            # Density-based shell selection above already ensures we have
-            # compressed cold fuel (rho > rho_peak / e), so no additional
-            # cold_mask is needed. Averaging over the full shell.
+            # Mass-weighted average over the DT ice layer.
             self.data.adiabat_mass_averaged_ice = float(np.average(alpha, weights=mass))
             logger.info(f"Mass-averaged adiabat (cold fuel, t={self.data.time[eval_idx]:.2f} ns): "
                         f"{self.data.adiabat_mass_averaged_ice:.2f}")
@@ -659,12 +651,13 @@ class ICFAnalyzer:
                 logger.info("Base adiabat: single-region target, no fuel layer — skipping")
                 return
 
+            # DT ice layer only (Region 2). Same convention as _compute_adiabat.
             if ri is not None and ri.shape[1] >= 3:
-                fuel_lo = int(ri[idx_b, 0])
-                fuel_hi = int(ri[idx_b, -2])
+                fuel_lo = int(ri[idx_b, 0])               # gas/fuel interface
+                fuel_hi = int(ri[idx_b, 1])               # ice/foam interface
             elif ri is not None and ri.shape[1] == 2:
                 fuel_lo = int(ri[idx_b, 0])
-                fuel_hi = int(ri[idx_b, -1])
+                fuel_hi = int(ri[idx_b, -1])              # no ablator: fuel to outer edge
             else:
                 fuel_lo = 0
                 fuel_hi = n_zones
@@ -672,21 +665,12 @@ class ICFAnalyzer:
             if fuel_hi <= fuel_lo:
                 return
 
-            rho_candidate  = self.data.mass_density[idx_b, fuel_lo:fuel_hi]
-            rho_peak       = float(np.max(rho_candidate))
-            rho_threshold  = rho_peak / np.e
-            shell_mask_loc = rho_candidate > rho_threshold
-
-            if not np.any(shell_mask_loc):
-                return
-
-            p_tot = self.data.ion_pressure[idx_b, fuel_lo:fuel_hi][shell_mask_loc]
-            if self.data.rad_pressure is not None:
-                p_tot = p_tot + self.data.rad_pressure[idx_b, fuel_lo:fuel_hi][shell_mask_loc]
+            # Plasma pressure (ion + electron) over the full DT ice layer.
+            p_tot  = self.data.plasma_pressure[idx_b, fuel_lo:fuel_hi]
             p_Mbar = p_tot * 1e-5
 
-            rho  = rho_candidate[shell_mask_loc]
-            mass = self.data.zone_mass[idx_b, fuel_lo:fuel_hi][shell_mask_loc]
+            rho  = self.data.mass_density[idx_b, fuel_lo:fuel_hi]
+            mass = self.data.zone_mass[idx_b, fuel_lo:fuel_hi]
 
             # Fermi pressure for equimolar DT (Lindl convention)
             rho0    = 0.205
@@ -698,11 +682,12 @@ class ICFAnalyzer:
 
             self.data.adiabat_at_breakout = float(np.average(alpha, weights=mass))
 
+            n_ice = fuel_hi - fuel_lo
+            rho_peak_ice = float(np.max(rho)) if n_ice > 0 else 0.0
             logger.info(
                 f"Base adiabat at breakout (t={self.data.shock_breakout_time_ns:.3f} ns): "
                 f"{self.data.adiabat_at_breakout:.2f}  "
-                f"[{int(np.sum(shell_mask_loc))} shell zones, "
-                f"rho_peak={rho_peak:.3f} g/cc]"
+                f"[{n_ice} ice zones, rho_peak_ice={rho_peak_ice:.3f} g/cc]"
             )
 
         except Exception as e:
