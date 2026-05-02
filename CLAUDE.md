@@ -933,3 +933,227 @@ T_ion > 4.5 keV mask used only for burn propagation plot, not for scalar thresho
     # MacBook
     python ~/Codes/helios_postprocessor/examples/run_analysis.py <base_path>
     python ~/Codes/helios_postprocessor/examples/run_analysis.py <base_path> --contours
+## Session Update — April 26, 2026
+
+This appendix captures changes from the April 2026 calibration session. Older
+sections of this document may contain stale information that this section
+supersedes; an integration pass to fold these notes into the main body is a
+future TODO.
+
+### New conventions (apply to all future analysis)
+
+**DT ice adiabat is evaluated over Region 2 only.** For multi-region capsule
+targets, both `_compute_adiabat` (peak-velocity) and `_compute_adiabat_at_breakout`
+(base) take their zone selection as `ri[:, 0]:ri[:, 1]` — gas/fuel interface
+through ice/foam interface — with NO density mask. Mass-weighted average over
+the full ice layer regardless of partial-ablation state. This matches Olson 2021's
+adiabat convention and is now apples-to-apples with published references. Earlier
+foam-inclusive adiabat numbers (e.g., the WfCDT_01b 0.21 base adiabat) are
+superseded.
+
+**Plasma pressure = ion + electron pressure throughout.** All standard ICF
+diagnostics — shock breakout, ablation pressure, adiabat (peak-vel and base),
+hot-spot pressure (stagnation and ignition), neutron-averaged pressure,
+burn-averaged pressure — use `data.plasma_pressure = ion_pressure + elec_pressure`
+computed once in `data_builder.py`. Radiation pressure is excluded. The legacy
+`data.rad_pressure` field still contains `elec_pressure + true_radiation_pressure`
+for backward compatibility but should be considered deprecated; new code uses
+`data.plasma_pressure` and `data.rad_pressure_true` instead.
+
+**Ablation pressure = spatial peak at breakout instant** (not peak-over-time).
+`shock_foot_pressure_Gbar` reports `np.max(plasma_pressure[i_breakout, :])`.
+This matches the typical ICF reporting convention and reproduces Tom's published
+Helios reference plot (107 Mbar at 0.83 ns for the CH sphere baseline).
+
+**Shock breakout detection** is now target-geometry-agnostic. For capsule
+targets (multi-region), a 5-zone gas-cavity probe inside the gas/fuel interface
+detects the moment the shock crosses into the gas. For solid-shell targets
+(single region, e.g. CH sphere/slab), a 5-zone rear-face probe at zones 0..4
+detects shock arrival at the inner face. Threshold: `max(100 × P_initial, 1e-3 Gbar)`
+i.e. floor of 1 Mbar to filter preheat. Both target types report
+`shock_breakout_time_ns`, `shock_breakout_P_gas_Gbar` (rear face for solid shells),
+`shock_breakout_P_ice_Gbar` (drive side for solid shells), `shock_foot_pressure_Gbar`
+(spatial peak at breakout = ablation pressure).
+
+**Pressure unit display.** Pre-stagnation pressures (shock breakout, ablation,
+foot) are reported in **Mbar**. Stagnation-era pressures (hot-spot, burn-averaged)
+remain in **Gbar**. Conversion is display-only; stored attributes keep their
+`*_Gbar` suffix throughout.
+
+### Single-region target support
+
+The pipeline now handles CH-only slab and sphere targets that were previously
+unsupported. Guards added in `analyze_stagnation_phase`, `_compute_adiabat`,
+`_compute_adiabat_at_breakout`, `_compute_hs_radius_vs_time`,
+`_compute_fuel_rhoR_vs_time`, peak-velocity search (in implosion analysis),
+`extract_histories_from_run_data` (returns NaN-stub dict with the keys that
+`calculate_burn_averaged_metrics` expects), and `compute_performance_metrics`
+(CR section). Skip messages are logged when relevant analysis cannot apply.
+Non-applicable summary-output sections (mass fractions, hot-spot block, ignition
+block) are guarded by attribute presence so the summary is partial but clean.
+
+This is structurally messy. A future TODO is the **target_class attribute
+refactor** — adding `ICFRunData.target_class ∈ {"capsule", "slab", "sphere_test"}`
+and routing the pipeline through dedicated analysis paths.
+
+### Calibration baseline: PDD_26b is the best Helios match
+
+`Olson_PDD_26b_burn` is the validated best-match calibration to the published
+Olson 2021 LILAC reference at 2.15 MJ. Located at
+`~/Sims/Xcimer/Olson_PDD/Olson_PDD_26b_burn/` on Mac Studio.
+
+**Geometry:** half-cone 20°, spot radius 0.16 cm (Gaussian), focus d = +0.20 cm,
+wavelength 0.351 μm, power multiplier 1.0.
+
+**Drive:** foot 30 TW (0.10–5.00 ns), ramp 5.00–9.00 ns, peak 329 TW
+(9.00–12.70 ns), total duration 12.70 ns, 2.15 MJ delivered.
+
+**Other settings:** flux limiter f = 0.06; non-local alpha transport;
+3T burn enabled.
+
+**Target structure (4 regions, 350 zones total):**
+- DT Vapor: zones 0–150 (ρ₀ = 6e-4 g/cc)
+- DT Solid (ice): zones **151–190** (ρ₀ = 0.222 g/cc) — only 40 zones
+- DT-CH foam: zones 191–320 (ρ₀ = 0.242 g/cc)
+- CH Skin: zones 321–350 (ρ₀ = 1.049 g/cc)
+
+`region_interfaces_indices` shape is `(n_times, 4)` with boundaries at 151, 191,
+321, 351. Adiabat uses `ri[:, 0]:ri[:, 1]` = zones 151–190.
+
+**Headline results vs Olson 2021 LILAC reference:**
+
+| Metric | PDD_26b | Reference | Δ |
+|---|---|---|---|
+| Peak implosion velocity | 478.4 km/s | 470 km/s | +1.8% ✓ |
+| Stagnation time | 13.25 ns | ~13.47 ns | −1.6% ✓ |
+| Imploded DT mass | 0.60 mg | ~0.60 mg | ≈ 0 ✓ |
+| Stagnation CR | 29.6 | 29.0 ± 3 | +2.1% ✓ |
+| Fraction absorbed | 85.6% | 65.1 ± 9.3% (3D) | +31.5% |
+| **DT ice adiabat (peak v)** | **1.43** | **3.0 ± 0.5** | **−52%** |
+| DT ice base adiabat (at breakout) | 0.63 | — | — |
+| Shock breakout time | 9.00 ns | — | — |
+| Ablation pressure at breakout | 67.7 Mbar | — | — |
+| ρR (cold fuel) | 0.61 g/cm² | 1.10 ± 0.05 g/cm² | −44% |
+| Hot-spot pressure (stagnation) | 161.7 Gbar | — | — |
+| ⟨T_hs⟩ (burn-averaged) | 19.4 keV | 22.5 ± 2.0 keV | −13.6% |
+| ⟨P_hs⟩ (burn-averaged) | 165 Gbar | 193 ± 20 Gbar | −14.5% |
+| Yield | 13.8 MJ | 87.4 MJ | −84% |
+| Gain | 6.4 | 40.6 | −84% |
+
+Geometric and timing channels match within a few percent. Burn-averaged temperature
+and pressure are within ~14% of LILAC. Persistent residuals are in adiabat (−52%),
+ρR_cf (−44%), absorbed fraction (+32%), and yield (−84%). These all link to the
+1D-vs-3D limitation: Helios maintains full spherical coupling throughout the
+implosion while the fixed-pointing NIF PDD beams illuminate a decreasing solid
+angle as the capsule shrinks.
+
+A handoff document for cross-code comparison with MULTI-IFE has been generated
+at `~/Sims/Xcimer/Olson_PDD/MULTI comparison/PDD_26b_MULTI-IFE_Comparison.docx`.
+
+### Key calibration finding: ablation residual is not laser-coupling
+
+Two geometrically distinct beam configurations both reach the LILAC reference
+peak velocity:
+- **PDD_26b**: forward focus, cone 20°, d = +0.20 cm
+- **DM_01b**: inverted focus, cone 3.5°, d = −2.5 cm, 230 TW, 1.365 MJ
+
+Both leave the same residuals on adiabat, IFAR, and imploded-fuel-mass channels.
+This rules out laser-coupling geometry as the cause of the residual. The
+remaining suspects are **flux limiter implementation** and **EOS choices** for
+the cold fuel and ablator.
+
+### CH sphere flux-limiter scan
+
+Validated test case (CH-only 100-μm shell at R=2 mm, 502.7 TW, 2.5 ns square
+pulse, equivalent to 1e15 W/cm² slab intensity, half-cone 1° focus d=−2.0 cm).
+Reference values: shock breakout 0.83 ns, ablation pressure ~107 Mbar, 100%
+absorbed.
+
+**Validation result:** Postprocessor reproduces 0.84 ns breakout, 106.6 Mbar
+ablation pressure (essentially exact match) at f = 0.06.
+
+**Flux-limiter scan (f = 0.06, 0.08, 0.10, 0.12):**
+
+| f | Breakout (ns) | Ablation (Mbar) | P_rear (Mbar) |
+|---|---|---|---|
+| 0.06 | 0.840 | 106.56 | 10.03 |
+| 0.08 | 0.840 | 106.75 | 13.41 |
+| 0.10 | 0.840 | 106.53 | 15.58 |
+| 0.12 | 0.830 | 108.12 | 1.10 |
+
+**Conclusion (provisional):** flux limiter is a weak lever for ablation pressure
+across the standard range. dα/df ≈ 0.23 per unit f (marginally above the
+CLAUDE.md 0.2 threshold). MULTI-IFE feedback subsequently indicated Helios's
+flux-limiter implementation may not be running properly — motivating a much
+tighter f = 0.005 test on WfCDT_01b as the highest-priority next-session item.
+
+### Next-session priorities (ordered)
+
+1. **WfCDT_01b f = 0.005 rerun** + clean ice-only baseline at f = 0.06.
+   Tests the MULTI-IFE FL feedback (much tighter limiter, 12× below baseline)
+   and gives the first clean WfCDT adiabat number under all current conventions.
+
+2. **Restore notebook RANSAC shock-tracking algorithm** to the postprocessor.
+   Algorithm: iterative `sklearn.linear_model.RANSACRegressor` with
+   `LinearRegression` estimator, fits straight lines to shock-front points in
+   (t, r) space, removes inliers and repeats until exhausted, then computes
+   pairwise line intersections to find shock-coalescence points. Output: list
+   of shock fronts (slope, intercept, n_inliers) plus list of coalescence
+   points (t, r) filtered to physically meaningful region. Open implementation
+   questions: candidate-point source (peak-finder on dP/dr at each timestep?),
+   normalization of `residual_threshold`, max-shocks cap, `r_max` definition.
+
+3. **Late-time laser-power scaling experiment.** Mimic the 3D ray-trace miss
+   that happens as the capsule shrinks below the NIF PDD beam-pointing solid
+   angle. First cut: ramp factor on `LaserPwrDeliveredForBeam` starting at
+   ~9 ns reducing total absorbed energy by ~22 percentage points (Helios 87% →
+   LILAC 65%). More careful version: extract time-dependent absorbed-energy
+   curve from Olson 2021 directly and scale to match.
+
+4. **EOS variation on WfCDT_01b.** DT ice EOS (SESAME 5271 → 5263 or LEOS) and
+   CH ablator EOS (SESAME 7384 → 7593 or LEOS), holding f = 0.06. Most-likely
+   physics lever for the WfCDT adiabat gap if (1)–(3) don't close it.
+
+5. **Full WfCDT flux-limiter scan** f = 0.005, 0.06, 0.10. Deferred until
+   shock tracking from (2) is mature so we can attribute changes to actual
+   physics rather than guess.
+
+### Background TODOs (when convenient)
+
+- `target_class` attribute refactor (replaces ad-hoc single-region guards)
+- `_track_ablation_front` for single-region targets (currently fails silently
+  with "all zero" history; not blocking since `shock_foot_pressure_Gbar` gives
+  the headline number)
+- `data_builder.build_run_data()` `time_unit` default — should auto-detect
+  rather than passthrough
+- Hot-spot pressure jumped from 103 → 162 Gbar after plasma-pressure +
+  stagnation-time changes; worth understanding before next big calibration
+  round, not a blocker
+- PDD_26b Stagnation CR rerun under current conventions (the doc footnotes
+  this; geometric definition shouldn't move it but verification is cheap)
+- VI_6 (Vulcan HDD) restart — set aside during PDD work, several open items
+  on over-ablation physics and CR convention mismatch
+
+### Retired items (no longer pursued)
+
+- Geometry sweep with cone = 35°, d = 0.22–0.23 cm (laser coupling not the
+  residual)
+- Foot power / adiabat counter-intuitive trend (likely artifact of old
+  foam-inclusive adiabat convention)
+
+### Patches landed this session
+
+In chronological order, all on origin/main as of session close:
+
+- Stage 2d shock breakout (gas-cavity / rear-face pressure monitor with
+  geometry-agnostic probe selection; density-based shell adiabat;
+  base-adiabat-at-breakout method)
+- Single-region target guards across pipeline + summary output
+- Mbar/Gbar display convention for pre-stag/stag pressures
+- Ablation-pressure = spatial peak at breakout instant
+- Plasma-pressure convention end-to-end (data_builder + 8 call sites)
+- DT ice-only adiabat zone selection (both `_compute_adiabat` and
+  `_compute_adiabat_at_breakout`)
+- Single-region stub-dict fix for `extract_histories_from_run_data`
+- CR computation guard against single-region targets
+
