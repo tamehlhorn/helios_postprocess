@@ -34,3 +34,13 @@ htmlcov/
 *.bak
 patch_*.py
 *.svg
+
+# Session-scoped patch scripts and logs (pre-applied; not source of truth)
+apply_patch_*.py
+patch_*.py
+*_patchB*.log
+SESSION_HANDOFF_*.md
+archive/
+Aux Standalone files/
+Aux_Standalone_files/
+Aux_Standalone_files/
