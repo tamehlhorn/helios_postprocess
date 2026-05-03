@@ -805,7 +805,7 @@ Longer-term:
 
 ## Implosion & Ablation Diagnostics (Task 3.A, April 2026)
 
-Timing milestones and ablation-physics scalars. Collaborator request
+Timing milestones and ablation-physics scalars. This request made by David Montgomery, an Xcimer collaborator
 in this priority order:
 
 1. First shock breakout from fuel to gas
