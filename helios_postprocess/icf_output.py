@@ -195,8 +195,20 @@ class ICFOutputGenerator:
             _a(self._metric('Half-cone angle',  d.laser_half_cone_angle_deg, 'deg', fmt='.2f'))
             _a(f"  {'Spot radius':<30} {d.laser_spot_size_cm:>15.4f} cm  ({d.laser_spatial_profile})")
             _a(self._metric('Power multiplier', d.laser_power_multiplier,    '',    fmt='.4f'))
-            # Flux limiter: bypass _metric (0.06 is a valid value; _metric renders 0.0 as '—')
-            if getattr(d, 'flux_limiter_enabled', False):
+            # Flux limiter — per region when available, else fall back to scalar.
+            # Display outermost first since that's what couples to the laser.
+            fls = getattr(d, 'flux_limiters', None)
+            if fls:
+                _a(f"  {'Flux limiter (f) per region':<36s}")
+                for fl in reversed(fls):
+                    rname = fl['region']
+                    if fl['enabled']:
+                        _a(f"    {rname:<28s} {fl['value']:>10.3f}")
+                    elif fl['value'] > 0:
+                        _a(f"    {rname:<28s} {fl['value']:>10.3f}  (flag off)")
+                    else:
+                        _a(f"    {rname:<28s} {'(not set)':>10s}")
+            elif getattr(d, 'flux_limiter_enabled', False):
                 _a(f"  {'Flux limiter (f)':<36s} {d.flux_limiter:>10.3f}")
             elif getattr(d, 'flux_limiter', 0.0) > 0:
                 _a(f"  {'Flux limiter (f)':<36s} {d.flux_limiter:>10.3f}  (flag off)")

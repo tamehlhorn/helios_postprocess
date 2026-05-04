@@ -1157,3 +1157,141 @@ In chronological order, all on origin/main as of session close:
 - Single-region stub-dict fix for `extract_histories_from_run_data`
 - CR computation guard against single-region targets
 
+## Session Update — May 3, 2026
+
+Supersedes earlier next-session priorities, the EOS-variation suggestion,
+and all WfCDT items.
+
+### WfCDT retired
+
+WfCDT was a David Montgomery test problem with no published benchmark to
+calibrate against — a dead end for code validation. All WfCDT next-session
+items (f=0.005 rerun, ice-only baseline, full FL scan) are dropped.
+
+### Calibration strategy: PDD → HDD
+
+The active path is now (1) close the PDD calibration against the Olson
+2021 LILAC / xRAGE / HYDRA 1.4× cluster on the PDD_26 series, then
+(2) transfer the calibrated knobs to the Vulcan HDD target (VI_6). PDD
+is the testbench because the published reference is the strongest
+cross-code anchor we have; HDD is the deliverable per Christopherson
+11/3/2025 (v=410 km/s, α=6, KE=300 kJ, stag DT=3 mg, P_n-avg=210 Gbar,
+ρR_n-avg=2.1 g/cm², T_n-avg=4.8 keV, yield=0.6 MJ).
+
+### EOS is not a knob
+
+PROPACEOS and SESAME are the only EOS options available, and both are
+already in use (SESAME 5271 for DT regions, PROPACEOS for DT-CH foam
+and CH skin). EOS variation is removed from the priority list. Earlier
+notes treating EOS as a calibration lever (e.g. lines ~590, ~1063,
+priority 4 of the April-26 appendix) are superseded.
+
+### Calibration knobs going forward
+
+1. **Per-material flux limiter.** Each RHW region has its own FL block;
+   the laser-coupling-relevant ones are CH Skin (outermost) and DT-CH
+   foam (inner ablator). Tightening FL on those two while leaving DT
+   regions at f=0.06 is the standard move.
+2. **Time-dependent power scaling on the RHW pulse.** Mimics the 3D
+   ray-trace miss as the capsule shrinks below the NIF PDD beam-pointing
+   solid angle. Empirical target is a time-resolved absorbed-energy
+   curve from Olson 2021 (HYDRA preferred); first-cut piecewise
+   multiplier on `LaserPwrDeliveredForBeam` past ~9 ns is acceptable
+   until the time-resolved curve is extracted.
+3. **Helios source fixes (escalation only).** If FL + power scaling
+   can't close the residual on PDD, identify and propose fixes to
+   Helios's coupling/transport. Not pursued speculatively.
+
+### PDD_26 flux-limiter scan results
+
+| f      | Stag (ns) | v_imp (km/s) | α_ice | Abs % | ρ_max (g/cc) | P_hs (Gbar) | Yield (MJ) | Imploded DT (mg) |
+|--------|-----------|--------------|-------|-------|--------------|-------------|------------|------------------|
+| 0.06   | 13.43     | 479          | 1.09  | 87.2  | 359          | 390         | 59.5       | 1.65             |
+| 0.005  | 13.83     | 438          | 1.37  | 78.1  | 300          | 214         | 49.3       | 0.60             |
+| 0.001  | 14.25     | 417          | 1.58  | 70.4  | 197          | 154         |  9.8       | 0.60             |
+
+Olson 1.4× cluster reference: v=470, α=3.0, abs=65±9%, P_hs=193±20 Gbar,
+yield=87 MJ.
+
+**Findings:**
+- Helios FL implementation IS responsive on the PDD capsule, contra
+  the CH-sphere flat result (which was the degenerate case — solid
+  shell + square pulse has no shock-train or compressional adiabat
+  dynamics). The MULTI-IFE-flagged "FL not running" worry is retired
+  for this target class.
+- All channels move monotonically and in the textbook direction with
+  decreasing f: lower absorption, lower drive, higher α, lower yield.
+- Adiabat slope is small: dα/d(log₁₀ f) ≈ 0.4. Closing the 1.09→3.0
+  gap by FL alone would require f ~ 1e-7, well past extinction.
+- f = 0.001 extinguishes ignition (HS ρR never reaches 0.3 g/cm²).
+  f = 0.005 sits at the edge — ignition fires (13.87 ns) but no
+  complete-propagation timestamp.
+- Imploded DT mass floors at 0.60 mg between f=0.005 and f=0.001 →
+  ablation-channel residual is NOT in the laser-coupling channel.
+  Confirms the "two paths to velocity" April finding.
+- Conclusion: FL is a real lever but insufficient alone. Combined
+  FL + late-time laser-power scaling is the natural next try.
+
+### Per-material FL parser (FIXED May 3, 2026)
+
+`RHWParser._parse_flux_limiter` previously kept only the *first*
+region's value (DT Vapor, always 0.06). When foam/CH-skin FL was
+changed, summary output stayed at 0.06 — making it invisible that a
+knob was being moved. The warning that fired was easy to miss.
+
+Fix: parser now returns a per-region list,
+`[{'region', 'enabled', 'value'}, ...]`, exposed on
+`RHWConfiguration.flux_limiters` and `ICFRunData.flux_limiters`. The
+scalar `flux_limiter` field now holds the *outermost* region's value
+(CH skin / ablator — laser-coupling-relevant), not the first.
+`icf_output.py` prints all regions in the LASER CONFIGURATION block
+when per-region data is available.
+
+### Published-JSON pointer fix
+
+`Olson_PDD_26af001_burn_published.json` and
+`Olson_PDD_26af005_burn_published.json` currently reference the 1.0×
+drive Olson values (v=370, α=7.4, yield=62, abs=99%) — both runs are
+1.4× drive variants and should compare against the cluster reference
+(v=470, α=3.0, yield=87, abs=65±9%). Action: drop in
+`Olson_PDD_26c_burn_published.json` (created May 3, 2026 with per-code
+LILAC/xRAGE/HYDRA values) under both filenames.
+
+### Next-session priorities (ordered)
+
+1. **Combined FL + late-time power scaling on PDD_26.** Foam + CH-skin
+   FL = 0.005, plus piecewise multiplier on the RHW power table
+   (initial guess: ~0.75× past ~9 ns; calibrate against absorbed-energy
+   target ≈ 65%). Target metrics: absorbed → 65%, α → 3, yield → 30+ MJ.
+2. **Backfill 26af001 / 26af005 published JSONs** with the 26c reference.
+3. **Restore notebook RANSAC shock-tracking algorithm.** Iterative
+   `sklearn.linear_model.RANSACRegressor` + `LinearRegression`, fits
+   straight lines to shock-front points in (t, r) space, removes
+   inliers, computes pairwise intersections for coalescence points.
+   Critical for the Christopherson "simultaneous shock breakout"
+   tuning target on Vulcan HDD.
+4. **Extend comparison framework with per-code Δ columns** (LILAC,
+   xRAGE, HYDRA), per Tom 5/3: "different algorithms and databases in
+   the three codes." Use the underscore-prefixed per-code keys in the
+   new 26c JSON as the data source.
+5. **HDD transfer.** Once PDD calibration is closed, port the
+   FL + power-scaling settings to VI_6 and validate against
+   Christopherson 11/3/2025 deliverables.
+
+### Background TODOs (unchanged from April 26 appendix)
+
+- `target_class` attribute refactor
+- `_track_ablation_front` for single-region targets
+- `data_builder.build_run_data()` `time_unit` auto-detect
+- Hot-spot pressure 103→162 Gbar root-cause after plasma-pressure +
+  stagnation-time changes
+- PDD_26b stagnation CR rerun under current conventions
+
+### Retired (no longer pursued)
+
+- WfCDT_01b f=0.005 rerun
+- Full WfCDT FL scan
+- WfCDT clean ice-only baseline
+- EOS variation as a calibration lever (no remaining options)
+- Geometry sweep cone=35°, d=0.22-0.23 cm (April 2026; laser-coupling
+  not the residual)

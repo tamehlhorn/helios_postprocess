@@ -98,9 +98,9 @@ class ICFRunData:
         self.laser_peak_start_ns: float = 0.0
         self.laser_peak_end_ns: float = 0.0
         self.laser_pulse_duration_ns: float = 0.0
-        self.flux_limiter: float = 0.0              # from .rhw (Flux limiter mult.)
-        self.flux_limiter_enabled: bool = False     # from .rhw (Use flux limiter)
-        self.alpha_deposition_local: bool = False
+        self.flux_limiter: float = 0.0              # from .rhw — outermost region (backward compat)
+        self.flux_limiter_enabled: bool = False     # from .rhw — outermost region's flag
+        self.flux_limiters: list = None             # NEW — per-region: [{'region', 'enabled', 'value'}]        self.alpha_deposition_local: bool = False
         self.alpha_deposition_nonlocal: bool = False
         self.eos_models: list = None                              # [{region, type, file}]
         self.dt_neutron_count: Optional[np.ndarray] = None        # time-integrated DT neutron yield
@@ -328,8 +328,9 @@ def build_run_data(
         data.laser_peak_start_ns       = rhw_config.laser_peak_start_ns
         data.laser_peak_end_ns         = rhw_config.laser_peak_end_ns
         # Flux limiter (from .rhw)
-        data.flux_limiter         = getattr(rhw_config, 'flux_limiter', 0.0)
-        data.flux_limiter_enabled = getattr(rhw_config, 'flux_limiter_enabled', False)
+        data.flux_limiter               = getattr(rhw_config, 'flux_limiter', 0.0)
+        data.flux_limiter_enabled       = getattr(rhw_config, 'flux_limiter_enabled', False)
+        data.flux_limiters              = getattr(rhw_config, 'flux_limiters', None)   # NEW
         data.laser_pulse_duration_ns   = rhw_config.laser_pulse_duration_ns
         data.eos_models                = rhw_config.eos_models
         data.alpha_deposition_local    = rhw_config.alpha_deposition_local

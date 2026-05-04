@@ -39,8 +39,9 @@ class RHWConfiguration:
     eos_models: list = None  # [{region, type, file}, ...]
     alpha_deposition_local: bool = False     # Use alpha deposition = 1
     alpha_deposition_nonlocal: bool = False  # Use non alpha deposition = 1
-    flux_limiter: float = 0.0                # Flux limiter mult. (from .rhw; 0 if off)
-    flux_limiter_enabled: bool = False       # Use flux limiter = 1
+    flux_limiter: float = 0.0                # outermost region's FL (laser-coupling-relevant); see flux_limiters for per-region detail
+    flux_limiter_enabled: bool = False       # outermost region's "Use flux limiter" flag
+    flux_limiters: list = None               # NEW — per-region: [{'region', 'enabled', 'value'}, ...] inner→outer
     drive_time: Optional[np.ndarray] = None
     drive_temperature: Optional[np.ndarray] = None
     source_file: Optional[str] = None
@@ -87,7 +88,17 @@ class RHWParser:
         laser_params = self._parse_laser_geometry(lines)
         eos_models = self._parse_eos_models(lines)
         alpha_local, alpha_nonlocal = self._parse_alpha_transport(lines)
-        flux_enabled, flux_value = self._parse_flux_limiter(lines)
+        flux_limiters = self._parse_flux_limiter(lines)
+
+        # Backward-compat scalars: report the OUTERMOST region's FL
+        # (laser-coupling-relevant — CH skin/ablator). Full per-region
+        # detail lives on flux_limiters.
+        flux_value = 0.0
+        flux_enabled = False
+        if flux_limiters:
+            outer = flux_limiters[-1]   # last region = outermost (innermost-first ordering)
+            flux_value   = outer['value']
+            flux_enabled = outer['enabled']
         
         # Extract drive temperature data
         drive_time, drive_temp = self._parse_drive_temperature(lines)
@@ -116,6 +127,7 @@ class RHWParser:
             alpha_deposition_nonlocal=alpha_nonlocal,
             flux_limiter=flux_value,
             flux_limiter_enabled=flux_enabled,
+            flux_limiters=flux_limiters,    # NEW
         )
         
         logger.info(f"Configuration: {config.drive_type}, "
@@ -154,52 +166,65 @@ class RHWParser:
             return True, False    # local instantaneous
         return False, True        # non-local transport
     
-    def _parse_flux_limiter(self, lines: list) -> tuple:
+    def _parse_flux_limiter(self, lines: list):
         """
-        Parse electron thermal flux limiter from the .rhw file.
+        Parse electron thermal flux limiter per region from the .rhw file.
 
-        The .rhw has four copies of the flux-limiter block — one per region
-        (DT vapor, DT ice, CH skin, foam). Pattern:
+        Each region's RHW block carries its own flux-limiter pair:
 
+            Parameters for Region = CH Skin
+            ...
             Use flux limiter       = 1
-            Flux limiter mult.     = 0.06
+            Flux limiter mult.     = 0.005
+            ...
 
-        Normally identical across regions. Take the first (enabled, value)
-        pair seen. Warn once if a later block has a different value.
+        Different materials may carry different f. The laser-coupling-relevant
+        regions for the Olson PDD target are CH Skin (outermost) and DT-CH
+        foam.
 
         Returns
         -------
-        (enabled, value) : (bool, float)
-            (False, 0.0) if no flux-limiter line is present.
+        list of dict or None
+            [{'region': str, 'enabled': bool, 'value': float}, ...] in the
+            order regions appear in the RHW (innermost first). None if no
+            flux-limiter fields are present.
         """
-        import warnings as _w
-        enabled_first = None
-        value_first = None
-        warned = False
+        out = []
+        current_region = None
+        fl_enabled = None
+        fl_value = None
+
+        def _flush():
+            nonlocal current_region, fl_enabled, fl_value
+            if current_region is not None and (fl_enabled is not None
+                                               or fl_value is not None):
+                out.append({
+                    'region':  current_region,
+                    'enabled': bool(fl_enabled) if fl_enabled is not None else False,
+                    'value':   float(fl_value)  if fl_value  is not None else 0.0,
+                })
+            fl_enabled = None
+            fl_value = None
+
         for line in lines:
-            lstrip = line.strip().lower()
-            if lstrip.startswith('use flux limiter'):
+            s = line.strip()
+            sl = s.lower()
+            if s.startswith('Parameters for Region ='):
+                _flush()
+                current_region = s.split('=', 1)[-1].strip()
+            elif sl.startswith('use flux limiter'):
                 try:
-                    v = int(line.split('=')[-1].strip())
+                    fl_enabled = (int(s.split('=')[-1].strip()) == 1)
                 except (ValueError, IndexError):
-                    continue
-                if enabled_first is None:
-                    enabled_first = (v == 1)
-            elif lstrip.startswith('flux limiter mult'):
+                    pass
+            elif sl.startswith('flux limiter mult'):
                 try:
-                    f = float(line.split('=')[-1].strip())
+                    fl_value = float(s.split('=')[-1].strip())
                 except (ValueError, IndexError):
-                    continue
-                if value_first is None:
-                    value_first = f
-                elif abs(f - value_first) > 1e-9 and not warned:
-                    _w.warn(
-                        f'RHW flux limiter varies across regions '
-                        f'(first={value_first}, later={f}); reporting first.',
-                        stacklevel=2)
-                    warned = True
-        return (bool(enabled_first) if enabled_first is not None else False,
-                float(value_first) if value_first is not None else 0.0)
+                    pass
+        _flush()
+
+        return out if out else None
 
     def _parse_eos_models(self, lines: list) -> list:
         """Parse EOS model type and file for each spatial region."""
