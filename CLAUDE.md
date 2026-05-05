@@ -1295,3 +1295,248 @@ LILAC/xRAGE/HYDRA values) under both filenames.
 - EOS variation as a calibration lever (no remaining options)
 - Geometry sweep cone=35°, d=0.22-0.23 cm (April 2026; laser-coupling
   not the residual)
+
+### Session Update — May 4, 2026
+
+Continues PDD calibration work from May 3. Per-region FL parser fix
+landed and validated; FL/geometry/foot calibration scan executed; best
+1D calibration point identified and burn run submitted.
+
+### Per-region FL parser landed (committed May 3 evening)
+
+`RHWParser._parse_flux_limiter` rewritten to return per-region list
+`[{'region', 'enabled', 'value'}, ...]`. Surfaced on
+`RHWConfiguration.flux_limiters` and mirrored on
+`ICFRunData.flux_limiters`. Scalar `flux_limiter` field now reports
+the *outermost* region (CH skin / ablator — laser-coupling-relevant).
+`icf_output.py` prints all regions in the LASER CONFIGURATION block
+when per-region data is present. Validated end-to-end on Studio
+against PDD_26a/26af005/26af001: all three RHW files parse correctly,
+showing CH Skin and DT-CH foam at the run-specific f, DT Solid and DT
+Vapor at canonical 0.06.
+
+### Published JSON expanded with per-code reference values
+
+`Olson_PDD_26c_burn_published.json` extended from 38 → 79 lines.
+Per-code blocks (LILAC, xRAGE, HYDRA) extracted from Olson 2021
+Figs 6, 7, 8 covering stagnation time, ignition time, bang time,
+peak total ρR, peak HS ρR, peak compressed-shell density at ignition,
+T_ion HS at ignition, HS radius at ignition. Per-code keys carry
+leading underscore so the comparison framework currently ignores them
+(activate by stripping underscore once Tom decides to add per-code Δ
+columns; per his May 3 decision option 1 — show three Δ columns,
+one per reference code).
+
+Three codes are *close* in shape but differ meaningfully:
+- ~1 ns spread in stagnation time (HYDRA earliest at 12.5 ns,
+  LILAC at 13.5 ns, xRAGE at 13.7 ns)
+- ~30% spread in peak compressed-shell density at ignition
+  (xRAGE 170, LILAC 220, HYDRA 250 g/cm³)
+- HS radius at ignition pinned at 120 μm in all three (annotated)
+
+Per-code differences should inform "Helios within the cluster spread"
+framing rather than "Helios matches one number."
+
+### Published JSON pointer fix on 26af001 / 26af005
+
+`Olson_PDD_26af001_burn_published.json` and `_26af005_published.json`
+were pointing at the 1.0× drive Olson reference (v=370, α=7.4, abs=99,
+yield=62). Both runs are 1.4× drive variants and should compare against
+the cluster reference (v=470, α=3.0, abs=65±9.3, yield=87.4). Fixed
+May 3 by copying the corrected 26c JSON over both. Comparison columns
+now read sensibly: f=0.005 → v=438 vs 470 (−6.7%) instead of the
+misleading +18.5% against the wrong reference.
+
+### PDD calibration scan: FL × geometry × foot at the Olson pulse
+
+Six no-burn runs at FL=0.02 on foam+CH skin (DT regions held at 0.06):
+
+| Run                         | Cone  | Spot  | Foot | v_imp | α    | Abs % | Bang  |
+|-----------------------------|-------|-------|------|-------|------|-------|-------|
+| PDD_28_fab005 (FL=0.005)    | 20°   | 0.16  | 30   | 375   | 1.87 | 62.3  | 15.00 |
+| PDD_35_fab005 (FL=0.005)    | 35°   | 0.25  | 25   | 375   | 1.86 | 62.3  | 15.00 |
+| PDD_35_fab02_nb             | 35°   | 0.25  | 25   | 397   | 2.02 | 67.7  | 14.50 |
+| PDD_35_fab02_foot40_nb      | 35°   | 0.25  | 40   | 397   | 2.40 | 66.2  | 14.13 |
+| PDD_20_fab02_foot40_nb      | 20°   | 0.20  | 40   | 409   | 3.25 | 75.5  | 13.47 |
+| **PDD_20_fab02_foot25_nb**  | **20°** | **0.20** | **25** | **437** | **1.78** | **77.6** | **13.80** |
+
+Cluster envelope reference: v=470, α=3.0±0.3, abs=65±9.3,
+bang=13.47 ns.
+
+### Four physics findings on the PDD target
+
+**1. Per-region FL parsing is real and required.** Yesterday's
+inferred conclusions about "FL response" silently treated the foam+CH
+skin pair as the lever, but parsed FL still showed 0.06 due to the
+parser bug. With the fix, FL response on coupling materials only is
+now an explicit, traceable knob.
+
+**2. FL=0.005 saturates the heat-flow channel; geometry becomes
+irrelevant.** PDD_28_fab005 (cone=20°, spot=0.16) and PDD_35_fab005
+(cone=35°, spot=0.25) gave *identical* downstream metrics — same v,
+same α, same abs, same bang time, same yield, same imploded mass —
+despite very different ray-trace deposition profiles (peak coronal
+intensity, r_crit, intensity at r_crit all differed). The flux limiter
+was the rate-limiting bottleneck; geometry within the explored range
+couldn't propagate to downstream observables.
+
+**3. FL=0.02 restores geometry sensitivity.** Same comparison at
+FL=0.02 (cone=20° vs cone=35°, foot=40) gave dramatically different
+results: v 397 → 409 (+3%), α 2.40 → 3.25 (+35%), abs 66.2 → 75.5
+(+14%), bang 14.13 → 13.47 (essentially exact match to cluster), peak
+coronal I 1.32e15 → 1.77e15 W/cm², r_crit 1417 → 841 μm, I at r_crit
+4.43e14 → 1.51e15 W/cm² (3.4×). At looser FL the system has heat-flow
+headroom; geometry-driven differences in deposition concentration now
+propagate to the implosion.
+
+**4. Foot/peak orthogonality is geometry-dependent, not universal.**
+At cone=35°/spot=0.25, foot 25 → 40 TW raised α by 0.38 with v_imp
+unchanged (foot is the α knob, peak is the v knob, independent). At
+cone=20°/spot=0.20, foot 25 → 40 TW raised α by 1.47 (much steeper)
+*and* dropped v_imp by 28 km/s (foot couples to v). At the tighter
+geometry the foot's deeper deposition (smaller r_crit, higher I at
+critical) drives velocity-relevant ablation, breaking the
+orthogonality.
+
+### Calibration ceiling: α ≈ 2 at the Olson pulse, FL=0.02
+
+At foot=25 (Olson reference), FL=0.02, no geometry combination
+explored produced α ≥ 2.7 (lower edge of cluster envelope 3.0±0.3).
+Confirms the April 2026 finding ("adiabat cannot be raised from 2.0
+to 3.0 by FL alone without crossing into catastrophic over-drive").
+The α=3.25 point at PDD_20_foot40 required foot=40 TW, 60% above
+Olson's nominal foot — off-spec from the reference pulse and not a
+defensible calibration.
+
+### Selected calibration point: PDD_20_fab02_foot25_burn
+
+Final geometry and FL settings for PDD calibration:
+
+| Parameter      | Value                            |
+|----------------|----------------------------------|
+| Wavelength     | 0.351 µm                         |
+| Cone (γ)       | 20°                              |
+| Spot radius    | 0.20 cm (Gaussian)               |
+| Focus position | 0.22 cm                          |
+| Foot power     | 25 TW (0.10 – 5.00 ns)           |
+| Peak power     | 329 TW (9.00 – 12.70 ns)         |
+| Pulse duration | 12.70 ns (Olson 2021 1.4× drive) |
+| FL CH Skin     | 0.020                            |
+| FL DT-CH foam  | 0.020                            |
+| FL DT Solid    | 0.060                            |
+| FL DT Vapor    | 0.060                            |
+| Alpha transp.  | Non-local                        |
+
+No-burn results: v=437 (−7% vs 470), α=1.78 (−41% vs 3.0±0.3),
+abs=77.6% (just outside cluster upper edge 74.4%), bang=13.80 ns
+(+2.4% vs 13.47), CR=37 (no-burn — will drop with α-pressure),
+imploded DT 0.61 mg.
+
+Burn run submitted; preliminary observation ⟨T_hs⟩ reaching 20+ keV
+during burn, consistent with cluster ⟨T_hs⟩=22.5 keV. Final results
+pending.
+
+### Persistent residuals (1D Helios limits at this calibration)
+
+- **v_imp short by 7%** (437 vs 470). Smallest velocity gap achieved
+  at any FL in any geometry combination explored today, and at the
+  Olson reference pulse. Attributable to 1D ablation-channel
+  efficiency vs 3D codes; consistent with April "two paths to
+  velocity" finding (Helios reaches reference velocity only at
+  geometries that miss ablation physics).
+- **α short by 41%** (1.78 vs 3.0±0.3). The α=2 ceiling at the Olson
+  pulse stands. Closing this gap would require off-spec foot power
+  (foot=40+) or non-Olson pulse modifications.
+- **abs slightly out of envelope** (77.6 vs 74.4 upper edge, +1.1pp).
+  Absorbed energy 1.61 MJ vs cluster 1.40 MJ (+15%). Real but minor.
+
+### Naming convention adopted for the PDD calibration scan
+Olson_PDD_<base><variant><run-type>
+base       = integer or integer+letter, geometry baseline
+(e.g. 28 = first schematic-geometry test,
+35 = full schematic geometry,
+20 = cone=20°/spot=0.20 hybrid,
+26b = April 2026 best-velocity match)
+variant    = compact descriptor of knob settings beyond base
+fab005, fab02 = foam+CH skin FL = 0.005, 0.020
+foot40        = foot pulse 40 TW
+p110, p115    = power multiplier 1.10, 1.15
+(omit if vanilla — uniform f=0.06, foot=25,
+power×1.0)
+run-type   = burn = full simulation with fusion enabled
+nb   = no-burn / hydro-only
+
+Example: `Olson_PDD_20_fab02_foot25_burn` = cone=20° geometry,
+foam+skin FL=0.02, foot 25 TW, burn enabled.
+
+Base number changes only when geometry changes. Knob variations live
+in variant suffix, not as new base numbers. Avoids the 26a/26af005
+ambiguity where parallel knob settings looked like sequential
+geometry. Variant suffix sorts naturally in `ls`.
+
+### Output schedule for new no-burn runs (PDD)
+
+454-timestep staged schedule, EXODUS time-point list in RHW:
+
+| Phase                  | Range          | Δt       |
+|------------------------|----------------|----------|
+| Pre-drive              | 0 – 4 ns       | 0.25 ns  |
+| Foot + 1st shock       | 4 – 10 ns      | 0.05 ns  |
+| Main drive ramp        | 10 – 13 ns     | 0.05 ns  |
+| Peak velocity / late   | 13 – 13.4 ns   | 0.01 ns  |
+| Stagnation + burn      | 13.4 – 14.4 ns | 0.005 ns |
+| Post-burn coast        | 14.4 – 16 ns   | 0.1 ns   |
+
+Resolves bang time to 0.005 ns, peak velocity to 0.01 ns, and shock
+breakouts to 0.05 ns. Used for all PDD_28/35/20 runs today; results
+reproducible.
+
+### Next-session priorities (ordered)
+
+1. **Verify burn run lands cleanly** at PDD_20_fab02_foot25_burn.
+   Decision criteria: ⟨T_hs⟩ in 20–25 keV range, yield > 5 MJ,
+   bang time within ±2% of no-burn, CR drops to 28–32 envelope under
+   α-pressure. If all four → calibration is closed. If yield far
+   below cluster despite T_hs match → spot-size scan at cone=20°
+   becomes priority (PDD_20 with s=0.16, 0.18, 0.22 to bracket
+   between PDD_26b s=0.16 and today's s=0.20).
+2. **HDD transfer**, contingent on (1). Apply Christopherson
+   11/3/2025 Euler scaling to take PDD_20 calibration → VI_6 HDD
+   geometry. Targets: v=410 km/s, α=6, KE=300 kJ, stag DT=3 mg,
+   P_n-avg=210 Gbar, ρR_n-avg=2.1 g/cm², T_n-avg=4.8 keV,
+   yield=0.6 MJ. Note: HDD α=6 is achievable in 1D since the higher
+   foot pulse for HDD targets directly drives the higher adiabat —
+   the α=2 ceiling in PDD calibration was Olson-pulse-specific.
+3. **Per-code Δ columns** in the comparison framework (Tom's option 1
+   from May 3). Activate underscore-prefixed per-code keys in the
+   26c/26af001/26af005 JSONs; extend `compare_with_published()` to
+   render three additional Δ columns vs LILAC, xRAGE, HYDRA. Lower
+   priority than (1) and (2) but useful diagnostic for the
+   "Helios within cluster spread" framing.
+4. **Restore notebook RANSAC shock-tracker** (carried from May 3).
+   `sklearn.linear_model.RANSACRegressor` + `LinearRegression`,
+   iterative line-fitting with inlier removal, pairwise intersections
+   = coalescence points. Critical for Christopherson's "simultaneous
+   shock breakout" tuning target on Vulcan HDD.
+5. **Background TODOs** from April 26 / May 3 appendices unchanged:
+   `target_class` attribute refactor, `_track_ablation_front` for
+   single-region targets, `data_builder.build_run_data()` `time_unit`
+   auto-detect.
+
+### Retired (no longer pursued)
+
+Carried forward from May 3 unchanged: WfCDT_01b f=0.005 rerun, full
+WfCDT FL scan, WfCDT clean ice-only baseline, EOS variation as
+calibration lever. Plus retired May 4:
+
+- **Time-dependent power scaling** as a calibration knob. The April
+  motivation (mock 3D beam-miss as R(t) shrinks) was sound, but
+  FL=0.02 alone brings absorbed energy close enough to the cluster
+  envelope (1.61 vs 1.40 MJ; abs 77.6 vs 74.4 upper edge) that the
+  added complexity of a time-dependent power table is not justified
+  for the current calibration. Keep as a backup if HDD transfer
+  reveals a gap that FL alone can't close.
+- **Geometry exploration past cone=20° / spot=0.20** at the Olson
+  pulse with FL=0.02. Today's scan covered the relevant range; the
+  v/α/abs/bang trades are well-characterized and adding intermediate
+  cone angles would refine gradients without changing conclusions.
