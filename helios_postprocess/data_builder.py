@@ -77,10 +77,12 @@ class ICFRunData:
         self.laser_energy_deposited: Optional[np.ndarray] = None  # (n_times, n_zones) J  (time-integrated)
         self.laser_power_source: Optional[np.ndarray] = None      # (n_times, n_zones) W/cm³
         self.laser_power_delivered: Optional[np.ndarray] = None   # (n_times,) W — total laser power on target
+        self.laser_power_delivered_per_beam: Optional[np.ndarray] = None  # (n_times, n_beam) W — preserved for multi-beam
         self.electron_density: Optional[np.ndarray] = None        # (n_times, n_zones) cm⁻³
         # Laser intensity reconstruction inputs (raw from EXODUS; cleaned in laser_intensity.py)
         self.laser_attenuation_coeff: Optional[np.ndarray] = None  # (n_times, n_beam, n_bnd) 1/cm
-        self.laser_power_on_target: Optional[np.ndarray] = None    # (n_times,) W  -- LaserPwrOnTargetForBeam, beam 0
+        self.laser_power_on_target: Optional[np.ndarray] = None           # (n_times,) W — total summed across beams
+        self.laser_power_on_target_per_beam: Optional[np.ndarray] = None  # (n_times, n_beam) W — preserved for multi-beam
         self.neutron_production_rate: Optional[np.ndarray] = None # (n_times, n_zones)
         self.alpha_heating_power: Optional[np.ndarray] = None     # (n_times, n_zones)
         self.alpha_heating_ion: Optional[np.ndarray] = None       # (n_times, n_zones) particle → ion
@@ -98,9 +100,9 @@ class ICFRunData:
         self.laser_peak_start_ns: float = 0.0
         self.laser_peak_end_ns: float = 0.0
         self.laser_pulse_duration_ns: float = 0.0
-        self.flux_limiter: float = 0.0              # from .rhw — outermost region (backward compat)
-        self.flux_limiter_enabled: bool = False     # from .rhw — outermost region's flag
-        self.flux_limiters: list = None             # NEW — per-region: [{'region', 'enabled', 'value'}]        self.alpha_deposition_local: bool = False
+        self.flux_limiter: float = 0.0              # from .rhw (Flux limiter mult.)
+        self.flux_limiter_enabled: bool = False     # from .rhw (Use flux limiter)
+        self.alpha_deposition_local: bool = False
         self.alpha_deposition_nonlocal: bool = False
         self.eos_models: list = None                              # [{region, type, file}]
         self.dt_neutron_count: Optional[np.ndarray] = None        # time-integrated DT neutron yield
@@ -328,9 +330,8 @@ def build_run_data(
         data.laser_peak_start_ns       = rhw_config.laser_peak_start_ns
         data.laser_peak_end_ns         = rhw_config.laser_peak_end_ns
         # Flux limiter (from .rhw)
-        data.flux_limiter               = getattr(rhw_config, 'flux_limiter', 0.0)
-        data.flux_limiter_enabled       = getattr(rhw_config, 'flux_limiter_enabled', False)
-        data.flux_limiters              = getattr(rhw_config, 'flux_limiters', None)   # NEW
+        data.flux_limiter         = getattr(rhw_config, 'flux_limiter', 0.0)
+        data.flux_limiter_enabled = getattr(rhw_config, 'flux_limiter_enabled', False)
         data.laser_pulse_duration_ns   = rhw_config.laser_pulse_duration_ns
         data.eos_models                = rhw_config.eos_models
         data.alpha_deposition_local    = rhw_config.alpha_deposition_local
@@ -383,17 +384,40 @@ def build_run_data(
                 logger.debug(f"  – Optional '{attr_name}' not available")
 
     # ------------------------------------------------------------------
-    # Post-processing: squeeze beam-indexed arrays to 1-D
+    # Post-processing: collapse beam-indexed arrays to 1-D total
+    #
+    # Single-beam runs:  shape (n_t, 1) -> squeeze to (n_t,).
+    # Multi-beam runs:   shape (n_t, k>1) -> sum across beam axis to give
+    #                    the total laser power on the target, with the
+    #                    per-beam table preserved on `*_per_beam` for
+    #                    diagnostics.
+    #
+    # Prior behaviour silently kept multi-beam arrays as 2-D for
+    # `laser_power_delivered` (np.squeeze is a no-op on shape (n_t, k>1))
+    # and silently dropped beams 1..k-1 for `laser_power_on_target` by
+    # taking [:, 0]. Both broke downstream argmax/peak-power logic.
     # ------------------------------------------------------------------
-    if data.laser_power_delivered is not None and data.laser_power_delivered.ndim > 1:
-        data.laser_power_delivered = data.laser_power_delivered.squeeze()
+    def _collapse_beam_axis(arr, name):
+        """Return (total_1d, per_beam_or_None). Logs the action."""
+        if arr is None or arr.ndim == 1:
+            return arr, None
+        n_beam = arr.shape[-1]
+        if n_beam == 1:
+            total = arr.squeeze(axis=-1)
+            if verbose:
+                logger.info(f"  ✓ {name:<28s} squeezed → {total.shape}")
+            return total, None
+        per_beam = arr.copy()
+        total = arr.sum(axis=-1)
         if verbose:
-            logger.info(f"  ✓ laser_power_delivered      squeezed → {data.laser_power_delivered.shape}")
-    if data.laser_power_on_target is not None and data.laser_power_on_target.ndim > 1:
-        # (n_times, n_beam) -> (n_times,) by taking beam 0
-        data.laser_power_on_target = data.laser_power_on_target[:, 0]
-        if verbose:
-            logger.info(f"  ✓ laser_power_on_target      squeezed → {data.laser_power_on_target.shape}")
+            logger.info(f"  ✓ {name:<28s} summed across {n_beam} beams → {total.shape}, "
+                        f"per-beam preserved → {per_beam.shape}")
+        return total, per_beam
+
+    data.laser_power_delivered, data.laser_power_delivered_per_beam = \
+        _collapse_beam_axis(data.laser_power_delivered, "laser_power_delivered")
+    data.laser_power_on_target, data.laser_power_on_target_per_beam = \
+        _collapse_beam_axis(data.laser_power_on_target, "laser_power_on_target")
 
     # ------------------------------------------------------------------
     # rad_pressure: non-ion pressure component
