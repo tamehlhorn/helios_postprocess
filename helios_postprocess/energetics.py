@@ -6,6 +6,9 @@ Functions for computing kinetic energy, hydro efficiency, PdV work, etc.
 
 import numpy as np
 from typing import Optional, Dict, Tuple
+import logging
+
+logger = logging.getLogger(__name__)
 
 
 def calculate_kinetic_energy(mass: np.ndarray, 
@@ -206,3 +209,113 @@ def calculate_implosion_velocity(zone_boundaries: np.ndarray,
     velocity = dr / dt  # cm/s
     
     return velocity
+
+
+# ============================================================================
+# Radiation drive energetics
+# ============================================================================
+
+# Stefan-Boltzmann constant in W cm^-2 K^-4
+_SIGMA_SB_W_CM2_K4 = 5.6704e-12
+# eV -> K conversion (1 eV = 11604.518 K, exact within machine precision)
+_EV_TO_K = 11604.518
+
+
+def compute_radiation_drive_energy(data) -> Optional[Dict]:
+    """
+    Integrate the radiation drive energy delivered to the simulation boundary.
+
+    Helios applies a time-dependent blackbody drive at Rmin or Rmax based on
+    the [Rad Source Data] block of the .rhw file (parsed by RHWParser). The
+    incident flux is
+
+        F(t) = flux_multiplier × σ_SB × T_rad(t)^4         [W/cm^2]
+
+    and the total energy delivered to the boundary is
+
+        E_rad = ∫ F(t) × 4π R_drive(t)^2 dt                [J]
+
+    where R_drive(t) is the inner (Rmin) or outer (Rmax) zone-boundary
+    radius at the time of the drive, interpolated onto the drive-time grid
+    from the simulation's zone_boundaries history.
+
+    Parameters
+    ----------
+    data : ICFRunData
+        Must have populated `drive_time`, `drive_temperature`, `time`,
+        `zone_boundaries`, and `rhw_config` (with `drive_location` and
+        `drive_flux_multiplier` set by the RHW parser).
+
+    Returns
+    -------
+    dict or None
+        None if no radiation drive is present. Otherwise, a dict with:
+            E_rad_J              : total radiation energy at boundary [J]
+            peak_flux_Wcm2       : peak σT⁴ × flux_mult              [W/cm^2]
+            peak_T_eV            : max T_rad                          [eV]
+            peak_T_time_s        : time of peak T_rad                 [s]
+            fluence_Jcm2         : time-integrated flux               [J/cm^2]
+            R_outer_at_peak_cm   : R_drive at t_peak_T                [cm]
+            location             : "Rmin" or "Rmax"
+            flux_multiplier      : from RHW
+            n_points             : drive-table row count
+            drive_start_s        : first drive_time entry             [s]
+            drive_end_s          : last drive_time entry              [s]
+    """
+    if data.drive_temperature is None or data.drive_time is None:
+        return None
+    if len(data.drive_time) == 0:
+        return None
+
+    rhw = getattr(data, "rhw_config", None)
+    flux_mult = float(getattr(rhw, "drive_flux_multiplier", 1.0)) if rhw else 1.0
+    location = str(getattr(rhw, "drive_location", "")) if rhw else ""
+
+    if location not in ("Rmin", "Rmax"):
+        # Unknown boundary — can't pick the right zone-boundary column
+        logger.warning("Radiation drive present but location is not "
+                       "'Rmin' or 'Rmax'; cannot compute energy")
+        return None
+
+    if data.zone_boundaries is None or data.time is None:
+        logger.warning("Cannot compute radiation drive energy without "
+                       "zone_boundaries and time arrays")
+        return None
+
+    T_eV = np.asarray(data.drive_temperature, dtype=float)
+    t_drive = np.asarray(data.drive_time, dtype=float)
+
+    # Flux
+    T_K = T_eV * _EV_TO_K
+    flux = flux_mult * _SIGMA_SB_W_CM2_K4 * T_K**4    # W/cm^2
+
+    # R_drive at each drive sample, interpolated from sim zone boundaries.
+    # zone_boundaries shape: (n_t, n_zones+1); column [-1] = outer, [0] = inner.
+    R_t = (data.zone_boundaries[:, -1]
+           if location == "Rmax"
+           else data.zone_boundaries[:, 0])    # cm
+    R_drive = np.interp(t_drive, data.time, R_t)
+
+    # Fluence and total energy
+    fluence_Jcm2 = float(np.trapezoid(flux, t_drive))
+    dE_dt_W = flux * 4.0 * np.pi * R_drive**2          # W
+    E_rad_J = float(np.trapezoid(dE_dt_W, t_drive))
+
+    peak_idx = int(np.argmax(T_eV))
+    peak_T_eV = float(T_eV[peak_idx])
+    peak_T_time_s = float(t_drive[peak_idx])
+    R_at_peak_cm = float(np.interp(peak_T_time_s, data.time, R_t))
+
+    return {
+        "E_rad_J":            E_rad_J,
+        "peak_flux_Wcm2":     float(flux.max()),
+        "peak_T_eV":          peak_T_eV,
+        "peak_T_time_s":      peak_T_time_s,
+        "fluence_Jcm2":       fluence_Jcm2,
+        "R_outer_at_peak_cm": R_at_peak_cm,
+        "location":           location,
+        "flux_multiplier":    flux_mult,
+        "n_points":           int(len(t_drive)),
+        "drive_start_s":      float(t_drive[0]),
+        "drive_end_s":        float(t_drive[-1]),
+    }

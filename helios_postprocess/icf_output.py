@@ -32,6 +32,8 @@ from typing import Optional
 import numpy as np
 import logging
 
+from .energetics import compute_radiation_drive_energy
+
 logger = logging.getLogger(__name__)
 
 
@@ -179,12 +181,60 @@ class ICFOutputGenerator:
         # ---- Energy / performance ----
         _a('ENERGY & PERFORMANCE')
         _a('-' * width)
+        # Radiation drive: compute once here, reuse below for the dedicated section.
+        rad_metrics = compute_radiation_drive_energy(d)
         _a(self._metric('Laser energy',        d.laser_energy,     'MJ',  fmt='.3f'))
+        if rad_metrics is not None:
+            E_MJ = rad_metrics['E_rad_J'] * 1e-6
+            _a(f"  {'Radiation drive energy':<36s} {E_MJ:>10.4f} MJ"
+               f"  ({rad_metrics['location']})")
+            # Total drive energy is the right denominator for capsule gain when
+            # the laser is absent (indirect drive) or when both are present
+            # (hybrid). Show it explicitly so the reader doesn't have to add.
+            E_total_MJ = (d.laser_energy or 0.0) + E_MJ
+            if E_total_MJ > 0 and (d.energy_output or 0.0) > 0:
+                capsule_gain = d.energy_output / E_total_MJ
+                _a(f"  {'Total drive energy (laser+rad)':<36s} {E_total_MJ:>10.4f} MJ")
+                _a(f"  {'Capsule gain (yield/total drive)':<36s} {capsule_gain:>10.3f}")
         _a(self._metric('Fusion yield',        d.energy_output,    'MJ',  fmt='.3f'))
         _a(self._metric('DT neutron yield',    d.dt_neutron_yield, '',    fmt='.3e'))
         _a(self._metric('Target gain',         d.target_gain,      '',    fmt='.3f'))
         _a(self._metric('Max DT temperature',  d.max_dt_temp,      'keV', fmt='.2f'))
         _a('')
+
+        # ---- Drive source (radiation) ----
+        # Rendered whenever a radiation drive table was parsed from the RHW.
+        # Header label distinguishes pure indirect drive (laser=0) from a
+        # pre-pulse alongside a direct-drive laser.
+        if rad_metrics is not None:
+            laser_E = d.laser_energy or 0.0
+            if laser_E <= 0:
+                role = 'Indirect Drive — primary'
+            else:
+                role = 'Direct Drive pre-pulse'
+            _a(f'DRIVE SOURCE ({role})')
+            _a('-' * width)
+            _a(f"  {'Boundary':<36s} {rad_metrics['location']:>10s}")
+            _a(f"  {'Flux multiplier':<36s} {rad_metrics['flux_multiplier']:>10.3f}")
+            _a(f"  {'Peak T_rad':<36s} {rad_metrics['peak_T_eV']:>10.1f} eV  "
+               f"(at t = {rad_metrics['peak_T_time_s']*1e9:.3f} ns)")
+            _a(f"  {'Drive window':<36s} "
+               f"{rad_metrics['drive_start_s']*1e9:>5.3f} – "
+               f"{rad_metrics['drive_end_s']*1e9:.3f} ns  "
+               f"({rad_metrics['n_points']} points)")
+            _a(f"  {'Peak flux (mult × σT⁴)':<36s} "
+               f"{rad_metrics['peak_flux_Wcm2']:>10.3e} W/cm²")
+            _a(f"  {'R_drive at peak T_rad':<36s} "
+               f"{rad_metrics['R_outer_at_peak_cm']:>10.4f} cm")
+            E_kJ = rad_metrics['E_rad_J'] * 1e-3
+            if laser_E > 0:
+                frac = (rad_metrics['E_rad_J'] * 1e-6 / laser_E) * 100.0
+                _a(f"  {'Total radiation energy':<36s} {E_kJ:>10.3f} kJ  "
+                   f"({frac:.3f}% of laser)")
+            else:
+                _a(f"  {'Total radiation energy':<36s} {E_kJ:>10.3f} kJ  "
+                   f"(primary drive)")
+            _a('')
 
         # ---- Laser configuration ----
         if d.laser_wavelength_um > 0:
@@ -195,20 +245,8 @@ class ICFOutputGenerator:
             _a(self._metric('Half-cone angle',  d.laser_half_cone_angle_deg, 'deg', fmt='.2f'))
             _a(f"  {'Spot radius':<30} {d.laser_spot_size_cm:>15.4f} cm  ({d.laser_spatial_profile})")
             _a(self._metric('Power multiplier', d.laser_power_multiplier,    '',    fmt='.4f'))
-            # Flux limiter — per region when available, else fall back to scalar.
-            # Display outermost first since that's what couples to the laser.
-            fls = getattr(d, 'flux_limiters', None)
-            if fls:
-                _a(f"  {'Flux limiter (f) per region':<36s}")
-                for fl in reversed(fls):
-                    rname = fl['region']
-                    if fl['enabled']:
-                        _a(f"    {rname:<28s} {fl['value']:>10.3f}")
-                    elif fl['value'] > 0:
-                        _a(f"    {rname:<28s} {fl['value']:>10.3f}  (flag off)")
-                    else:
-                        _a(f"    {rname:<28s} {'(not set)':>10s}")
-            elif getattr(d, 'flux_limiter_enabled', False):
+            # Flux limiter: bypass _metric (0.06 is a valid value; _metric renders 0.0 as '—')
+            if getattr(d, 'flux_limiter_enabled', False):
                 _a(f"  {'Flux limiter (f)':<36s} {d.flux_limiter:>10.3f}")
             elif getattr(d, 'flux_limiter', 0.0) > 0:
                 _a(f"  {'Flux limiter (f)':<36s} {d.flux_limiter:>10.3f}  (flag off)")
