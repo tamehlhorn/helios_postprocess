@@ -39,11 +39,12 @@ class RHWConfiguration:
     eos_models: list = None  # [{region, type, file}, ...]
     alpha_deposition_local: bool = False     # Use alpha deposition = 1
     alpha_deposition_nonlocal: bool = False  # Use non alpha deposition = 1
-    flux_limiter: float = 0.0                # outermost region's FL (laser-coupling-relevant); see flux_limiters for per-region detail
-    flux_limiter_enabled: bool = False       # outermost region's "Use flux limiter" flag
-    flux_limiters: list = None               # NEW — per-region: [{'region', 'enabled', 'value'}, ...] inner→outer
+    flux_limiter: float = 0.0                # Flux limiter mult. (from .rhw; 0 if off)
+    flux_limiter_enabled: bool = False       # Use flux limiter = 1
     drive_time: Optional[np.ndarray] = None
     drive_temperature: Optional[np.ndarray] = None
+    drive_location: str = ""                  # "Rmin" or "Rmax"; empty if no radiation drive
+    drive_flux_multiplier: float = 1.0        # scales effective sigma*T^4 (Helios convention)
     source_file: Optional[str] = None
     
     @property
@@ -88,26 +89,19 @@ class RHWParser:
         laser_params = self._parse_laser_geometry(lines)
         eos_models = self._parse_eos_models(lines)
         alpha_local, alpha_nonlocal = self._parse_alpha_transport(lines)
-        flux_limiters = self._parse_flux_limiter(lines)
-
-        # Backward-compat scalars: report the OUTERMOST region's FL
-        # (laser-coupling-relevant — CH skin/ablator). Full per-region
-        # detail lives on flux_limiters.
-        flux_value = 0.0
-        flux_enabled = False
-        if flux_limiters:
-            outer = flux_limiters[-1]   # last region = outermost (innermost-first ordering)
-            flux_value   = outer['value']
-            flux_enabled = outer['enabled']
+        flux_enabled, flux_value = self._parse_flux_limiter(lines)
         
-        # Extract drive temperature data
-        drive_time, drive_temp = self._parse_drive_temperature(lines)
+        # Extract drive temperature data (radiation source from [Rad Source Data] block)
+        drive_time, drive_temp, drive_location, drive_flux_mult = \
+            self._parse_drive_temperature(lines)
         
         config = RHWConfiguration(
             is_direct_drive=is_direct_drive,
             burn_enabled=burn_enabled,
             drive_time=drive_time,
             drive_temperature=drive_temp,
+            drive_location=drive_location,
+            drive_flux_multiplier=drive_flux_mult,
             source_file=str(self.file_path),
             laser_wavelength_um=laser_params.get("wavelength", 0.35),
             laser_spot_size_cm=laser_params.get("spot_size", 0.0),
@@ -127,14 +121,15 @@ class RHWParser:
             alpha_deposition_nonlocal=alpha_nonlocal,
             flux_limiter=flux_value,
             flux_limiter_enabled=flux_enabled,
-            flux_limiters=flux_limiters,    # NEW
         )
         
         logger.info(f"Configuration: {config.drive_type}, "
                    f"Burn {'ON' if burn_enabled else 'OFF'}")
         if drive_time is not None:
-            logger.info(f"Drive temperature data: {len(drive_time)} points, "
-                       f"{drive_time[0]:.3e} to {drive_time[-1]:.3e} s")
+            logger.info(f"Drive temperature data ({drive_location}): {len(drive_time)} points, "
+                       f"{drive_time[0]*1e9:.3f} – {drive_time[-1]*1e9:.3f} ns, "
+                       f"peak {np.max(drive_temp):.1f} eV, "
+                       f"flux multiplier {drive_flux_mult:.3f}")
         
         return config
     
@@ -166,65 +161,52 @@ class RHWParser:
             return True, False    # local instantaneous
         return False, True        # non-local transport
     
-    def _parse_flux_limiter(self, lines: list):
+    def _parse_flux_limiter(self, lines: list) -> tuple:
         """
-        Parse electron thermal flux limiter per region from the .rhw file.
+        Parse electron thermal flux limiter from the .rhw file.
 
-        Each region's RHW block carries its own flux-limiter pair:
+        The .rhw has four copies of the flux-limiter block — one per region
+        (DT vapor, DT ice, CH skin, foam). Pattern:
 
-            Parameters for Region = CH Skin
-            ...
             Use flux limiter       = 1
-            Flux limiter mult.     = 0.005
-            ...
+            Flux limiter mult.     = 0.06
 
-        Different materials may carry different f. The laser-coupling-relevant
-        regions for the Olson PDD target are CH Skin (outermost) and DT-CH
-        foam.
+        Normally identical across regions. Take the first (enabled, value)
+        pair seen. Warn once if a later block has a different value.
 
         Returns
         -------
-        list of dict or None
-            [{'region': str, 'enabled': bool, 'value': float}, ...] in the
-            order regions appear in the RHW (innermost first). None if no
-            flux-limiter fields are present.
+        (enabled, value) : (bool, float)
+            (False, 0.0) if no flux-limiter line is present.
         """
-        out = []
-        current_region = None
-        fl_enabled = None
-        fl_value = None
-
-        def _flush():
-            nonlocal current_region, fl_enabled, fl_value
-            if current_region is not None and (fl_enabled is not None
-                                               or fl_value is not None):
-                out.append({
-                    'region':  current_region,
-                    'enabled': bool(fl_enabled) if fl_enabled is not None else False,
-                    'value':   float(fl_value)  if fl_value  is not None else 0.0,
-                })
-            fl_enabled = None
-            fl_value = None
-
+        import warnings as _w
+        enabled_first = None
+        value_first = None
+        warned = False
         for line in lines:
-            s = line.strip()
-            sl = s.lower()
-            if s.startswith('Parameters for Region ='):
-                _flush()
-                current_region = s.split('=', 1)[-1].strip()
-            elif sl.startswith('use flux limiter'):
+            lstrip = line.strip().lower()
+            if lstrip.startswith('use flux limiter'):
                 try:
-                    fl_enabled = (int(s.split('=')[-1].strip()) == 1)
+                    v = int(line.split('=')[-1].strip())
                 except (ValueError, IndexError):
-                    pass
-            elif sl.startswith('flux limiter mult'):
+                    continue
+                if enabled_first is None:
+                    enabled_first = (v == 1)
+            elif lstrip.startswith('flux limiter mult'):
                 try:
-                    fl_value = float(s.split('=')[-1].strip())
+                    f = float(line.split('=')[-1].strip())
                 except (ValueError, IndexError):
-                    pass
-        _flush()
-
-        return out if out else None
+                    continue
+                if value_first is None:
+                    value_first = f
+                elif abs(f - value_first) > 1e-9 and not warned:
+                    _w.warn(
+                        f'RHW flux limiter varies across regions '
+                        f'(first={value_first}, later={f}); reporting first.',
+                        stacklevel=2)
+                    warned = True
+        return (bool(enabled_first) if enabled_first is not None else False,
+                float(value_first) if value_first is not None else 0.0)
 
     def _parse_eos_models(self, lines: list) -> list:
         """Parse EOS model type and file for each spatial region."""
@@ -421,62 +403,208 @@ class RHWParser:
         logger.warning("Could not find 'Fusion reactions' flag, assuming burn disabled")
         return False
     
-    def _parse_drive_temperature(self, lines: list) -> Tuple[Optional[np.ndarray], Optional[np.ndarray]]:
+    def _parse_drive_temperature(self, lines: list) -> Tuple[Optional[np.ndarray],
+                                                              Optional[np.ndarray],
+                                                              str, float]:
         """
-        Extract time-dependent drive temperature data.
-        
-        Parameters
-        ----------
-        lines : list
-            Lines from RHW file
-        
+        Parse the [Rad Source Data] block for time-dependent radiation drive.
+
+        The block format (Helios Format ID = 4) is::
+
+            [Rad Source Data]:
+               Format ID = 4
+               Rad source model at Rmin is on  = 0|1
+               Rad source model at Rmax is on  = 0|1
+               Flux multiplier                 = <float>
+               ...
+             [table format=2]:    Time-dependent Drive Temperatures at Rmin:
+              # table rows = N_min
+              ... (metadata)
+              <N_min time values>     (whitespace-separated, may span lines)
+              <N_min temperature values>
+             [table format=2]:    Time-dependent Drive Temperatures at Rmax:
+              # table rows = N_max
+              ...
+              <N_max time values>
+              <N_max temperature values>
+             [table format=2]:    Time-dependent Drive and Brightness Temperatures at Rmin:
+               ...
+            [End Rad Source Data]
+
+        We pick whichever boundary has its "is on" flag set; if both are on,
+        Rmax wins (the more common indirect-drive HDD configuration).
+
         Returns
         -------
-        tuple
-            (time_array, temperature_array) or (None, None) if not found
+        (time_s, temperature_eV, location, flux_multiplier)
+            time_s          : (N,) seconds, or None if no active drive table.
+            temperature_eV  : (N,) eV, raw table values (NOT pre-multiplied
+                              by flux_multiplier — caller applies that).
+            location        : "Rmin", "Rmax", or "" if no drive.
+            flux_multiplier : float (default 1.0). Scales effective sigma*T^4
+                              when computing radiation power flux on the
+                              boundary.
         """
-        # Find the drive temperature section
-        temp_start_idx = self._find_drive_temp_section(lines)
-        if temp_start_idx is None:
-            logger.warning("Could not find drive temperature data section")
+        rad_start = self._find_first_line(lines, "[Rad Source Data]")
+        if rad_start is None:
+            logger.debug("No [Rad Source Data] block found in RHW")
+            return None, None, "", 1.0
+
+        rad_end = self._find_first_line(lines, "[End Rad Source Data]",
+                                        start=rad_start)
+        if rad_end is None:
+            rad_end = len(lines)
+
+        block = lines[rad_start:rad_end]
+
+        rmin_on = self._extract_keyed_int(block,
+                                          "Rad source model at Rmin is on",
+                                          default=0)
+        rmax_on = self._extract_keyed_int(block,
+                                          "Rad source model at Rmax is on",
+                                          default=0)
+        flux_mult = self._extract_keyed_float(block,
+                                              "Flux multiplier",
+                                              default=1.0)
+
+        if not rmin_on and not rmax_on:
+            logger.info("Radiation drive disabled at both Rmin and Rmax")
+            return None, None, "", flux_mult
+
+        if rmin_on and rmax_on:
+            logger.warning("Both Rmin and Rmax radiation drives enabled; "
+                           "using Rmax")
+            location = "Rmax"
+        else:
+            location = "Rmax" if rmax_on else "Rmin"
+
+        time_arr, temp_arr = self._parse_drive_temp_table(block, location)
+        if time_arr is None or temp_arr is None:
+            logger.warning(f"Drive temperature table at {location} is empty "
+                           f"or unparseable")
+            return None, None, location, flux_mult
+
+        return time_arr, temp_arr, location, flux_mult
+
+    def _parse_drive_temp_table(self, block: list,
+                                 location: str) -> Tuple[Optional[np.ndarray],
+                                                          Optional[np.ndarray]]:
+        """
+        Read the Time-dependent Drive Temperatures table at the given boundary.
+
+        The block layout after the marker line is::
+
+            [table format=2]:  Time-dependent Drive Temperatures at <loc>:
+              table is 3D  = 0
+              # table rows = N
+              # table cols = 2
+              interp model = 0
+              column fmt id     = 0, 0
+              column precision  = 3, 3
+              <N time tokens, possibly across multiple lines>
+              <N temperature tokens, possibly across multiple lines>
+            [table format=2]: <next table>            ← terminates this block
+
+        We find the next '[' line as the section terminator, then in two
+        passes pull out N from the metadata and concatenate every numeric
+        line into a single token stream.
+        """
+        marker = f"Time-dependent Drive Temperatures at {location}:"
+        idx = None
+        for i, line in enumerate(block):
+            if marker in line and "Brightness" not in line:
+                idx = i
+                break
+        if idx is None:
             return None, None
-        
-        # Find the end marker
-        temp_end_idx = self._find_drive_temp_end(lines, temp_start_idx)
-        if temp_end_idx is None:
-            logger.warning("Could not find end of drive temperature section")
+
+        # Find end of this table block: next '[' line (next table or [End)
+        end_idx = len(block)
+        for j in range(idx + 1, len(block)):
+            if block[j].lstrip().startswith("["):
+                end_idx = j
+                break
+        section = block[idx + 1:end_idx]
+
+        # Pass 1: extract # table rows
+        n_rows = None
+        for line in section:
+            if "# table rows" in line and "=" in line:
+                try:
+                    n_rows = int(line.split("=", 1)[1].strip())
+                    break
+                except (ValueError, IndexError):
+                    continue
+        if not n_rows or n_rows <= 0:
             return None, None
-        
-        # Calculate number of lines in the data block
-        n_lines = temp_end_idx - temp_start_idx
-        if n_lines <= 0:
-            logger.warning("Invalid drive temperature data block")
+
+        # Pass 2: collect numeric data lines.
+        # A data line is one whose first whitespace-separated token parses as
+        # a float. This handles two RHW format variants:
+        #   - format=2: bare numeric blocks (no labels between time and temp)
+        #   - format=1: 'Time (sec)' and 'Drive Temperature (eV)' label lines
+        #     between the two arrays — these must be skipped.
+        data_lines = []
+        for line in section:
+            stripped = line.strip()
+            if not stripped:
+                continue
+            if "=" in stripped or stripped.startswith("#"):
+                continue                # metadata or comment
+            try:
+                float(stripped.split()[0])
+            except (ValueError, IndexError):
+                continue                # label line, e.g. "Time (sec)"
+            data_lines.append(stripped)
+        if not data_lines:
             return None, None
-        
+
         try:
-            # Extract time data (before the temperature section)
-            time_text = ''.join(lines[temp_start_idx - n_lines + 1 : temp_start_idx])
-            time_array = np.fromstring(time_text, sep=' ')
-            
-            # Extract temperature data (after the marker line)
-            temp_text = ''.join(lines[temp_start_idx + 1 : temp_start_idx + n_lines])
-            temp_array = np.fromstring(temp_text, sep=' ')
-            
-            if len(time_array) != len(temp_array):
-                logger.warning(f"Time and temperature arrays have different lengths: "
-                             f"{len(time_array)} vs {len(temp_array)}")
-                # Try to use the shorter length
-                min_len = min(len(time_array), len(temp_array))
-                time_array = time_array[:min_len]
-                temp_array = temp_array[:min_len]
-            
-            logger.debug(f"Parsed drive temperature: {len(time_array)} points")
-            return time_array, temp_array
-            
+            values = np.fromstring(" ".join(data_lines), sep=" ")
         except Exception as e:
-            logger.error(f"Error parsing drive temperature data: {e}")
+            logger.error(f"Could not parse drive temperature data at {location}: {e}")
             return None, None
-    
+
+        if len(values) < 2 * n_rows:
+            logger.warning(f"Drive temperature table at {location} reports "
+                           f"{n_rows} rows but only {len(values)} numeric "
+                           f"values were found (need {2 * n_rows})")
+            return None, None
+
+        return values[:n_rows], values[n_rows:2 * n_rows]
+
+    @staticmethod
+    def _find_first_line(lines: list, marker: str,
+                         start: int = 0) -> Optional[int]:
+        """Index of the first line containing marker (substring), or None."""
+        for i in range(start, len(lines)):
+            if marker in lines[i]:
+                return i
+        return None
+
+    @staticmethod
+    def _extract_keyed_int(lines: list, key: str, default: int = 0) -> int:
+        """Find first 'key ... = <int>' line; return parsed int or default."""
+        for line in lines:
+            if key in line and "=" in line:
+                try:
+                    return int(line.split("=", 1)[1].strip())
+                except (ValueError, IndexError):
+                    continue
+        return default
+
+    @staticmethod
+    def _extract_keyed_float(lines: list, key: str,
+                              default: float = 0.0) -> float:
+        """Find first 'key ... = <float>' line; return parsed float or default."""
+        for line in lines:
+            if key in line and "=" in line:
+                try:
+                    return float(line.split("=", 1)[1].strip())
+                except (ValueError, IndexError):
+                    continue
+        return default
+
     def _find_drive_temp_section(self, lines: list) -> Optional[int]:
         """Find the start of the drive temperature section."""
         # Try both possible capitalizations
