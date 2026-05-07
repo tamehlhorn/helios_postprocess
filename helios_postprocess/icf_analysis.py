@@ -416,6 +416,13 @@ class ICFAnalyzer:
         # (must run before adiabat routines -- base adiabat uses breakout time)
         self._compute_shock_breakout()
 
+        # Compute first-shock strength history (Mach, P jump, velocity vs time)
+        # Runs after _track_shock_fronts so the swarm and the trajectory are
+        # both available downstream. Independent of _compute_shock_breakout —
+        # the latter measures the fuel→gas-cavity event, this measures the
+        # shock as it traverses the shell into the fuel.
+        self._analyze_first_shock()
+
         # Compute adiabat at peak implosion velocity (legacy definition)
         self._compute_adiabat()
 
@@ -487,7 +494,93 @@ class ICFAnalyzer:
         
         if len(shock_times) > 0:
             logger.info(f"Tracked {len(shock_times)} shock front points")
-    
+
+    def _analyze_first_shock(self):
+        """
+        Track the first (outermost) shock through the shell with strength
+        characterization at every timestep.
+
+        Wraps `pressure_gradients.analyze_first_shock`, which identifies the
+        outermost pressure discontinuity at each timestep and computes the
+        Rankine-Hugoniot jump conditions across it. Result is stored on
+        `data.first_shock` as a dict (or None if the analysis fails).
+
+        Search range: zone 0 outward through the simulation domain. The
+        function picks the OUTERMOST shock at each timestep (which traces
+        the first shock as it propagates inward through the shell). Breakout
+        is detected when the first shock crosses the fuel/ablator interface
+        (ri[0, -2]) entering the fuel.
+
+        This is independent of `_compute_shock_breakout`, which measures a
+        different event: the shock exiting the fuel into the gas cavity at
+        ri[0, 0]. For Vulcan-like 4-region targets the first-shock event
+        comes earlier (shock entering shell from outside) than the cavity
+        breakout event.
+
+        Stores on ICFRunData:
+            first_shock : dict or None — see analyze_first_shock() docstring
+        """
+        self.data.first_shock = None
+
+        if self.data.ion_pressure is None:
+            logger.debug("First-shock analysis skipped: no ion_pressure")
+            return
+        if self.data.zone_boundaries is None:
+            logger.debug("First-shock analysis skipped: no zone_boundaries")
+            return
+        if self.data.mass_density is None:
+            logger.debug("First-shock analysis skipped: no mass_density")
+            return
+
+        ri = self.data.region_interfaces_indices
+        if ri is None or ri.ndim != 2 or ri.shape[1] < 2:
+            logger.debug("First-shock analysis skipped: insufficient region "
+                         "structure (need >= 2 interfaces)")
+            return
+
+        try:
+            from .pressure_gradients import analyze_first_shock
+        except ImportError:
+            logger.warning("pressure_gradients module not importable; "
+                           "skipping first-shock analysis")
+            return
+
+        # Total pressure (J/cm³) — analyze_first_shock converts to Gbar internally
+        total_P = self.data.ion_pressure + (
+            self.data.rad_pressure if self.data.rad_pressure is not None else 0.0
+        )
+
+        # Zone bounds: search from zone 0 out to the outermost zone, using
+        # the fuel/ablator interface for breakout detection (per the example
+        # in pressure_gradients.analyze_first_shock).
+        ablator_outer_zone = int(ri[0, -1]) - 1
+        fuel_inner_zone    = int(ri[0, -2])
+
+        try:
+            result = analyze_first_shock(
+                pressure=total_P,
+                zone_boundaries=self.data.zone_boundaries,
+                density=self.data.mass_density,
+                time=self.data.time,
+                ablator_outer_zone=ablator_outer_zone,
+                fuel_inner_zone=fuel_inner_zone,
+            )
+        except Exception as e:
+            logger.warning(f"First-shock analysis failed: {e}")
+            return
+
+        self.data.first_shock = result
+
+        bt = result.get('breakout_time_ns', float('nan'))
+        if bt is not None and not (isinstance(bt, float) and np.isnan(bt)):
+            bp = result.get('breakout_pressure_Gbar', float('nan'))
+            bm = result.get('breakout_mach', float('nan'))
+            logger.info(f"First shock entry into fuel: t = {bt:.3f} ns, "
+                        f"P_post = {bp:.2f} Gbar, M = {bm:.2f}")
+        else:
+            logger.info("First-shock analysis ran but no breakout detected "
+                        "in the simulation window")
+
     def _compute_adiabat(self):
         """
         Compute mass-averaged adiabat (entropy parameter) in cold DT fuel.

@@ -32,8 +32,6 @@ from typing import Optional
 import numpy as np
 import logging
 
-from .energetics import compute_radiation_drive_energy
-
 logger = logging.getLogger(__name__)
 
 
@@ -181,60 +179,12 @@ class ICFOutputGenerator:
         # ---- Energy / performance ----
         _a('ENERGY & PERFORMANCE')
         _a('-' * width)
-        # Radiation drive: compute once here, reuse below for the dedicated section.
-        rad_metrics = compute_radiation_drive_energy(d)
         _a(self._metric('Laser energy',        d.laser_energy,     'MJ',  fmt='.3f'))
-        if rad_metrics is not None:
-            E_MJ = rad_metrics['E_rad_J'] * 1e-6
-            _a(f"  {'Radiation drive energy':<36s} {E_MJ:>10.4f} MJ"
-               f"  ({rad_metrics['location']})")
-            # Total drive energy is the right denominator for capsule gain when
-            # the laser is absent (indirect drive) or when both are present
-            # (hybrid). Show it explicitly so the reader doesn't have to add.
-            E_total_MJ = (d.laser_energy or 0.0) + E_MJ
-            if E_total_MJ > 0 and (d.energy_output or 0.0) > 0:
-                capsule_gain = d.energy_output / E_total_MJ
-                _a(f"  {'Total drive energy (laser+rad)':<36s} {E_total_MJ:>10.4f} MJ")
-                _a(f"  {'Capsule gain (yield/total drive)':<36s} {capsule_gain:>10.3f}")
         _a(self._metric('Fusion yield',        d.energy_output,    'MJ',  fmt='.3f'))
         _a(self._metric('DT neutron yield',    d.dt_neutron_yield, '',    fmt='.3e'))
         _a(self._metric('Target gain',         d.target_gain,      '',    fmt='.3f'))
         _a(self._metric('Max DT temperature',  d.max_dt_temp,      'keV', fmt='.2f'))
         _a('')
-
-        # ---- Drive source (radiation) ----
-        # Rendered whenever a radiation drive table was parsed from the RHW.
-        # Header label distinguishes pure indirect drive (laser=0) from a
-        # pre-pulse alongside a direct-drive laser.
-        if rad_metrics is not None:
-            laser_E = d.laser_energy or 0.0
-            if laser_E <= 0:
-                role = 'Indirect Drive — primary'
-            else:
-                role = 'Direct Drive pre-pulse'
-            _a(f'DRIVE SOURCE ({role})')
-            _a('-' * width)
-            _a(f"  {'Boundary':<36s} {rad_metrics['location']:>10s}")
-            _a(f"  {'Flux multiplier':<36s} {rad_metrics['flux_multiplier']:>10.3f}")
-            _a(f"  {'Peak T_rad':<36s} {rad_metrics['peak_T_eV']:>10.1f} eV  "
-               f"(at t = {rad_metrics['peak_T_time_s']*1e9:.3f} ns)")
-            _a(f"  {'Drive window':<36s} "
-               f"{rad_metrics['drive_start_s']*1e9:>5.3f} – "
-               f"{rad_metrics['drive_end_s']*1e9:.3f} ns  "
-               f"({rad_metrics['n_points']} points)")
-            _a(f"  {'Peak flux (mult × σT⁴)':<36s} "
-               f"{rad_metrics['peak_flux_Wcm2']:>10.3e} W/cm²")
-            _a(f"  {'R_drive at peak T_rad':<36s} "
-               f"{rad_metrics['R_outer_at_peak_cm']:>10.4f} cm")
-            E_kJ = rad_metrics['E_rad_J'] * 1e-3
-            if laser_E > 0:
-                frac = (rad_metrics['E_rad_J'] * 1e-6 / laser_E) * 100.0
-                _a(f"  {'Total radiation energy':<36s} {E_kJ:>10.3f} kJ  "
-                   f"({frac:.3f}% of laser)")
-            else:
-                _a(f"  {'Total radiation energy':<36s} {E_kJ:>10.3f} kJ  "
-                   f"(primary drive)")
-            _a('')
 
         # ---- Laser configuration ----
         if d.laser_wavelength_um > 0:
@@ -353,6 +303,60 @@ class ICFOutputGenerator:
                 d.alpha_onset_time_ns < d.stag_time * 1e9):
             _a(self._metric('Alpha onset time', d.alpha_onset_time_ns, 'ns', fmt='.3f'))
             _a('  (implosion metrics evaluated pre-onset)')
+
+        # ---- First shock propagation (pressure_gradients.analyze_first_shock) ----
+        # Distinct from the "Shock breakout" lines above:
+        #   - Those report the shock exiting the FUEL into the GAS CAVITY
+        #     (rear-face event, ri[0, 0]).
+        #   - This block reports the FIRST shock entering the FUEL from the
+        #     ABLATOR (fuel/ablator interface event, ri[0, -2]) and its
+        #     strength as it traverses the shell.
+        fs = getattr(d, 'first_shock', None)
+        if fs is not None and isinstance(fs, dict):
+            bt    = fs.get('breakout_time_ns')
+            bp    = fs.get('breakout_pressure_Gbar')
+            bm    = fs.get('breakout_mach')
+            sp    = fs.get('shock_pressure_Gbar')      # array
+            mn    = fs.get('mach_number')              # array
+            sv    = fs.get('shock_velocity')           # array, cm/ns
+            t_arr = fs.get('time')                     # array, ns
+            has_breakout = (bt is not None
+                            and not (isinstance(bt, float) and np.isnan(bt)))
+            has_history  = (sp is not None and mn is not None
+                            and t_arr is not None and len(sp) > 0)
+            if has_breakout or has_history:
+                _a('FIRST SHOCK PROPAGATION (entry into fuel)')
+                _a('-' * width)
+            if has_breakout:
+                _a(self._metric('Entry into fuel time',           bt, 'ns',   fmt='.3f'))
+                if bp is not None and not np.isnan(bp):
+                    _a(self._metric('Post-shock P at entry',      bp, 'Gbar', fmt='.3f'))
+                if bm is not None and not np.isnan(bm):
+                    _a(self._metric('Mach number at entry',       bm, '',     fmt='.2f'))
+            if has_history:
+                # Peak-strength scalars from the shock trajectory through the shell
+                sp_arr = np.asarray(sp,    dtype=float)
+                mn_arr = np.asarray(mn,    dtype=float)
+                t_ns   = np.asarray(t_arr, dtype=float)
+                valid_p = np.isfinite(sp_arr)
+                valid_m = np.isfinite(mn_arr)
+                if valid_p.any():
+                    i_p = int(np.nanargmax(sp_arr))
+                    _a(self._metric('Peak post-shock P',          sp_arr[i_p], 'Gbar', fmt='.3f'))
+                    _a(f"  {'  at time':<36s} {t_ns[i_p]:>10.3f} ns")
+                if valid_m.any():
+                    i_m = int(np.nanargmax(mn_arr))
+                    _a(self._metric('Peak Mach number',           mn_arr[i_m], '',     fmt='.2f'))
+                    _a(f"  {'  at time':<36s} {t_ns[i_m]:>10.3f} ns")
+                if sv is not None:
+                    sv_arr = np.asarray(sv, dtype=float) * 1e4   # cm/ns -> km/s
+                    valid_v = np.isfinite(sv_arr)
+                    if valid_v.any():
+                        i_v = int(np.nanargmax(np.abs(sv_arr)))
+                        _a(self._metric('Peak shock speed',       abs(sv_arr[i_v]), 'km/s', fmt='.1f'))
+            if has_breakout or has_history:
+                _a('  (full time history on the FIRST SHOCK PDF page)')
+                _a('')
         
         # ---- Burn propagation (Olson et al. convention) ----
         _a('BURN PROPAGATION (T_ion > 4.5 keV)')
