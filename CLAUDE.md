@@ -1540,3 +1540,31 @@ calibration lever. Plus retired May 4:
   pulse with FL=0.02. Today's scan covered the relevant range; the
   v/α/abs/bang trades are well-characterized and adding intermediate
   cone angles would refine gradients without changing conclusions.
+
+  ### Spot-size endpoint at s=0.16 (May 5)
+
+Burn run at PDD_20 calibration with spot=0.16 (the April PDD_26b
+spot value) instead of 0.20: `Olson_PDD_20_fab02_foot25_s016_burn`.
+v=462.8 km/s (−1.5% vs 470), bang=13.645 ns (DEAD on LILAC's 13.5),
+HS radius at ignition 125 μm (vs cluster 120, +4%), yield 59.1 MJ
+(−32% vs cluster 87.4 — best yield match achieved), imploded DT
+1.77 mg (3× the s=0.20 value of 0.60 mg). However: ⟨T_hs⟩ 38.1 keV
+(+69%), ⟨P_hs⟩ 429 Gbar (+122%), abs 83.9% (+29%, well out of
+envelope), α=1.05 (−65%, very low).
+
+The s=0.16 vs s=0.20 comparison brackets cluster physics:
+- s=0.20 undercouples compression: T_hs/P_hs/CR/density in envelope,
+  but yield 70% short and ρR_cf 39% short.
+- s=0.16 overcouples burn: v/bang/HS radius at ignition match cluster,
+  yield only 32% short, but T_hs/P_hs overshoot and abs out of
+  envelope.
+- Cluster physics sits between these two regimes. Helios cannot
+  produce a single point that lands all eight metrics simultaneously
+  at the Olson reference pulse with FL=0.02 — confirming that the
+  residual is a 1D vs 3D physics difference (specifically: 1D
+  Helios's ablation channel cannot reproduce the cluster's combined
+  efficient mass-coupling AND moderate absorption).
+
+Both runs valid as calibration anchors. For HDD transfer, both
+reference points carried forward; spot-size choice in HDD will be
+informed by the HDD coupling intent rather than direct PDD transfer.
