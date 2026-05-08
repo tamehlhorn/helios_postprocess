@@ -416,13 +416,6 @@ class ICFAnalyzer:
         # (must run before adiabat routines -- base adiabat uses breakout time)
         self._compute_shock_breakout()
 
-        # Compute first-shock strength history (Mach, P jump, velocity vs time)
-        # Runs after _track_shock_fronts so the swarm and the trajectory are
-        # both available downstream. Independent of _compute_shock_breakout —
-        # the latter measures the fuel→gas-cavity event, this measures the
-        # shock as it traverses the shell into the fuel.
-        self._analyze_first_shock()
-
         # Compute adiabat at peak implosion velocity (legacy definition)
         self._compute_adiabat()
 
@@ -494,93 +487,7 @@ class ICFAnalyzer:
         
         if len(shock_times) > 0:
             logger.info(f"Tracked {len(shock_times)} shock front points")
-
-    def _analyze_first_shock(self):
-        """
-        Track the first (outermost) shock through the shell with strength
-        characterization at every timestep.
-
-        Wraps `pressure_gradients.analyze_first_shock`, which identifies the
-        outermost pressure discontinuity at each timestep and computes the
-        Rankine-Hugoniot jump conditions across it. Result is stored on
-        `data.first_shock` as a dict (or None if the analysis fails).
-
-        Search range: zone 0 outward through the simulation domain. The
-        function picks the OUTERMOST shock at each timestep (which traces
-        the first shock as it propagates inward through the shell). Breakout
-        is detected when the first shock crosses the fuel/ablator interface
-        (ri[0, -2]) entering the fuel.
-
-        This is independent of `_compute_shock_breakout`, which measures a
-        different event: the shock exiting the fuel into the gas cavity at
-        ri[0, 0]. For Vulcan-like 4-region targets the first-shock event
-        comes earlier (shock entering shell from outside) than the cavity
-        breakout event.
-
-        Stores on ICFRunData:
-            first_shock : dict or None — see analyze_first_shock() docstring
-        """
-        self.data.first_shock = None
-
-        if self.data.ion_pressure is None:
-            logger.debug("First-shock analysis skipped: no ion_pressure")
-            return
-        if self.data.zone_boundaries is None:
-            logger.debug("First-shock analysis skipped: no zone_boundaries")
-            return
-        if self.data.mass_density is None:
-            logger.debug("First-shock analysis skipped: no mass_density")
-            return
-
-        ri = self.data.region_interfaces_indices
-        if ri is None or ri.ndim != 2 or ri.shape[1] < 2:
-            logger.debug("First-shock analysis skipped: insufficient region "
-                         "structure (need >= 2 interfaces)")
-            return
-
-        try:
-            from .pressure_gradients import analyze_first_shock
-        except ImportError:
-            logger.warning("pressure_gradients module not importable; "
-                           "skipping first-shock analysis")
-            return
-
-        # Total pressure (J/cm³) — analyze_first_shock converts to Gbar internally
-        total_P = self.data.ion_pressure + (
-            self.data.rad_pressure if self.data.rad_pressure is not None else 0.0
-        )
-
-        # Zone bounds: search from zone 0 out to the outermost zone, using
-        # the fuel/ablator interface for breakout detection (per the example
-        # in pressure_gradients.analyze_first_shock).
-        ablator_outer_zone = int(ri[0, -1]) - 1
-        fuel_inner_zone    = int(ri[0, -2])
-
-        try:
-            result = analyze_first_shock(
-                pressure=total_P,
-                zone_boundaries=self.data.zone_boundaries,
-                density=self.data.mass_density,
-                time=self.data.time,
-                ablator_outer_zone=ablator_outer_zone,
-                fuel_inner_zone=fuel_inner_zone,
-            )
-        except Exception as e:
-            logger.warning(f"First-shock analysis failed: {e}")
-            return
-
-        self.data.first_shock = result
-
-        bt = result.get('breakout_time_ns', float('nan'))
-        if bt is not None and not (isinstance(bt, float) and np.isnan(bt)):
-            bp = result.get('breakout_pressure_Gbar', float('nan'))
-            bm = result.get('breakout_mach', float('nan'))
-            logger.info(f"First shock entry into fuel: t = {bt:.3f} ns, "
-                        f"P_post = {bp:.2f} Gbar, M = {bm:.2f}")
-        else:
-            logger.info("First-shock analysis ran but no breakout detected "
-                        "in the simulation window")
-
+    
     def _compute_adiabat(self):
         """
         Compute mass-averaged adiabat (entropy parameter) in cold DT fuel.
@@ -617,7 +524,7 @@ class ICFAnalyzer:
                 # Find time of peak inward velocity in fuel zones only
                 if ri is not None and ri.shape[1] >= 2:
                     fuel_start = int(ri[0, 0])
-                    fuel_end = int(ri[0, -2])
+                    fuel_end = int(ri[0, getattr(self.data, 'fuel_ablator_idx', -2)])
                     if fuel_end > fuel_start:
                         min_v_per_time = np.min(v_zone[:, fuel_start:fuel_end], axis=1)
                     else:
@@ -661,7 +568,7 @@ class ICFAnalyzer:
                 fuel_hi = int(ri[eval_idx, 1])            # ice/foam interface (outer edge of ice)
             elif ri is not None and ri.shape[1] == 2:
                 fuel_lo = int(ri[eval_idx, 0])
-                fuel_hi = int(ri[eval_idx, -1])           # no ablator: fuel to outer edge
+                fuel_hi = int(ri[eval_idx, getattr(self.data, 'capsule_outer_idx', -1)])  # no ablator: fuel to capsule outer
             else:
                 fuel_lo = 0
                 fuel_hi = n_zones
@@ -748,7 +655,7 @@ class ICFAnalyzer:
                 fuel_hi = int(ri[idx_b, 1])               # ice/foam interface
             elif ri is not None and ri.shape[1] == 2:
                 fuel_lo = int(ri[idx_b, 0])
-                fuel_hi = int(ri[idx_b, -1])              # no ablator: fuel to outer edge
+                fuel_hi = int(ri[idx_b, getattr(self.data, 'capsule_outer_idx', -1)])  # no ablator: fuel to capsule outer
             else:
                 fuel_lo = 0
                 fuel_hi = n_zones
@@ -973,12 +880,21 @@ class ICFAnalyzer:
             else:
                 search_start = n_zones // 4           # fallback: skip inner quarter
 
-            if search_start >= n_zones - 2:
+            # For halfraum_capsule, bound the search at the capsule outer
+            # node so the He/Cu density step (0.0003 → 8.93 g/cc) doesn't
+            # masquerade as the steepest negative gradient.  For standard
+            # capsules this returns n_zones (= grid edge), unchanged from
+            # prior behaviour.
+            search_end = (self.data.capsule_outer_node(t)
+                          if hasattr(self.data, 'capsule_outer_node')
+                          else n_zones)
+
+            if search_start >= search_end - 2:
                 continue
 
             # Compute dρ/dr on the search range
-            r_search   = zone_centers[search_start:]
-            rho_search = rho[search_start:]
+            r_search   = zone_centers[search_start:search_end]
+            rho_search = rho[search_start:search_end]
             drho_dr = np.gradient(rho_search, r_search)
 
             # Ablation front = steepest density drop (most negative dρ/dr)
@@ -1069,7 +985,7 @@ class ICFAnalyzer:
             # Find peak inward velocity in fuel region (pre-stagnation)
             if ri.shape[1] >= 2:
                 fuel_start = int(ri[0, 0])
-                fuel_end = int(ri[0, -2])
+                fuel_end = int(ri[0, getattr(self.data, 'fuel_ablator_idx', -2)])
                 if fuel_end > fuel_start:
                     min_v_per_time = np.min(v_zone[:, fuel_start:fuel_end], axis=1)
                 else:
@@ -1087,11 +1003,14 @@ class ICFAnalyzer:
                 t_pv = np.argmin(min_v_per_time)
 
             # --- Density-based shell identification ---
-            # Search within fuel + ablated region (ri[0] to ri[-2])
+            # Search within fuel + ablated region.  For halfraum_capsule
+            # targets, fuel_ablator_idx points to the foam/CD interface,
+            # NOT the He/Cu boundary -- so the search correctly stops at
+            # the inside of the ablator instead of crossing the He gap.
             z_lo = int(ri[t_pv, 0])    # inner fuel boundary (Lagrangian)
-            z_hi = int(ri[t_pv, -2])   # fuel/ablator boundary
+            z_hi = int(ri[t_pv, getattr(self.data, 'fuel_ablator_idx', -2)])
             if z_hi <= z_lo:
-                z_hi = n_zones
+                z_hi = self.data.capsule_outer_node(t_pv) if hasattr(self.data, 'capsule_outer_node') else n_zones
 
             rho_shell = rho[t_pv, z_lo:z_hi]
             rho_peak = np.max(rho_shell)
@@ -1416,13 +1335,20 @@ class ICFAnalyzer:
         if self.data.bang_time > 0:
             bt = np.argmin(np.abs(self.data.time - self.data.bang_time))
 
-            # Total ρR (centre to outer edge)
-            self.data.bang_time_areal_density = cumulative[bt, -1]
+            # Total ρR — for halfraum_capsule we restrict the integration to the
+            # capsule outer node so the reported "Total" excludes external
+            # converter shell + gas-fill mass.  For standard capsules
+            # capsule_outer_node returns n_zones (= grid edge), so the
+            # behaviour is unchanged.
+            n_capsule = (self.data.capsule_outer_node(bt)
+                         if hasattr(self.data, 'capsule_outer_node')
+                         else n_zones)
+            self.data.bang_time_areal_density = cumulative[bt, n_capsule]
 
             if has_regions:
                 hs_bnd   = int(ri[bt, 0])                        # hot-spot outer node
-                fuel_bnd = int(ri[bt, -2])                        # fuel / ablator interface
-                n_total  = n_zones                                # outer edge index
+                fuel_bnd = int(ri[bt, getattr(self.data, 'fuel_ablator_idx', -2)])
+                n_total  = n_capsule                              # capsule outer node
 
                 self.data.bang_time_hs_areal_density   = cumulative[bt, hs_bnd]
                 self.data.bang_time_fuel_areal_density  = cumulative[bt, fuel_bnd] - cumulative[bt, hs_bnd]
@@ -1760,7 +1686,7 @@ class ICFAnalyzer:
             areal_sum = 0.0
             for t in range(len(dt_array)):
                 hs_bnd   = int(ri[t, 0])
-                fuel_bnd = int(ri[t, -2])
+                fuel_bnd = int(ri[t, getattr(self.data, 'fuel_ablator_idx', -2)])
                 fuel_rhoR = cumul[t, fuel_bnd] - cumul[t, hs_bnd]
                 areal_sum += fuel_rhoR * np.sum(fusion_rate[t]) * dt_array[t]
 
@@ -1868,12 +1794,16 @@ class ICFAnalyzer:
                        if self.data.stag_time > 0 else 0
 
             n_zones = self.data.zone_mass.shape[1]
-            fuel_bnd = int(ri[0, -2])      # fuel / ablator interface (Lagrangian)
+            fuel_bnd = int(ri[0, getattr(self.data, 'fuel_ablator_idx', -2)])  # fuel / ablator interface (Lagrangian)
             hs_bnd   = int(ri[stag_idx, 0])  # hot-spot outer boundary at stagnation
+            # Capsule outer node — for halfraum, excludes external He gap + Cu shell mass
+            capsule_outer_z = (self.data.capsule_outer_node(0)
+                               if hasattr(self.data, 'capsule_outer_node')
+                               else n_zones)
 
-            # Initial masses
+            # Initial masses (restricted to capsule)
             initial_fuel_mass    = np.sum(self.data.zone_mass[0, :fuel_bnd])
-            initial_ablator_mass = np.sum(self.data.zone_mass[0, fuel_bnd:])
+            initial_ablator_mass = np.sum(self.data.zone_mass[0, fuel_bnd:capsule_outer_z])
             self.data.initial_fuel_mass_mg    = float(initial_fuel_mass) * 1e3   # g -> mg
             self.data.initial_ablator_mass_mg = float(initial_ablator_mass) * 1e3
 

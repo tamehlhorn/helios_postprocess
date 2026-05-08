@@ -112,6 +112,19 @@ class ICFRunData:
         self.region_interfaces_indices: Optional[np.ndarray] = None  # (n_times, n_regions)
         self.material_index: Optional[np.ndarray] = None          # (n_zones,) material ID per zone
         self.region_names: Optional[list] = None                   # list of region name strings
+        # ----- Target classification (for capsule vs halfraum-capsule analysis routing) -----
+        # `target_class` = "capsule" | "halfraum_capsule"
+        #   capsule:           grid contains only the imploding payload (gas + fuel + ablator)
+        #   halfraum_capsule:  grid contains capsule + external structure (gas gap + converter shell)
+        # `n_capsule_regions` = number of regions belonging to the capsule itself.
+        #   For "capsule":           equals the total number of regions
+        #   For "halfraum_capsule":  less than total; outermost (n_total - n_capsule) regions
+        #                            are external structure and excluded from implosion analyses
+        # These fields are auto-populated below from region_names; analyzers use the derived
+        # `capsule_outer_idx` and `fuel_ablator_idx` properties to get the correct ri[:,k]
+        # column for the capsule outer surface and fuel/ablator interface respectively.
+        self.target_class: str = "capsule"
+        self.n_capsule_regions: int = 0
         self.areal_density_vs_time: Optional[np.ndarray] = None  # (n_times, n_zones+1)
 
         # ------------------------------------------------------------------
@@ -198,6 +211,61 @@ class ICFRunData:
         self.rhw_config = None          # RHWConfig dataclass (from rhw_parser)
         self.drive_temperature: Optional[np.ndarray] = None  # eV  (from .rhw file)
         self.drive_time: Optional[np.ndarray] = None         # seconds
+
+    # ------------------------------------------------------------------
+    # Helper properties for region indexing (used by ICFAnalyzer).
+    #
+    # For "capsule" targets (current default behaviour), these reduce to
+    # the historical ri[:, -1] and ri[:, -2] respectively, so existing
+    # call sites that switch to using these properties produce identical
+    # results.
+    #
+    # For "halfraum_capsule" targets where external structure (gas gap +
+    # converter shell) lives outside the capsule, these point to the
+    # capsule outer surface and the fuel/ablator interface within the
+    # capsule rather than the grid edge -- which is what implosion
+    # diagnostics actually want.
+    # ------------------------------------------------------------------
+    @property
+    def capsule_outer_idx(self) -> int:
+        """Column index in region_interfaces_indices for the capsule outer surface.
+        For standard capsules this is the last column (== grid outer); for
+        halfraum-capsule targets it is the inner edge of the first external
+        region (== outer surface of the ablator).
+        """
+        if self.region_interfaces_indices is None:
+            return -1
+        n_total = self.region_interfaces_indices.shape[1]
+        if self.n_capsule_regions <= 0 or self.n_capsule_regions > n_total:
+            return n_total - 1
+        return self.n_capsule_regions - 1
+
+    @property
+    def fuel_ablator_idx(self) -> int:
+        """Column index in region_interfaces_indices for the fuel/ablator interface.
+        For standard capsules this is the second-to-last column; for halfraum-capsule
+        targets it is one column inside `capsule_outer_idx`.
+        """
+        if self.region_interfaces_indices is None:
+            return -2
+        n_total = self.region_interfaces_indices.shape[1]
+        if self.n_capsule_regions <= 1 or self.n_capsule_regions > n_total:
+            return max(n_total - 2, 0)
+        return self.n_capsule_regions - 2
+
+    def capsule_outer_node(self, t_idx: int) -> int:
+        """Outermost grid node belonging to the capsule at timestep `t_idx`.
+        For standard capsules this is the grid outer node (n_zones); for
+        halfraum-capsule targets it is the node at the capsule/external boundary.
+        Returns n_zones (or 0 if mass_density not loaded) when ri is unavailable.
+        """
+        if self.mass_density is None:
+            return 0
+        n_zones = self.mass_density.shape[1]
+        if (self.target_class != "halfraum_capsule"
+                or self.region_interfaces_indices is None):
+            return n_zones
+        return int(self.region_interfaces_indices[t_idx, self.capsule_outer_idx])
 
 
 # ============================================================================
@@ -517,6 +585,45 @@ def build_run_data(
                     logger.info(f"  ✓ {'region_names':30s} ← {data.region_names}")
             except Exception as exc:
                 logger.warning(f"  ✗ Could not read region names: {exc}")
+
+        # ----------- Detect target class from region names ------------
+        # Halfraum/hohlraum-style targets append external structural regions
+        # (low-density gas fill + a high-Z converter shell) outside the capsule.
+        # We scan region names from the OUTSIDE inward and tag regions whose
+        # names match known external-structure keywords; the first non-external
+        # region from the outside marks the capsule outer surface.
+        #
+        # If no external regions are detected the run is treated as a
+        # standard capsule (existing behaviour).
+        _EXTERNAL_REGION_KEYWORDS = (
+            'pseudo void', 'void',
+            'cu shell', 'pb shell', 'au shell', 'u shell', 'ta shell',
+            'hohlraum', 'halfraum',
+            'he fill', 'helium', 'hohlraum gas',
+        )
+        if data.region_names:
+            n_total = len(data.region_names)
+            n_external = 0
+            for name in reversed(data.region_names):
+                name_lc = name.lower().strip()
+                if any(kw in name_lc for kw in _EXTERNAL_REGION_KEYWORDS):
+                    n_external += 1
+                else:
+                    break  # stop at first non-external region from outside
+            data.n_capsule_regions = n_total - n_external
+            if n_external > 0 and data.n_capsule_regions >= 2:
+                data.target_class = "halfraum_capsule"
+                if verbose:
+                    external_names = data.region_names[data.n_capsule_regions:]
+                    capsule_names = data.region_names[:data.n_capsule_regions]
+                    logger.info(f"  ✓ {'target_class':30s} ← halfraum_capsule")
+                    logger.info(f"    capsule  ({data.n_capsule_regions}): {capsule_names}")
+                    logger.info(f"    external ({n_external}): {external_names}")
+            else:
+                data.target_class = "capsule"
+                if verbose:
+                    logger.info(f"  ✓ {'target_class':30s} ← capsule "
+                                f"({data.n_capsule_regions} regions)")
     else:
         logger.warning("  ⚠ No netCDF dataset handle — region/material info unavailable")
 
