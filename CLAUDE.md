@@ -1568,3 +1568,251 @@ The s=0.16 vs s=0.20 comparison brackets cluster physics:
 Both runs valid as calibration anchors. For HDD transfer, both
 reference points carried forward; spot-size choice in HDD will be
 informed by the HDD coupling intent rather than direct PDD transfer.
+
+# Session updates — 2026-05-08 (HDD halfraum design + postprocessor halfraum support)
+
+This block can be appended to the existing CLAUDE.md (or merged into the
+relevant existing sections by hand). Items are grouped by topic so they
+slot into the document structure already in use.
+
+---
+
+## HDD halfraum target architecture (1D Helios approximation)
+
+5-region target representing the Vulcan HDD halfraum:
+
+| Region | Material | Initial r (cm) | Thickness | Initial ρ | Role |
+|---|---|---|---|---|---|
+| 1 | Gas fill (DT vapor) | 0 – 0.1875 | — | 3×10⁻⁴ g/cc | Hot spot |
+| 2 | Wetted foam (DT-CH) | 0.1875 – 0.2145 | 270 µm | 0.30 g/cc | Cold fuel |
+| 3 | CD shell | 0.2145 – 0.2185 | 40 µm | 1.09 g/cc | Ablator |
+| 4 | Pseudo void (He) | 0.2185 – 0.9185 | 7 mm | 3×10⁻⁴ g/cc | Hohlraum interior |
+| 5 | Cu shell | 0.9185 – 0.919 | 5 µm | 8.93 g/cc | Radiation converter |
+
+3-beam laser splits the published P1–P7 pulse table:
+
+| Beam | Cone | Spot | Target | Pulse segments |
+|---|---|---|---|---|
+| 1 | 1.0° | 0.22 cm | Cu shell (r=0.92 cm) | P1 (220 TW, 0–1 ns), P2 (65 TW, 4.5–7.75 ns), P3 (295 TW, 7.75–10.3 ns), P4 (614 TW, 10.31–11.7 ns) |
+| 2 | 0.7° | 0.16 cm | CD shell (r=0.22 cm) | P5 (604 TW, 11.71–13.0 ns), P6 (564 TW, 13.0–14.41 ns) |
+| 3 | 0.5° | 0.11 cm | CD shell (r=0.22 cm) | P7 (424 TW, 14.41–15.6 ns) |
+
+Total delivered energy 4.0 MJ. Prescribed `[Rad Source Data]` is OFF in
+this configuration; rad drive is generated self-consistently from the
+beam-1/Cu interaction rather than being prescribed at Rmax. Beams 2 and
+3 must penetrate the expanded Cu corona to reach the CD shell — that
+geometric coupling is the open question.
+
+Reference deck: `~/Sims/Xcimer/HDD_26/HDD26_Cu_He_FL02_Zoom_1_nb/`
+
+---
+
+## Vulcan published pulse (P1–P7), read from Thomas figure
+
+| Segment | Time (ns) | Power (TW) | Energy (kJ) |
+|---|---|---|---|
+| P1 | 0 – 2 | 220 | 440 |
+| (off) | 2 – 4 | 0 | 0 |
+| P2 | 4 – 8 | 70 | 280 |
+| P3 | 8 – 10 | 290 | 580 |
+| P4 | 10 – 11 | 610 | 610 |
+| P5 | 11 – 12 | 600 | 600 |
+| P6 | 12 – 13 | 560 | 560 |
+| P7 | 13 – 15 | 420 | 840 |
+
+Total ≈ 3.9 MJ, matches published Thomas burn-off delivered energy
+within reading error. Values uncertain to ±10% on each segment until
+cross-checked against the underlying paper data.
+
+---
+
+## First halfraum run result (HDD26_Cu_He_FL02_Zoom_1_nb)
+
+Sim ran 20 ns; capsule barely imploded:
+- CR = 1.19 (effectively no compression)
+- Peak velocity = 370 km/s at t = 19.1 ns (capsule still accelerating at end of sim)
+- No bang time within 20 ns window
+- ⟨T_hs⟩ = 0.03 keV, yield = 3.5×10⁶ reactions
+- Frac absorbed = 99% — but to Cu corona, not capsule
+
+Three competing culprits requiring diagnosis:
+1. **5 µm Cu too thin** for sufficient x-ray emission at the 100 eV target T_rad
+2. **7 mm He gap absorbing more than expected** (low-density He should be
+   transparent to soft x-rays; not transparent if rad emission is too soft)
+3. **Sim too short** relative to drive geometry (capsule may bang at 25–30 ns)
+
+Resolution path: look at T_rad(t) at zone 425 (Cu inner surface) vs zone
+376 (CD outer surface). Strong T_rad at Cu inner but weak at CD outer →
+He gap eats radiation. Weak T_rad at Cu inner → Cu thickness issue.
+Both look healthy → just need longer sim.
+
+Sensitivity sweep suggestions: Cu thickness 5→10→15 µm; He gap 7→3→1 mm;
+max sim time 20→30 ns. Run one variation per culprit to triage.
+
+---
+
+## Persistent calibration findings (HDD26)
+
+**Adiabat is unmoved by radiation-drive details.** Three-run sweep of
+HDD26 with progressively more rad-drive energy:
+
+| Run | Rad config | Adiabat | Yield (MJ) | Imploded DT (mg) |
+|---|---|---|---|---|
+| CA1 | cutoff at 2.17 ns | 2.12 | 0.037 | 2.55 |
+| CA1x | extended to 4.5 ns, mult=0.8 | 1.99 | 0.018 | 3.13 |
+| CA1x1 | extended to 4.5 ns, mult=1.0 | 1.93 | 0.021 | 3.18 |
+
+Adiabat is flat (2.12 → 1.93). Closing the rad-laser gap improves shell
+preconditioning — imploded DT moves from 2.55 mg (15% under published)
+to 3.13 mg (4% over published), unablated fuel rises from 0.61 to 0.75 —
+but *degrades* laser coupling because the corona is more diffuse. Net
+absorbed energy drops 2.22 → 1.76 MJ (-21%). Yield drops because
+T_hs⁴ scaling dominates over the modest ρR_cf gain.
+
+Burn-on version of CA1x: α onset at 14.3 ns (1 ns before bang), yield
+0.018 → 0.023 MJ (+28%), ⟨T_hs⟩ 3.07 → 3.35 keV. No propagating burn
+(ρR_hs = 0.059 g/cm² vs threshold 0.3). The HDD26 calibration gap is
+"several factors short on everything" — not "near-miss on ignition."
+
+**Confirmed null absorption levers in 1D Helios:**
+- Reflection at r_crit (rp0/rp1/rp2/rp3 sweep on Olson_PDD_20: all four
+  runs identical, frac absorbed stays 83.9% across 0–30% reflection)
+- Flux limiter f=0.02 vs f=0.06 (PDD)
+- Flux multiplier 0.8 vs 1.0 (radiation drive)
+- Rad-drive timing extension
+
+In 1D Helios, reflected rays go back through the same corona and are
+re-absorbed there — energy cannot escape the system. The only knob that
+actually reduces absorbed energy is **Power multiplier** (which just
+delivers less laser).
+
+---
+
+## Postprocessor halfraum support (May 2026)
+
+`ICFRunData` now auto-detects target geometry from `region_names`:
+- `target_class = "capsule"` (default — current behaviour)
+- `target_class = "halfraum_capsule"` (when external structure detected)
+
+Detection keywords (case-insensitive substring, scanned from outside inward):
+`pseudo void`, `void`, `cu shell`, `pb shell`, `au shell`, `u shell`,
+`ta shell`, `hohlraum`, `halfraum`, `he fill`, `helium`, `hohlraum gas`.
+
+Two new helper properties on `ICFRunData`:
+- `capsule_outer_idx` — column in `region_interfaces_indices` for the
+  capsule outer surface. For halfraum_capsule, points to ablator outer
+  (= inner edge of first external region) rather than grid edge.
+- `fuel_ablator_idx` — column for the fuel/ablator interface, one column
+  inside `capsule_outer_idx`.
+- Plus a method `capsule_outer_node(t)` returning the node index at
+  timestep `t` for capsule-bounded zone-index searches.
+
+For 3- and 4-region standard capsule targets these reduce to the
+historical `ri[:, -1]` and `ri[:, -2]` — zero regression on existing
+runs. For 5-region halfraum targets the analyzer indexes into the
+capsule outer surface and fuel/ablator interface within the capsule
+rather than the grid edge.
+
+Analyzer call sites updated to use the new properties:
+- `_compute_adiabat`, `_compute_adiabat_at_breakout` (fuel-velocity range,
+  no-ablator branches)
+- `_compute_ifar` (fuel-velocity range, density-shell search)
+- `_track_ablation_front` (search bounded at capsule outer node — keeps
+  the He/Cu density step from registering as ablation front)
+- `_compute_areal_densities` (Total ρR restricted to capsule outer for
+  halfraum)
+- Neutron-averaged fuel ρR
+- Initial fuel/ablator mass split
+
+Two halfraum-specific corrections:
+- **Peak-density search bounded to capsule** in `_find_stagnation_time`
+  — without this, the initial Cu shell compression at simulation start
+  registers as the imploded-fuel peak (Cu at 8.93 g/cc compressing
+  transiently to 23 g/cc at t=0.1 ns).
+- **`I at r_crit at peak laser power` underflow guard** in
+  `analyze_laser_intensity` — for halfraum, peak total power and r_crit
+  can refer to different absorbing regions; if the lookup yields
+  <1 MW/cm² the diagnostic is set to NaN and reported as `n/a (halfraum:
+  peak total power not at capsule r_crit)`.
+
+Also for the first-shock analyzer (`_analyze_first_shock`), the
+`ablator_outer_zone` and `fuel_inner_zone` variables now use
+`getattr(self.data, 'capsule_outer_idx', -1)` and `getattr(self.data,
+'fuel_ablator_idx', -2)` respectively, so the first-shock tracker
+bounds at the capsule outer rather than the grid edge.
+
+---
+
+## Multi-beam pulse visibility (May 2026)
+
+`data_builder._collapse_beam_axis` sums `laser_power_delivered` and
+`laser_power_on_target` across beams while preserving per-beam tables on
+`*_per_beam` attributes. The earlier silent `np.squeeze` bug (no-op on
+multi-beam shape, hidden bug for any HDD-style focal-zoom deck) is
+fixed. Canary log line: `summed across N beams → (n_t,), per-beam
+preserved → (n_t, N)`.
+
+`icf_output` adds a `PULSE SHAPE (per beam)` block for multi-beam runs
+showing per-beam on/off time, peak power, and integrated energy. Total
+energy across beams sanity-checks against `laser_energy_delivered`. The
+existing `(beam 1)` hardcoded section is now correctly labeled as
+beam-1-specific only when multiple beams are present. Single-beam runs
+unchanged.
+
+`icf_plotting._plot_laser_power` overlays per-beam contributions on the
+laser-power PDF page (tab10 colors, summed total in thick black). Makes
+the focal-zoom hand-off between beams visible at a glance — this would
+have caught the "is the post-peak missing?" confusion immediately.
+
+---
+
+## Convention update — region indexing
+
+For halfraum_capsule (5-region), the convention table is:
+
+| ri column | Boundary | Role |
+|---|---|---|
+| `ri[:, 0]` | Gas/foam | Hot-spot boundary |
+| `ri[:, 1]` | Foam/CD | Fuel/ablator interface (= `fuel_ablator_idx`) |
+| `ri[:, 2]` | CD/He | Capsule outer surface (= `capsule_outer_idx`) |
+| `ri[:, 3]` | He/Cu | Hohlraum wall inner |
+| `ri[:, 4]` | Cu outer | Grid edge |
+
+Capsule analyses use columns 0–2 only. External structure (columns 3, 4)
+is excluded from peak velocity, IFAR, adiabat, ablation front,
+areal density, mass fractions, and peak density searches.
+
+Old convention for standard 3- and 4-region capsules unchanged.
+
+---
+
+## Open priority list for next session
+
+1. **Halfraum sensitivity sweep** — Cu thickness 5→10→15 µm; He gap
+   7→3→1 mm; sim duration 20→30 ns. T_rad(t) at Cu inner (zone 425)
+   and CD outer (zone 376) is the diagnostic that triages between the
+   three culprits.
+2. **Once halfraum produces a viable T_rad(t)**, drop the trace into
+   the HDD26 production deck as the new self-consistent rad source
+   (replaces extended-rad-drive placeholder).
+3. **Power_mult sweep** on best HDD config (1.0 / 1.5 / 2.0) — tests
+   drive-limited vs partition-limited hypotheses. If yield scales
+   linearly with absorbed energy, drive is the bottleneck. If yield
+   saturates with α flat, partition is the bottleneck.
+4. **Apply the three pending patches** (icf_analysis_halfraum,
+   icf_output_per_beam, icf_plotting_per_beam) and verify regression
+   on the standard 3-region (HDD26_CA1x) and 4-region (PDD_20) cases.
+
+---
+
+## Files added or modified this session
+
+| File | Change |
+|---|---|
+| `helios_postprocess/data_builder.py` | Multi-beam summing + per-beam preservation; `target_class` auto-detection; `capsule_outer_idx` / `fuel_ablator_idx` / `capsule_outer_node()` helpers |
+| `helios_postprocess/rhw_parser.py` | Radiation drive temperature parser; `drive_location`, `drive_flux_multiplier` fields |
+| `helios_postprocess/energetics.py` | `compute_radiation_drive_energy()` |
+| `helios_postprocess/icf_analysis.py` | First-shock analyzer integration; halfraum-aware boundary indexing; bounded peak-density search; LPI underflow guard |
+| `helios_postprocess/icf_output.py` | Radiation drive + total drive energy lines; first-shock summary block; per-beam pulse summary block |
+| `helios_postprocess/icf_plotting.py` | First-shock 3-panel PDF page; per-beam laser power overlay |
+| Project knowledge (this document) | Halfraum target architecture, P1–P7 pulse table, halfraum coupling diagnosis path, postprocessor halfraum convention table |
