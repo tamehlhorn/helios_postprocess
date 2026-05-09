@@ -121,7 +121,6 @@ class ICFPlotter:
             # Pressure gradient and shocks
             self._plot_pressure_gradient_contour(pdf)
             self._plot_shock_tracking(pdf)
-            self._plot_first_shock_analysis(pdf)
             
             # Areal density evolution
             self._plot_areal_density_evolution(pdf)
@@ -1224,24 +1223,52 @@ class ICFPlotter:
         pdf.savefig(fig); _plt.close(fig)
 
     def _plot_laser_power(self, pdf):
-        """Plot laser power delivered."""
+        """Plot laser power delivered.
+
+        For multi-beam runs (HDD-style focal-zoom decks) overlay each beam's
+        contribution as a thin colored line and the summed total as a thick
+        black line. Single-beam runs use the original orange-line style.
+        """
         fig, ax = plt.subplots(figsize=self.default_figsize)
 
-        power_TW = self.data.laser_power_delivered * 1e-12   # W → TW
+        time_ns       = self.data.time
+        total_TW      = self.data.laser_power_delivered * 1e-12   # W → TW
 
-        ax.plot(self.data.time, power_TW, color='darkorange', linewidth=1.5)
+        per_beam = getattr(self.data, 'laser_power_delivered_per_beam', None)
+        is_multibeam = (per_beam is not None
+                        and per_beam.ndim == 2
+                        and per_beam.shape[1] >= 2)
+
+        if is_multibeam:
+            n_beams = per_beam.shape[1]
+            # Distinct, eye-friendly colors. tab10 gives crisp categoricals.
+            beam_colors = plt.cm.tab10(np.arange(n_beams) % 10)
+            for b in range(n_beams):
+                beam_TW = per_beam[:, b] * 1e-12
+                if np.any(beam_TW > 0.1):           # >0.1 TW threshold for "on"
+                    ax.plot(time_ns, beam_TW,
+                            color=beam_colors[b], linewidth=1.2, alpha=0.85,
+                            label=f'Beam {b+1}')
+            ax.plot(time_ns, total_TW, color='black', linewidth=2.0,
+                    label=f'Total ({n_beams} beams)')
+            ax.legend(loc='best', fontsize=9, framealpha=0.85)
+        else:
+            ax.plot(time_ns, total_TW, color='darkorange', linewidth=1.5)
 
         ax.set_xlabel('Time (ns)')
         ax.set_ylabel('Laser Power (TW)')
         ax.set_title('Laser Power Delivered')
-        ax.set_xlim(self.data.time[0], self.data.time[-1])
+        ax.set_xlim(time_ns[0], time_ns[-1])
         ax.set_ylim(bottom=0)
         ax.grid(True, alpha=0.3)
 
-        # Annotate peak
-        peak_idx = np.argmax(power_TW)
-        ax.annotate(f'{power_TW[peak_idx]:.1f} TW',
-                    xy=(self.data.time[peak_idx], power_TW[peak_idx]),
+        # Annotate total peak (works for both single and multi-beam)
+        peak_idx = int(np.argmax(total_TW))
+        peak_label = (f'Peak total: {total_TW[peak_idx]:.1f} TW'
+                      if is_multibeam
+                      else f'{total_TW[peak_idx]:.1f} TW')
+        ax.annotate(peak_label,
+                    xy=(time_ns[peak_idx], total_TW[peak_idx]),
                     xytext=(0.7, 0.9), textcoords='axes fraction',
                     arrowprops=dict(arrowstyle='->', color='black'),
                     fontsize=11, ha='center')
@@ -1753,110 +1780,5 @@ class ICFPlotter:
         ax1.legend(loc='upper right')
         ax1.grid(True, alpha=0.3)
 
-        pdf.savefig(fig)
-        plt.close(fig)
-
-    def _plot_first_shock_analysis(self, pdf):
-        """
-        Three-panel plot of the first-shock trajectory and strength history.
-
-        Reads `self.data.first_shock` (populated by
-        ICFAnalyzer._analyze_first_shock). Skipped if absent or empty.
-
-        Panels:
-          1. Shock radius vs time, with breakout time marked.
-          2. Shock velocity (km/s) and Mach number on twin axes vs time.
-          3. Post-shock pressure (Gbar) and pressure jump (Gbar) vs time.
-        """
-        fs = getattr(self.data, 'first_shock', None)
-        if fs is None or not isinstance(fs, dict):
-            logger.info("First-shock analysis not available — skipping plot")
-            return
-
-        t       = np.asarray(fs.get('time',                np.array([])), dtype=float)
-        r       = np.asarray(fs.get('shock_radius',        np.array([])), dtype=float)
-        v       = np.asarray(fs.get('shock_velocity',      np.array([])), dtype=float)
-        M       = np.asarray(fs.get('mach_number',         np.array([])), dtype=float)
-        P_post  = np.asarray(fs.get('shock_pressure_Gbar', np.array([])), dtype=float)
-        P_jump  = np.asarray(fs.get('P_jump_Gbar',         np.array([])), dtype=float)
-        bt = fs.get('breakout_time_ns')
-
-        if t.size == 0 or r.size == 0:
-            logger.info("First-shock arrays empty — skipping plot")
-            return
-
-        valid_r = np.isfinite(r)
-        if not valid_r.any():
-            logger.info("No finite first-shock radii — skipping plot")
-            return
-
-        fig, axes = plt.subplots(3, 1, figsize=(11, 11), sharex=True)
-        ax1, ax2, ax3 = axes
-
-        # ---------- Panel 1: shock radius ----------
-        ax1.plot(t[valid_r], r[valid_r] * 1e4, 'o-', color='tab:blue',
-                 markersize=3, linewidth=1.0, label='First shock radius')
-        if bt is not None and not (isinstance(bt, float) and np.isnan(bt)):
-            ax1.axvline(bt, color='tab:red', linestyle='--', alpha=0.7,
-                        label=f'Entry into fuel: t = {bt:.3f} ns')
-        ax1.set_ylabel('Shock radius (μm)')
-        ax1.set_title('First Shock — Trajectory and Strength History')
-        ax1.legend(loc='best')
-        ax1.grid(True, alpha=0.3)
-
-        # ---------- Panel 2: velocity (km/s) and Mach number ----------
-        valid_v = np.isfinite(v)
-        valid_M = np.isfinite(M)
-        any_v = valid_v.any()
-        any_M = valid_M.any()
-        if any_v:
-            v_kms = v * 1e4   # cm/ns -> km/s
-            ax2.plot(t[valid_v], v_kms[valid_v], '-', color='tab:green',
-                     linewidth=1.5, label='Shock speed')
-            ax2.set_ylabel('Shock speed (km/s)', color='tab:green')
-            ax2.tick_params(axis='y', labelcolor='tab:green')
-        if any_M:
-            ax2b = ax2.twinx()
-            ax2b.plot(t[valid_M], M[valid_M], '-', color='tab:purple',
-                      linewidth=1.5, alpha=0.8, label='Mach number')
-            ax2b.set_ylabel('Mach number', color='tab:purple')
-            ax2b.tick_params(axis='y', labelcolor='tab:purple')
-            if any_v:
-                lines1, labs1 = ax2.get_legend_handles_labels()
-                lines2, labs2 = ax2b.get_legend_handles_labels()
-                ax2.legend(lines1 + lines2, labs1 + labs2, loc='best')
-            else:
-                ax2b.legend(loc='best')
-        else:
-            if any_v:
-                ax2.legend(loc='best')
-        if not (any_v or any_M):
-            ax2.text(0.5, 0.5, 'No finite shock velocity or Mach data',
-                     transform=ax2.transAxes, ha='center', va='center',
-                     fontsize=11, color='gray')
-        ax2.grid(True, alpha=0.3)
-
-        # ---------- Panel 3: post-shock pressure and jump (Gbar) ----------
-        valid_Pp = np.isfinite(P_post)
-        valid_Pj = np.isfinite(P_jump)
-        if valid_Pp.any():
-            ax3.plot(t[valid_Pp], P_post[valid_Pp], '-', color='tab:red',
-                     linewidth=1.5, label='Post-shock pressure')
-        if valid_Pj.any():
-            ax3.plot(t[valid_Pj], P_jump[valid_Pj], '-', color='tab:orange',
-                     linewidth=1.5, alpha=0.8, label='Pressure jump (P_2 - P_1)')
-        if bt is not None and not (isinstance(bt, float) and np.isnan(bt)):
-            ax3.axvline(bt, color='tab:red', linestyle='--', alpha=0.4)
-        ax3.set_xlabel('Time (ns)')
-        ax3.set_ylabel('Pressure (Gbar)')
-        if valid_Pp.any() or valid_Pj.any():
-            ax3.legend(loc='best')
-        else:
-            ax3.text(0.5, 0.5, 'No finite shock-pressure data',
-                     transform=ax3.transAxes, ha='center', va='center',
-                     fontsize=11, color='gray')
-        ax3.grid(True, alpha=0.3)
-
-        plt.tight_layout()
         pdf.savefig(fig)
         plt.close(fig)

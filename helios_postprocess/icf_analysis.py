@@ -105,6 +105,18 @@ class ICFAnalyzer:
         self.data.t_peak_power_ns         = result['t_peak_power_ns']
         self.data.ncr_intensity           = result['ncr']
 
+        # For halfraum_capsule targets, "I at r_crit at peak laser power"
+        # is ambiguous: peak total power and r_crit can refer to different
+        # absorbing regions (e.g. Cu wall during P4 vs. CD shell during P5+).
+        # If the lookup yields a numerically tiny value (< 1 MW/cm^2) the
+        # diagnostic isn't physically meaningful in the way it is for a
+        # plain capsule -- replace with NaN so summary output doesn't
+        # print 1e-296-style underflow values.
+        if (getattr(self.data, 'target_class', 'capsule') == 'halfraum_capsule'
+                and _np.isfinite(self.data.I_at_crit_at_peak_power)
+                and self.data.I_at_crit_at_peak_power < 1.0e6):
+            self.data.I_at_crit_at_peak_power = _np.nan
+
         # Histories
         self.data.r_crit_intensity_history = result['r_crit']
         self.data.I_at_crit_history        = result['I_at_crit_vs_t']
@@ -138,8 +150,12 @@ class ICFAnalyzer:
                     f"{result['peak_I_grid_outer']:.3e} W/cm^2")
         logger.info(f"  Peak I at critical surface      : "
                     f"{result['peak_I_at_crit']:.3e} W/cm^2")
-        logger.info(f"  I at r_crit at peak laser power : "
-                    f"{result['I_at_crit_at_peak_power']:.3e} W/cm^2")
+        if _np.isnan(self.data.I_at_crit_at_peak_power):
+            logger.info(f"  I at r_crit at peak laser power : n/a  "
+                        f"(halfraum: peak total power not at capsule r_crit)")
+        else:
+            logger.info(f"  I at r_crit at peak laser power : "
+                        f"{self.data.I_at_crit_at_peak_power:.3e} W/cm^2")
 
     def analyze_drive_phase(self):
         """Analyze drive: laser energy, absorption."""
@@ -1170,8 +1186,21 @@ class ICFAnalyzer:
             logger.warning("Cannot find stagnation time: missing density data")
             return
 
-        # Peak density (may not coincide with stagnation for igniting targets)
-        peak_density_vs_time = np.max(self.data.mass_density, axis=1)
+        # Peak density (may not coincide with stagnation for igniting targets).
+        # For halfraum_capsule targets the peak-density search must be bounded
+        # at the capsule outer node — otherwise transient compression of the
+        # high-Z converter shell at simulation start (e.g. Cu at 8.93 g/cc
+        # compressing to >20 g/cc under the laser pulse hitting the wall) is
+        # picked up as "peak density" instead of the imploded fuel.
+        if (getattr(self.data, 'target_class', 'capsule') == 'halfraum_capsule'
+                and hasattr(self.data, 'capsule_outer_node')):
+            n_t = self.data.mass_density.shape[0]
+            peak_density_vs_time = np.zeros(n_t)
+            for t in range(n_t):
+                z_outer = self.data.capsule_outer_node(t)
+                peak_density_vs_time[t] = np.max(self.data.mass_density[t, :z_outer])
+        else:
+            peak_density_vs_time = np.max(self.data.mass_density, axis=1)
         peak_idx = np.argmax(peak_density_vs_time)
         self.data.max_density = peak_density_vs_time[peak_idx]
 
