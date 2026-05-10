@@ -236,7 +236,19 @@ def extract_histories_from_run_data(data) -> Dict:
     # ── Scalar implosion metrics from ICFAnalyzer ──
     peak_vimp_kms = abs(getattr(data, 'peak_implosion_velocity', 0.0))
     adiabat       = getattr(data, 'adiabat_mass_averaged_ice', 0.0)
-    ifar          = getattr(data, 'ifar', 0.0)
+# IFAR variants (May 2026 — multi-variant patch)
+    # - data.ifar          : compound shell at peak v_imp (legacy default)
+    # - data.ifar_ice      : DT ice only at peak v_imp
+    # - data.ifar_cr15     : compound shell at CR=1.5  (Thomas/Vulcan convention)
+    # - data.ifar_ice_cr15 : DT ice only at CR=1.5     (artifact — see _compute_ifar)
+    ifar_compound_pv = getattr(data, 'ifar', 0.0)
+    ifar_ice_pv      = getattr(data, 'ifar_ice', None)
+    ifar_cr15        = getattr(data, 'ifar_cr15', None)
+    ifar_ice_cr15    = getattr(data, 'ifar_ice_cr15', None)
+
+    # For published comparison: prefer compound at CR=1.5 (Thomas convention).
+    # Fall back to legacy peak-v compound for older runs without the variants.
+    ifar = ifar_cr15 if ifar_cr15 is not None else ifar_compound_pv
 
     # ── Derived implosion metrics ──
 
@@ -336,7 +348,11 @@ def extract_histories_from_run_data(data) -> Dict:
         # Implosion metrics
         'peak_velocity_kms':     peak_vimp_kms,
         'adiabat':               adiabat,
-        'ifar':                  ifar,
+        'ifar':                  ifar,                # comparison-ready (CR=1.5 if available)
+        'ifar_compound_peak_v':  ifar_compound_pv,    # legacy
+        'ifar_ice_peak_v':       ifar_ice_pv,         # diagnostic
+        'ifar_compound_cr15':    ifar_cr15,           # Thomas convention
+        'ifar_ice_cr15':         ifar_ice_cr15,       # artifact (see code comments)
         'fraction_absorbed_pct': fraction_absorbed,
         'P_hs_ignition_Gbar':    getattr(data, 'ignition_hs_pressure', 0.0),
         'hs_radius_ignition_um': getattr(data, 'ignition_hs_radius',   0.0) * 1e4,
@@ -542,7 +558,7 @@ def compare_with_published(sim_metrics: Dict,
          'fraction_absorbed_pct',     '.1f'),
         ('In-flight KE (kJ)',        sim_metrics.get('inflight_KE_kJ', 0.0),
          'inflight_KE_kJ',           '.1f'),
-        ('IFAR',                      sim_metrics.get('ifar', 0.0),
+        ('IFAR (CR=1.5)',             sim_metrics.get('ifar', 0.0),
          'ifar',                    '.1f'),
         ('Hydro efficiency (%)',     sim_metrics.get('hydro_efficiency_pct', 0.0),
          'hydro_efficiency_pct',     '.1f'),
