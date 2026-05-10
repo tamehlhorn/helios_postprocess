@@ -416,7 +416,10 @@ class HeliosRun:
                 print(f"✓ Opened {self.filepath.name}")
         except Exception as e:
             raise IOError(f"Failed to open ExodusII file: {e}")
-            
+
+        # Advisory: warn if co-located .rhw is newer than the .exo
+        self._check_rhw_freshness()
+
         # Load time array
         self._load_time_array()
         
@@ -474,7 +477,42 @@ class HeliosRun:
         except ImportError:
             if self.verbose:
                 print("⚠ Neutron DSR module not available")
-                
+
+    def _check_rhw_freshness(self) -> None:
+        """
+        Advisory: warn if a co-located .rhw is newer than the .exo.
+
+        Catches the common pitfall of editing the rhw without re-running
+        Helios. The post-processor reads the rhw for metadata (FL, EOS,
+        laser geometry, burn flag) while the .exo still reflects the old
+        physics — producing a misleading 'Frankenstein' summary where the
+        header shows new rhw values but every implosion number comes from
+        the stale .exo.
+
+        Looks for <exo_basename>.rhw alongside the .exo. Silently skips
+        if no rhw is present (this is the common case for many runs).
+        Never raises — freshness is advisory, not blocking.
+        """
+        try:
+            rhw_path = self.filepath.with_suffix('.rhw')
+            if not rhw_path.exists():
+                return
+            exo_mtime = self.filepath.stat().st_mtime
+            rhw_mtime = rhw_path.stat().st_mtime
+            if rhw_mtime > exo_mtime:
+                delta_min = (rhw_mtime - exo_mtime) / 60.0
+                warnings.warn(
+                    f"⚠ rhw is newer than exo by {delta_min:.1f} min — "
+                    f"Helios may need to be re-run on '{rhw_path.name}'. "
+                    f"Post-processor metadata (FL, EOS, burn flag) will "
+                    f"reflect the new rhw, but physics will be stale.",
+                    UserWarning,
+                    stacklevel=3,
+                )
+        except Exception:
+            # Freshness check is advisory; never raise on stat/path issues
+            pass
+
     def get_variable(
         self,
         var_name: str,
