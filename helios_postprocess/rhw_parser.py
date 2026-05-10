@@ -39,8 +39,9 @@ class RHWConfiguration:
     eos_models: list = None  # [{region, type, file}, ...]
     alpha_deposition_local: bool = False     # Use alpha deposition = 1
     alpha_deposition_nonlocal: bool = False  # Use non alpha deposition = 1
-    flux_limiter: float = 0.0                # Flux limiter mult. (from .rhw; 0 if off)
-    flux_limiter_enabled: bool = False       # Use flux limiter = 1
+    flux_limiter=flux_value,
+    flux_limiter_enabled=flux_enabled,
+    flux_limiter_per_region=flux_per_region if flux_per_region else None,
     drive_time: Optional[np.ndarray] = None
     drive_temperature: Optional[np.ndarray] = None
     drive_location: str = ""                  # "Rmin" or "Rmax"; empty if no radiation drive
@@ -90,6 +91,7 @@ class RHWParser:
         eos_models = self._parse_eos_models(lines)
         alpha_local, alpha_nonlocal = self._parse_alpha_transport(lines)
         flux_enabled, flux_value = self._parse_flux_limiter(lines)
+        flux_per_region = self._parse_flux_limiter_per_region(lines)
         
         # Extract drive temperature data (radiation source from [Rad Source Data] block)
         drive_time, drive_temp, drive_location, drive_flux_mult = \
@@ -238,6 +240,63 @@ class RHWParser:
                 'file': eos_file or ''
             })
         return models if models else None
+
+    def _parse_flux_limiter_per_region(self, lines: list) -> list:
+        """
+        Parse electron thermal flux limiter per spatial region.
+
+        Mirrors _parse_eos_models region-aware pattern. Each material's
+        flux-limiter pair sits inside its 'Parameters for Region =' block:
+
+            Parameters for Region = DT vapor
+              ...
+              Use flux limiter       = 1
+              Flux limiter mult.     = 0.06
+            Parameters for Region = CD shell
+              ...
+              Use flux limiter       = 1
+              Flux limiter mult.     = 0.02
+
+        Returns
+        -------
+        list of dict
+            One entry per region with 'region' (str), 'enabled' (bool),
+            'value' (float). Empty list if no flux-limiter blocks found.
+        """
+        out = []
+        current_region = None
+        cur_enabled = None
+        cur_value = None
+
+        def _flush():
+            nonlocal current_region, cur_enabled, cur_value
+            if current_region is not None and cur_value is not None:
+                out.append({
+                    'region': current_region,
+                    'enabled': bool(cur_enabled) if cur_enabled is not None else False,
+                    'value': float(cur_value),
+                })
+            cur_enabled = None
+            cur_value = None
+
+        for line in lines:
+            s = line.strip()
+            lstrip = s.lower()
+            if s.startswith('Parameters for Region ='):
+                _flush()
+                current_region = s.split('=', 1)[-1].strip()
+            elif lstrip.startswith('use flux limiter'):
+                try:
+                    cur_enabled = (int(s.split('=')[-1].strip()) == 1)
+                except (ValueError, IndexError):
+                    pass
+            elif lstrip.startswith('flux limiter mult'):
+                try:
+                    cur_value = float(s.split('=')[-1].strip())
+                except (ValueError, IndexError):
+                    pass
+        _flush()
+        return out
 
     def _parse_laser_geometry(self, lines: list) -> dict:
         """Parse beam-1 ray-trace parameters from [Laser Source Data] block."""

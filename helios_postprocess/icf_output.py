@@ -201,13 +201,33 @@ class ICFOutputGenerator:
             _a(self._metric('Half-cone angle',  d.laser_half_cone_angle_deg, 'deg', fmt='.2f'))
             _a(f"  {'Spot radius':<30} {d.laser_spot_size_cm:>15.4f} cm  ({d.laser_spatial_profile})")
             _a(self._metric('Power multiplier', d.laser_power_multiplier,    '',    fmt='.4f'))
-            # Flux limiter: bypass _metric (0.06 is a valid value; _metric renders 0.0 as '—')
-            if getattr(d, 'flux_limiter_enabled', False):
-                _a(f"  {'Flux limiter (f)':<36s} {d.flux_limiter:>10.3f}")
-            elif getattr(d, 'flux_limiter', 0.0) > 0:
-                _a(f"  {'Flux limiter (f)':<36s} {d.flux_limiter:>10.3f}  (flag off)")
+            # Flux limiter: per-region when varying, single-line when uniform
+            fl_per = getattr(d, 'flux_limiter_per_region', None)
+            if fl_per:
+                values = [r['value'] for r in fl_per]
+                uniform = all(abs(v - values[0]) < 1e-9 for v in values)
+                if uniform:
+                    v = values[0]
+                    any_enabled = any(r['enabled'] for r in fl_per)
+                    if any_enabled:
+                        _a(f"  {'Flux limiter (f)':<36s} {v:>10.3f}")
+                    elif v > 0:
+                        _a(f"  {'Flux limiter (f)':<36s} {v:>10.3f}  (flag off)")
+                    else:
+                        _a(f"  {'Flux limiter (f)':<36s} {'(not set)':>10s}")
+                else:
+                    _a(f"  {'Flux limiter (f) per region:':<36s}")
+                    for r in fl_per:
+                        tag = '' if r['enabled'] else '  (flag off)'
+                        _a(f"    {r['region']:<28s} {r['value']:>10.3f}{tag}")
             else:
-                _a(f"  {'Flux limiter (f)':<36s} {'(not set)':>10s}")
+                # Backward fallback for older summaries without per-region parsing
+                if getattr(d, 'flux_limiter_enabled', False):
+                    _a(f"  {'Flux limiter (f)':<36s} {d.flux_limiter:>10.3f}")
+                elif getattr(d, 'flux_limiter', 0.0) > 0:
+                    _a(f"  {'Flux limiter (f)':<36s} {d.flux_limiter:>10.3f}  (flag off)")
+                else:
+                    _a(f"  {'Flux limiter (f)':<36s} {'(not set)':>10s}")
             # Pulse shape — beam 1 only, populated from RHW
             beam_label = 'Pulse shape (beam 1)' if n_beams > 1 else 'Pulse shape'
             if d.laser_peak_power_TW > 0:
