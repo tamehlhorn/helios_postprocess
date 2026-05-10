@@ -39,9 +39,9 @@ class RHWConfiguration:
     eos_models: list = None  # [{region, type, file}, ...]
     alpha_deposition_local: bool = False     # Use alpha deposition = 1
     alpha_deposition_nonlocal: bool = False  # Use non alpha deposition = 1
-    flux_limiter=flux_value,
-    flux_limiter_enabled=flux_enabled,
-    flux_limiter_per_region=flux_per_region if flux_per_region else None,
+    flux_limiter: float = 0.0                # First-region value (legacy; backward compat)
+    flux_limiter_enabled: bool = False       # True if ANY region has flux limiter enabled
+    flux_limiter_per_region: list = None     # [{region, enabled, value}, ...] or None
     drive_time: Optional[np.ndarray] = None
     drive_temperature: Optional[np.ndarray] = None
     drive_location: str = ""                  # "Rmin" or "Rmax"; empty if no radiation drive
@@ -123,6 +123,7 @@ class RHWParser:
             alpha_deposition_nonlocal=alpha_nonlocal,
             flux_limiter=flux_value,
             flux_limiter_enabled=flux_enabled,
+            flux_limiter_per_region=flux_per_region if flux_per_region else None,
         )
         
         logger.info(f"Configuration: {config.drive_type}, "
