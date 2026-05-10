@@ -962,28 +962,140 @@ class ICFAnalyzer:
                 self.data.P_abl_peak_Gbar = 0.0
                 logger.warning("Ablation pressure history is all zero")
 
+# ------------------------------------------------------------------
+    # IFAR helpers (May 2026 — multiple variants for cross-code comparison)
+    # ------------------------------------------------------------------
+
+    def _detect_ice_zones(self):
+        """
+        Return (z_lo, z_hi) of DT ice zones, or None if no ice region.
+
+        Detects 'ice' or 'solid' (case-insensitive) in region_names.
+        Works for 4-region HDD targets (Gas / DT ice / Foam / CD) and
+        Olson PDD (DT Vapor / DT Solid / DT-CH foam / CH skin). Returns
+        None for 3-region targets without an ice layer.
+
+        Zone span uses initial-time region_interfaces_indices (Lagrangian,
+        so static across timesteps).
+        """
+        names = getattr(self.data, 'region_names', None)
+        ri = self.data.region_interfaces_indices
+        if not names or ri is None:
+            return None
+
+        for k, name in enumerate(names):
+            nm = name.lower()
+            if 'ice' in nm or 'solid' in nm:
+                z_lo = int(ri[0, k - 1]) if k > 0 else 0
+                z_hi = int(ri[0, k])
+                if z_hi > z_lo:
+                    return (z_lo, z_hi)
+        return None
+
+    def _find_cr_index(self, cr_target: float = 1.5):
+        """
+        First pre-stagnation timestep where shell convergence reaches cr_target.
+
+        CR(t) = R_inner(t=0) / R_inner(t), measured on the innermost
+        fuel boundary (ri[:, 0]). Returns None if cr_target is never
+        reached pre-stagnation.
+        """
+        ri = self.data.region_interfaces_indices
+        zbnd = self.data.zone_boundaries
+        if ri is None or zbnd is None:
+            return None
+
+        n_t = zbnd.shape[0]
+        R_inner = np.zeros(n_t)
+        for t in range(n_t):
+            z = int(ri[t, 0])
+            if 0 <= z < zbnd.shape[1]:
+                R_inner[t] = zbnd[t, z]
+
+        R_init = R_inner[0]
+        if R_init <= 0:
+            return None
+
+        with np.errstate(divide='ignore', invalid='ignore'):
+            cr = np.where(R_inner > 0, R_init / R_inner, 0.0)
+
+        stag_t = self.data.stag_time if self.data.stag_time > 0 else self.data.time[-1]
+        pre_stag = self.data.time < stag_t
+        crossings = np.where((cr >= cr_target) & pre_stag)[0]
+        if len(crossings) == 0:
+            return None
+        return int(crossings[0])
+
+    def _ifar_over_range(self, t_idx: int, z_lo: int, z_hi: int,
+                         label: str = ""):
+        """
+        Density-threshold IFAR over a zone range at a single timestep.
+
+        Uses the standard rho > rho_peak/e threshold. Logs at INFO.
+        Returns (ifar, R_shell_um, dR_um, rho_peak_g_cc) or None on failure.
+        """
+        rho = self.data.mass_density
+        zbnd = self.data.zone_boundaries
+        if rho is None or zbnd is None or z_hi <= z_lo:
+            return None
+
+        rho_shell = rho[t_idx, z_lo:z_hi]
+        if rho_shell.size == 0:
+            return None
+        rho_peak = float(np.max(rho_shell))
+        if rho_peak <= 0:
+            return None
+
+        threshold = rho_peak / np.e
+        above = rho_shell > threshold
+        if not np.any(above):
+            return None
+
+        idx_inner = int(np.argmax(above))
+        idx_outer = len(above) - 1 - int(np.argmax(above[::-1]))
+        z_inner = z_lo + idx_inner
+        z_outer = z_lo + idx_outer
+
+        R_inner = float(zbnd[t_idx, z_inner])
+        R_outer = float(zbnd[t_idx, z_outer + 1])
+        if R_outer <= R_inner or R_inner <= 0:
+            return None
+
+        delta_R = R_outer - R_inner
+        R_shell = 0.5 * (R_inner + R_outer)
+        ifar = R_shell / delta_R
+
+        logger.info(f"IFAR [{label}]: {ifar:.1f}  "
+                    f"(t={self.data.time[t_idx]:.2f} ns, "
+                    f"R_shell={R_shell*1e4:.1f} um, dR={delta_R*1e4:.1f} um, "
+                    f"rho_peak={rho_peak:.2f} g/cc, zones {z_inner}-{z_outer})")
+        return (ifar, R_shell * 1e4, delta_R * 1e4, rho_peak)
+
     def _compute_ifar(self):
         """
-        Compute In-Flight Aspect Ratio (IFAR) at peak implosion velocity.
+        Compute IFAR variants for cross-code comparison.
 
-        IFAR = R_shell / Delta_R
+        Variants stored on self.data:
+            ifar           — compound shell at peak v_imp (legacy default)
+            ifar_ice       — DT ice only at peak v_imp
+            ifar_cr15      — compound shell at CR=1.5  (Lindl convention)
+            ifar_ice_cr15  — DT ice only at CR=1.5    (Thomas/Vulcan convention)
 
-        The shell boundaries are determined from the density profile at peak
-        implosion velocity using a density threshold (rho > rho_peak / e).
-        This correctly identifies the actual dense shell, excluding any
-        uncompressed vapor inside the Lagrangian region interface.
-
-        R_inner = inner boundary of dense shell (first zone above threshold)
-        R_outer = outer boundary of dense shell (last zone above threshold)
-        Delta_R = R_outer - R_inner
-        R_shell = (R_inner + R_outer) / 2
-
-        Requires _track_ablation_front() to have been called first.
+        Density threshold (rho > rho_peak/e) used in all variants.
+        CR=1.5 is measured on ri[:, 0] (innermost fuel boundary).
+        Ice-only variants are None for 3-region targets without an ice
+        layer (e.g. CA1x). Backward compatible: data.ifar unchanged.
         """
         ri = self.data.region_interfaces_indices
         vel = self.data.velocity
         zbnd = self.data.zone_boundaries
         rho = self.data.mass_density
+
+        # Initialise all variants for backward-safe access
+        self.data.ifar = 0.0
+        self.data.ifar_ice = None
+        self.data.ifar_cr15 = None
+        self.data.ifar_ice_cr15 = None
 
         if ri is None or vel is None or zbnd is None or rho is None:
             logger.warning("Cannot compute IFAR: missing required data")
@@ -992,13 +1104,12 @@ class ICFAnalyzer:
         try:
             n_zones = rho.shape[1]
 
-            # Zone-center velocities
+            # ---- Peak velocity timestep (pre-stagnation, fuel region) ----
             if vel.shape[1] > n_zones:
                 v_zone = 0.5 * (vel[:, :n_zones] + vel[:, 1:n_zones+1])
             else:
                 v_zone = vel[:, :n_zones]
 
-            # Find peak inward velocity in fuel region (pre-stagnation)
             if ri.shape[1] >= 2:
                 fuel_start = int(ri[0, 0])
                 fuel_end = int(ri[0, getattr(self.data, 'fuel_ablator_idx', -2)])
@@ -1014,67 +1125,55 @@ class ICFAnalyzer:
             if np.any(pre_stag):
                 masked_v = min_v_per_time.copy()
                 masked_v[~pre_stag] = 0.0
-                t_pv = np.argmin(masked_v)
+                t_pv = int(np.argmin(masked_v))
             else:
-                t_pv = np.argmin(min_v_per_time)
+                t_pv = int(np.argmin(min_v_per_time))
 
-            # --- Density-based shell identification ---
-            # Search within fuel + ablated region.  For halfraum_capsule
-            # targets, fuel_ablator_idx points to the foam/CD interface,
-            # NOT the He/Cu boundary -- so the search correctly stops at
-            # the inside of the ablator instead of crossing the He gap.
-            z_lo = int(ri[t_pv, 0])    # inner fuel boundary (Lagrangian)
-            z_hi = int(ri[t_pv, getattr(self.data, 'fuel_ablator_idx', -2)])
-            if z_hi <= z_lo:
-                z_hi = self.data.capsule_outer_node(t_pv) if hasattr(self.data, 'capsule_outer_node') else n_zones
+            # Compound shell zone range at peak v
+            z_lo_pv = int(ri[t_pv, 0])
+            z_hi_pv = int(ri[t_pv, getattr(self.data, 'fuel_ablator_idx', -2)])
+            if z_hi_pv <= z_lo_pv:
+                z_hi_pv = self.data.capsule_outer_node(t_pv) \
+                    if hasattr(self.data, 'capsule_outer_node') else n_zones
 
-            rho_shell = rho[t_pv, z_lo:z_hi]
-            rho_peak = np.max(rho_shell)
+            # ---- Variant 1: compound at peak v (legacy) ----
+            r = self._ifar_over_range(t_pv, z_lo_pv, z_hi_pv, label="compound, peak v")
+            if r is not None:
+                self.data.ifar = r[0]
 
-            if rho_peak <= 0:
-                logger.warning("IFAR: no density peak found in fuel region")
+            # ---- Variant 2: ice-only at peak v ----
+            ice_zones = self._detect_ice_zones()
+            if ice_zones is not None:
+                r = self._ifar_over_range(t_pv, ice_zones[0], ice_zones[1],
+                                          label="ice only, peak v")
+                if r is not None:
+                    self.data.ifar_ice = r[0]
+
+            # ---- Variants 3 & 4: at CR=1.5 ----
+            t_cr15 = self._find_cr_index(cr_target=1.5)
+            if t_cr15 is None:
+                logger.info("IFAR: CR=1.5 not reached pre-stagnation — "
+                            "skipping CR=1.5 variants")
                 return
 
-            # Threshold: rho_peak / e
-            threshold = rho_peak / np.e
+            z_lo_c = int(ri[t_cr15, 0])
+            z_hi_c = int(ri[t_cr15, getattr(self.data, 'fuel_ablator_idx', -2)])
+            if z_hi_c <= z_lo_c:
+                z_hi_c = self.data.capsule_outer_node(t_cr15) \
+                    if hasattr(self.data, 'capsule_outer_node') else n_zones
 
-            # Find contiguous dense shell above threshold
-            above = rho_shell > threshold
-            if not np.any(above):
-                logger.warning("IFAR: no zones above density threshold")
-                return
+            r = self._ifar_over_range(t_cr15, z_lo_c, z_hi_c, label="compound, CR=1.5")
+            if r is not None:
+                self.data.ifar_cr15 = r[0]
 
-            # Inner edge: first zone above threshold (relative to z_lo)
-            idx_inner = np.argmax(above)           # first True
-            # Outer edge: last zone above threshold
-            idx_outer = len(above) - 1 - np.argmax(above[::-1])  # last True
-
-            # Convert to absolute zone indices
-            z_inner = z_lo + idx_inner
-            z_outer = z_lo + idx_outer
-
-            # Shell radii from zone boundaries (node-centered)
-            R_inner = zbnd[t_pv, z_inner]          # inner boundary of first dense zone
-            R_outer = zbnd[t_pv, z_outer + 1]      # outer boundary of last dense zone
-
-            if R_outer <= R_inner or R_inner <= 0:
-                logger.warning(f"IFAR: invalid shell boundaries "
-                             f"(R_inner={R_inner:.5f}, R_outer={R_outer:.5f} cm)")
-                return
-
-            delta_R = R_outer - R_inner
-            R_shell = 0.5 * (R_inner + R_outer)
-
-            self.data.ifar = R_shell / delta_R
-            logger.info(f"IFAR at peak v_imp (t={self.data.time[t_pv]:.2f} ns): "
-                        f"{self.data.ifar:.1f}  "
-                        f"(R_shell={R_shell*1e4:.1f} um, dR={delta_R*1e4:.1f} um, "
-                        f"rho_peak={rho_peak:.2f} g/cc, threshold={threshold:.2f} g/cc, "
-                        f"zones {z_inner}-{z_outer})")
+            if ice_zones is not None:
+                r = self._ifar_over_range(t_cr15, ice_zones[0], ice_zones[1],
+                                          label="ice only, CR=1.5")
+                if r is not None:
+                    self.data.ifar_ice_cr15 = r[0]
 
         except Exception as e:
             logger.warning(f"Could not compute IFAR: {e}")
-            self.data.ifar = 0.0
 
     def _smooth_ablation_front(self, radii: np.ndarray, iterations: int = 10) -> np.ndarray:
         """
