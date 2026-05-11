@@ -101,16 +101,19 @@ def compute_energy_ledger(data) -> dict:
     ke_inward  = np.where(inward,  ke_per_zone, 0.0).sum(axis=1) * 1e-7   # erg -> J
     ke_outward = np.where(outward, ke_per_zone, 0.0).sum(axis=1) * 1e-7
 
-    # Plasma thermal (ideal gas): U = (3/2)(P_i + P_e) V  [erg] -> J
-    u_plasma = ((3.0 / 2.0) * (P_i + P_e) * V_zone).sum(axis=1) * 1e-7
+    # Plasma thermal (ideal gas): U = (3/2)(P_i + P_e) V  
+    # Helios pressures are J/cm³, volumes cm³ → product is J directly.
+    u_plasma = ((3.0 / 2.0) * (P_i + P_e) * V_zone).sum(axis=1)
 
     # Radiation: U_rad = 3 P_rad V (P_rad = a T^4 / 3, so u_rad = a T^4 = 3 P_rad)
-    P_rad = getattr(data, 'rad_pressure', None)
+    # Pure radiation pressure (data.rad_pressure is the 3-component
+    # elec+rad sum; we need rad alone for u_rad = 3 P_rad V).
+    P_rad = getattr(data, 'rad_pressure_true', None)
     if P_rad is not None and not np.all(P_rad == 0):
-        u_rad = (3.0 * P_rad * V_zone).sum(axis=1) * 1e-7
+        u_rad = (3.0 * P_rad * V_zone).sum(axis=1)
     else:
         u_rad = np.zeros(n_t)
-        logger.info("  rad_pressure missing or all-zero — U_rad set to 0")
+        logger.info("  rad_pressure_true missing or all-zero — U_rad set to 0")
 
     # Cumulative absorbed laser energy (already in J per data_builder convention)
     led = data.laser_energy_deposited
@@ -139,8 +142,10 @@ def compute_energy_ledger(data) -> dict:
         u_rad=u_rad,
         e_absorbed=e_absorbed,
         e_fusion_cum=e_fusion_cum,
-        sum_channels=sum_channels,
-        gap=gap,
+        # Closure: E_absorbed + E_fusion (sources) = Σ channels + radiation losses (out).
+    # Gap is what crossed the outer boundary as radiation.
+        sum_channels = ke_inward + ke_outward + u_plasma + u_rad
+        gap = e_absorbed + e_fusion_cum - sum_channels
     )
 
 
