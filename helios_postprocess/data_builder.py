@@ -88,6 +88,7 @@ class ICFRunData:
         self.alpha_heating_ion: Optional[np.ndarray] = None       # (n_times, n_zones) particle → ion
         self.alpha_heating_ele: Optional[np.ndarray] = None       # (n_times, n_zones) particle → elec
         self.laser_wavelength_um: float = 0.0
+        self.laser_geometry_per_beam: Optional[list] = None
         self.laser_spot_size_cm: float = 0.0
         self.laser_half_cone_angle_deg: float = 0.0
         self.laser_focus_position_cm: float = 0.0
@@ -388,6 +389,7 @@ def build_run_data(
     data.rhw_config = rhw_config
     if rhw_config is not None:
         data.laser_wavelength_um       = rhw_config.laser_wavelength_um
+        data.laser_geometry_per_beam   = getattr(rhw_config, 'laser_geometry_per_beam', None)
         data.laser_spot_size_cm        = rhw_config.laser_spot_size_cm
         data.laser_half_cone_angle_deg = rhw_config.laser_half_cone_angle_deg
         data.laser_focus_position_cm   = rhw_config.laser_focus_position_cm

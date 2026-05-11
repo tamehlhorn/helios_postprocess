@@ -230,6 +230,23 @@ class ICFOutputGenerator:
                     _a(f"  {'Flux limiter (f)':<36s} {'(not set)':>10s}")
             # Pulse shape — beam 1 only, populated from RHW
             beam_label = 'Pulse shape (beam 1)' if n_beams > 1 else 'Pulse shape'
+            # ── Ray-trace geometry per beam ──
+            geom_per_beam = getattr(d, 'laser_geometry_per_beam', None)
+            if geom_per_beam and len(geom_per_beam) > 0:
+                _a('')
+                _a('RAY-TRACE GEOMETRY (per beam)')
+                _a('-' * width)
+                _a(f"  {'beam':>4s}  {'focus (cm)':>11s}  {'cone (deg)':>11s}  "
+                   f"{'spot (cm)':>11s}  {'profile':<10s}  {'P mult':>8s}")
+                for b in geom_per_beam:
+                    bid = b.get('beam_id', '?')
+                    f = b.get('focus_position', float('nan'))
+                    c = b.get('half_cone_angle', float('nan'))
+                    s = b.get('spot_size', float('nan'))
+                    p = b.get('spatial_profile', '—')
+                    pm = b.get('power_multiplier', float('nan'))
+                    _a(f"  {bid!s:>4s}  {f:>11.4f}  {c:>11.2f}  "
+                       f"{s:>11.4f}  {p:<10s}  {pm:>8.4f}")
             if d.laser_peak_power_TW > 0:
                 _a(f"  {beam_label:<30}")
                 if d.laser_foot_power_TW > 0:

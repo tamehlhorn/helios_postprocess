@@ -36,6 +36,7 @@ class RHWConfiguration:
     laser_peak_start_ns: float = 0.0
     laser_peak_end_ns: float = 0.0
     laser_pulse_duration_ns: float = 0.0
+    laser_geometry_per_beam: list = None      # [{beam_id, wavelength, spot_size, ...}, ...]
     eos_models: list = None  # [{region, type, file}, ...]
     alpha_deposition_local: bool = False     # Use alpha deposition = 1
     alpha_deposition_nonlocal: bool = False  # Use non alpha deposition = 1
@@ -88,6 +89,7 @@ class RHWParser:
         is_direct_drive = self._parse_direct_drive(lines)
         burn_enabled = self._parse_burn_status(lines)
         laser_params = self._parse_laser_geometry(lines)
+        laser_geometry_per_beam = self._parse_laser_geometry_per_beam(lines)
         eos_models = self._parse_eos_models(lines)
         alpha_local, alpha_nonlocal = self._parse_alpha_transport(lines)
         flux_enabled, flux_value = self._parse_flux_limiter(lines)
@@ -118,7 +120,7 @@ class RHWParser:
             laser_peak_start_ns=laser_params.get("peak_start_ns", 0.0),
             laser_peak_end_ns=laser_params.get("peak_end_ns", 0.0),
             laser_pulse_duration_ns=laser_params.get("pulse_duration_ns", 0.0),
-            eos_models=eos_models,
+            laser_geometry_per_beam=laser_geometry_per_beam if laser_geometry_per_beam else None,
             alpha_deposition_local=alpha_local,
             alpha_deposition_nonlocal=alpha_nonlocal,
             flux_limiter=flux_value,
@@ -415,6 +417,81 @@ class RHWParser:
                 params['peak_end_ns']   = float(peak_times[-1])
 
         return params
+    
+    def _parse_laser_geometry_per_beam(self, lines: list) -> list:
+        """
+        Parse ray-trace geometry for all beams in [Laser Source Data].
+
+        Mirrors _parse_laser_geometry but loops over every 'Parameters
+        for beam = N' block instead of stopping at beam 1. Returns
+        geometry only (not the per-beam pulse table — that data comes
+        from EXODUS via laser_power_delivered/on_target).
+
+        Returns
+        -------
+        list of dict
+            One entry per beam, in beam-number order. Each dict has:
+            'beam_id' (int), 'wavelength' (um), 'spot_size' (cm),
+            'half_cone_angle' (deg), 'focus_position' (cm),
+            'power_multiplier' (float), 'spatial_profile' (str).
+            Empty list if no laser block is found.
+        """
+        import re
+        kv = re.compile(r'^\s*(.+?)\s*=\s*([^\s#]+)')
+        beams = []
+        current = None
+        current_id = None
+
+        def _flush():
+            nonlocal current, current_id
+            if current is not None and current_id is not None:
+                current['beam_id'] = current_id
+                beams.append(current)
+            current = None
+            current_id = None
+
+        in_laser = False
+        for line in lines:
+            if '[Laser Source Data]' in line:
+                in_laser = True
+                continue
+            if '[End Laser Source Data]' in line:
+                _flush()
+                break
+            if not in_laser:
+                continue
+            m = kv.match(line)
+            if m and 'Parameters for beam' in m.group(1):
+                _flush()
+                try:
+                    current_id = int(m.group(2).strip())
+                    current = {}
+                except ValueError:
+                    current_id = None
+                    current = None
+                continue
+            if current is None or not m:
+                continue
+            key, val = m.group(1).strip(), m.group(2).strip()
+            try:
+                fval = float(val)
+            except ValueError:
+                continue
+            lkey = key.lower()
+            if 'wavelength' in lkey:
+                current['wavelength'] = fval
+            elif 'spot size' in lkey:
+                current['spot_size'] = fval
+            elif 'half cone' in lkey:
+                current['half_cone_angle'] = fval
+            elif 'focus position' in lkey:
+                current['focus_position'] = fval
+            elif 'power table multiplier' in lkey:
+                current['power_multiplier'] = fval
+            elif 'spatial profile model' in lkey:
+                current['spatial_profile'] = 'Gaussian' if fval == 1.0 else 'Uniform'
+        _flush()
+        return beams
     
     def _parse_direct_drive(self, lines: list) -> bool:
         """
