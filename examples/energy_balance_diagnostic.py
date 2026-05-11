@@ -131,8 +131,9 @@ def compute_energy_ledger(data) -> dict:
     else:
         e_fusion_cum = np.zeros(n_t)
 
+    # Gap is what crossed the outer boundary as radiation.
     sum_channels = ke_inward + ke_outward + u_plasma + u_rad
-    gap = e_absorbed - sum_channels
+    gap = e_absorbed + e_fusion_cum - sum_channels
 
     return dict(
         time=t_ns,
@@ -142,10 +143,8 @@ def compute_energy_ledger(data) -> dict:
         u_rad=u_rad,
         e_absorbed=e_absorbed,
         e_fusion_cum=e_fusion_cum,
-        # Closure: E_absorbed + E_fusion (sources) = Σ channels + radiation losses (out).
-    # Gap is what crossed the outer boundary as radiation.
-        sum_channels = ke_inward + ke_outward + u_plasma + u_rad
-        gap = e_absorbed + e_fusion_cum - sum_channels
+        sum_channels=sum_channels,
+        gap=gap,
     )
 
 
