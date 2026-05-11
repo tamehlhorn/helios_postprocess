@@ -56,7 +56,7 @@ import matplotlib.pyplot as plt
 from matplotlib.backends.backend_pdf import PdfPages
 
 from helios_postprocess import HeliosRun
-from helios_postprocess.data_builder import ICFRunBuilder
+from helios_postprocess.data_builder import build_run_data
 
 logger = logging.getLogger("energy_balance")
 logging.basicConfig(level=logging.INFO,
@@ -275,8 +275,7 @@ def load_run(base_path: str):
         except Exception as e:
             logger.warning(f"  Could not parse rhw: {e}")
 
-    builder = ICFRunBuilder()
-    data = builder.build(run, rhw_config=rhw_config)
+    data = build_run_data(run, time_unit='s', rhw_config=rhw_config, verbose=False)
     return data
 
 
