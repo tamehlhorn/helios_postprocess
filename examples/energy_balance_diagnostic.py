@@ -64,6 +64,9 @@ logging.basicConfig(level=logging.INFO,
 
 # DT fusion reaction energy
 Q_DT_J = 17.6e6 * 1.602e-19   # 17.6 MeV per reaction in J  (~2.82e-12)
+# Q_DT split: 3.5 MeV alpha (deposited) + 14.1 MeV neutron (escapes 1D target)
+Q_ALPHA_FRAC   = 3.5 / 17.6   # ~0.199
+Q_NEUTRON_FRAC = 14.1 / 17.6  # ~0.801
 
 
 # ── Energy ledger ────────────────────────────────────────────────────────
@@ -133,7 +136,15 @@ def compute_energy_ledger(data) -> dict:
 
     # Gap is what crossed the outer boundary as radiation.
     sum_channels = ke_inward + ke_outward + u_plasma + u_rad
-    gap = e_absorbed + e_fusion_cum - sum_channels
+    gap = e_absorbed +
+    e_fusion_cum - sum_channels
+    e_alpha    = e_fusion_cum * Q_ALPHA_FRAC
+    e_neutron  = e_fusion_cum * Q_NEUTRON_FRAC
+
+    # Closure: absorbed + alpha-deposited = Σ channels + rad escape
+    # Neutrons escape entirely — track separately.
+    sum_channels = ke_inward + ke_outward + u_plasma + u_rad
+    gap_rad      = (e_absorbed + e_alpha) - sum_channels  # actual rad through boundary
 
     return dict(
         time=t_ns,
