@@ -110,6 +110,10 @@ class ICFRunData:
         self.dt_neutron_count: Optional[np.ndarray] = None        # time-integrated DT neutron yield
         self.dd_neutron_count: Optional[np.ndarray] = None        # time-integrated DD neutron yield
         self.dt_neutron_count_zone: Optional[np.ndarray] = None   # (n_times, n_zones) zone-resolved
+        # Boundary-tally cumulative quantities — direct EXODUS measurements
+        # used for energy-balance closure (replace inferred fractions).
+        self.radiation_energy_at_boundary_cum: Optional[np.ndarray] = None  # (n_times,) J  cumulative rad through grid boundaries
+        self.particle_energy_escaped_cum: Optional[np.ndarray] = None       # (n_times,) J  cumulative particle (neutron+) escape
         self.scale_length: Optional[np.ndarray] = None            # (n_times, n_zones) cm — derived
         self.region_interfaces_indices: Optional[np.ndarray] = None  # (n_times, n_regions)
         self.material_index: Optional[np.ndarray] = None          # (n_zones,) material ID per zone
@@ -317,6 +321,11 @@ _VARIABLE_MAP = [
     ("dd_neutron_count",      ["TimeIntFusProd_n_0245",
                                "dd_neutron_count"],                               False),
     ("dt_neutron_count_zone", ["TimeIntFusionProd_n_1406_zone"],                  False),
+    # Boundary-tally cumulative quantities (J, direct measurements)
+    ("radiation_energy_at_boundary_cum",
+                              ["TimeIntRadiationLossAtBds"],                       False),
+    ("particle_energy_escaped_cum",
+                              ["particle_time_int_energy_escaped"],                False),
 ]
 
 

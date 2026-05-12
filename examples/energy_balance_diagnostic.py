@@ -128,20 +128,39 @@ def compute_energy_ledger(data) -> dict:
     e_absorbed = e_absorbed.astype(float)
 
     # Cumulative fusion energy released: DT neutron count × 17.6 MeV
+    # Cumulative fusion energy released: DT neutron count × 17.6 MeV
     ndt = getattr(data, 'dt_neutron_count', None)
     if ndt is not None:
         e_fusion_cum = np.asarray(ndt, dtype=float) * Q_DT_J
     else:
         e_fusion_cum = np.zeros(n_t)
 
-    # Closure: E_absorbed + E_alpha (sources that stay in plasma)
-    #          = Σ channels + radiation losses out the boundary.
-    # Neutrons (E_neutron) escape entirely — tracked separately.
-    e_alpha    = e_fusion_cum * Q_ALPHA_FRAC
-    e_neutron  = e_fusion_cum * Q_NEUTRON_FRAC
+    # Direct boundary tallies — preferred over inferred fractions when present.
+    rad_b = getattr(data, 'radiation_energy_at_boundary_cum', None)
+    e_rad_boundary = (np.asarray(rad_b, dtype=float)
+                      if rad_b is not None else np.zeros(n_t))
 
+    part_esc = getattr(data, 'particle_energy_escaped_cum', None)
+    e_particle_esc = (np.asarray(part_esc, dtype=float)
+                      if part_esc is not None else np.zeros(n_t))
+
+    # Use direct particle-escape measurement when nonzero; otherwise fall
+    # back to nominal DT 3.5/14.1 MeV split.
+    if e_particle_esc.max() > 1.0:
+        e_neutron = e_particle_esc
+        e_alpha   = e_fusion_cum - e_neutron
+    else:
+        e_alpha   = e_fusion_cum * Q_ALPHA_FRAC
+        e_neutron = e_fusion_cum * Q_NEUTRON_FRAC
+
+    # Closure with direct tallies:
+    #   E_absorbed + E_alpha_deposited (sources kept in plasma)
+    #     = Σ in-plasma channels + E_rad_boundary (escape) + residual_gap
+    # residual_gap ≈ 0 means the ledger is closed by the measured tallies;
+    # non-zero residual indicates a still-untracked channel or a model error
+    # (e.g. ideal-gas U_plasma missing EOS-internal energy).
     sum_channels = ke_inward + ke_outward + u_plasma + u_rad
-    gap = (e_absorbed + e_alpha) - sum_channels
+    residual_gap = (e_absorbed + e_alpha) - sum_channels - e_rad_boundary
 
     # Closure: absorbed + alpha-deposited = Σ channels + rad escape
     # Neutrons escape entirely — track separately.
@@ -156,8 +175,12 @@ def compute_energy_ledger(data) -> dict:
         u_rad=u_rad,
         e_absorbed=e_absorbed,
         e_fusion_cum=e_fusion_cum,
+        e_alpha=e_alpha,
+        e_neutron=e_neutron,
+        e_rad_boundary=e_rad_boundary,
         sum_channels=sum_channels,
-        gap=gap,
+        residual_gap=residual_gap,
+        gap=residual_gap,   # legacy alias so existing print/plot code still works
     )
 
 
@@ -174,6 +197,9 @@ def snapshot(ledger: dict, t_target_ns: float) -> dict:
         'u_rad':         float(ledger['u_rad'][idx]),
         'e_fusion':      float(ledger['e_fusion_cum'][idx]),
         'sum_channels':  float(ledger['sum_channels'][idx]),
+        'e_alpha':        float(ledger['e_alpha'][idx]),
+        'e_neutron':      float(ledger['e_neutron'][idx]),
+        'e_rad_boundary': float(ledger['e_rad_boundary'][idx]),
         'gap':           float(ledger['gap'][idx]),
     }
 
@@ -268,6 +294,13 @@ def print_side_by_side(snap1: dict, snap2: dict,
     row('Plasma thermal',     snap1['u_plasma'],    snap2['u_plasma'])
     row('Radiation',          snap1['u_rad'],       snap2['u_rad'])
     row('Fusion released',    snap1['e_fusion'],    snap2['e_fusion'])
+    row('  ↳ Alpha (deposited)', snap1['e_alpha'],    snap2['e_alpha'])
+    row('  ↳ Neutron (escaped)', snap1['e_neutron'],  snap2['e_neutron'])
+    row('Rad escape (boundary tally)',
+                              snap1['e_rad_boundary'], snap2['e_rad_boundary'])
+    print(f"  {'-' * 81}")
+    row('Σ channels (in-plasma)', snap1['sum_channels'], snap2['sum_channels'])
+    row('Residual gap (closure)', snap1['gap'],      snap2['gap'])
     print(f"  {'-' * 81}")
     row('Σ channels',         snap1['sum_channels'], snap2['sum_channels'])
     row('Gap (rad escape, etc)', snap1['gap'],      snap2['gap'])

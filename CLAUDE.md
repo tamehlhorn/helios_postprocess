@@ -1816,3 +1816,39 @@ Old convention for standard 3- and 4-region capsules unchanged.
 | `helios_postprocess/icf_output.py` | Radiation drive + total drive energy lines; first-shock summary block; per-beam pulse summary block |
 | `helios_postprocess/icf_plotting.py` | First-shock 3-panel PDF page; per-beam laser power overlay |
 | Project knowledge (this document) | Halfraum target architecture, P1–P7 pulse table, halfraum coupling diagnosis path, postprocessor halfraum convention table |
+
+## Boundary-tally and global cumulative quantities
+
+These are scalar-per-timestep `(n_times,)` quantities that measure energy
+**leaving the grid** or **summed over the whole grid**. They're the
+right-hand-side terms in the global energy-balance closure equation
+and are preferred over inferred fractions when computing residuals.
+
+### Currently loaded (wired into `data_builder`)
+
+| Pipeline attribute | EXODUS variable | Shape | Units | Description |
+|---|---|---|---|---|
+| `radiation_energy_at_boundary_cum` | `TimeIntRadiationLossAtBds` | (n_t,) | J cumulative | Total radiation energy that has crossed the grid boundaries (Rmin + Rmax combined) up to time t. Used directly in the energy-ledger closure as the rad-escape channel. |
+| `particle_energy_escaped_cum` | `particle_time_int_energy_escaped` | (n_t,) | J cumulative | Total particle (predominantly DT neutrons) kinetic energy that has escaped the grid up to time t. Used as a direct measurement of neutron-loss energy, replacing the nominal 14.1/17.6 fraction of fusion yield. |
+
+### Available but not yet wired — wishlist for further accounting
+
+| EXODUS variable | Shape | Likely units | Use case |
+|---|---|---|---|
+| `FreqIntgRadEnLossRmax` | (n_t,) | J/s? | Frequency-integrated radiation power loss at outer boundary only. Lets us split the combined `TimeIntRadiationLossAtBds` into outer-vs-inner contributions. |
+| `FreqIntgRadEnLossRmin` | (n_t,) | J/s? | Same, inner boundary. For most direct-drive runs this should be ~0 (no inner sink); useful as a sanity check. |
+| `EnTotRadiation` | (n_t,) | J | Total radiation energy resident in the grid. Cross-check on our `U_rad = 3·P_rad·V` ideal-blackbody calculation. |
+| `EnRadSinkTimeIntg` | (n_t,) | J cumulative | Cumulative radiation sink energy in zones. Useful for tracking absorbed-rad / re-emitted-rad balance. |
+| `EnExchEleToRadTimeIntg` | (n_t,) | J cumulative | Cumulative electron-to-radiation energy exchange. Indicates how much plasma thermal energy converts to in-grid radiation (vs. radiation that just escapes). |
+| `EnJouleHeatingTimeIntg` | (n_t,) | J cumulative | Cumulative Joule heating. Source term if magnetic effects are non-negligible (usually small in ICF). |
+| `EnMagTimeIntg` | (n_t,) | J cumulative | Cumulative magnetic-field energy. Same — usually negligible but should close if non-zero. |
+| `HeatFluxAtRegionBdEle` | (n_t, 4) | J/(s·cm²)? | Electron heat flux at the inter-region boundaries. Lets the energy ledger be done **per region** rather than globally — would isolate whether energy is stuck in corona, ablator, or fuel. |
+| `HeatFluxAtRegionBdIon` | (n_t, 4) | J/(s·cm²)? | Ion heat flux at inter-region boundaries (same use case). |
+| `RadNetCoolingRateRegion` | (n_t, 4) | J/(s·cm²) | Net radiation cooling rate per region. Useful for understanding where the trapped coronal thermal energy is converted to radiation. |
+| `TimeIntFusionProd_He4_0352` | (n_t,) | reactions | Cumulative DT alpha count (3.52 MeV alphas). Direct cross-check on our DT-neutron-derived alpha-energy estimate. |
+| `TimeIntFusionProd_He4_0367` | (n_t,) | reactions | Cumulative DD alpha count (3.67 MeV branch). |
+| `TimeIntFusionProd_*_zone` | (n_t, n_z) | reactions | Per-zone fusion-product counts — enable spatial fusion-burn diagnostics. |
+
+### Closure equation with current wiring
+
+After patches 1–3:
