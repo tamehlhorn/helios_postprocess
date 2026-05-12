@@ -134,12 +134,14 @@ def compute_energy_ledger(data) -> dict:
     else:
         e_fusion_cum = np.zeros(n_t)
 
-    # Gap is what crossed the outer boundary as radiation.
-    sum_channels = ke_inward + ke_outward + u_plasma + u_rad
-    gap = e_absorbed +
-    e_fusion_cum - sum_channels
+    # Closure: E_absorbed + E_alpha (sources that stay in plasma)
+    #          = Σ channels + radiation losses out the boundary.
+    # Neutrons (E_neutron) escape entirely — tracked separately.
     e_alpha    = e_fusion_cum * Q_ALPHA_FRAC
     e_neutron  = e_fusion_cum * Q_NEUTRON_FRAC
+
+    sum_channels = ke_inward + ke_outward + u_plasma + u_rad
+    gap = (e_absorbed + e_alpha) - sum_channels
 
     # Closure: absorbed + alpha-deposited = Σ channels + rad escape
     # Neutrons escape entirely — track separately.
