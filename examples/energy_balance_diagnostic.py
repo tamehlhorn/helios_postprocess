@@ -144,15 +144,26 @@ def compute_energy_ledger(data) -> dict:
     e_particle_esc = (np.asarray(part_esc, dtype=float)
                       if part_esc is not None else np.zeros(n_t))
 
-    # Use direct particle-escape measurement when nonzero; otherwise fall
-    # back to nominal DT 3.5/14.1 MeV split.
-    if e_particle_esc.max() > 1.0:
+    # Use direct particle-escape measurement only when it captures a
+    # sensible fraction of fusion energy. For DT we expect neutron escape
+    # ≈ 0.8 × fusion; if the EXODUS tally is much smaller it's likely
+    # not populated for this run (varies by Helios version / alpha-
+    # transport configuration), so fall back to the nominal fractional
+    # split rather than concluding "all fusion stayed as alpha."
+    if e_fusion_cum[-1] > 1.0:
+        direct_frac = float(e_particle_esc[-1] / e_fusion_cum[-1])
+    else:
+        direct_frac = 0.0
+
+    if direct_frac > 0.3:
+        # Direct tally consistent with DT neutron escape (~0.8 nominal)
         e_neutron = e_particle_esc
         e_alpha   = e_fusion_cum - e_neutron
     else:
+        # Direct tally not populated or partial — use nominal DT 14.1/17.6 split
         e_alpha   = e_fusion_cum * Q_ALPHA_FRAC
         e_neutron = e_fusion_cum * Q_NEUTRON_FRAC
-
+        
     # Closure with direct tallies:
     #   E_absorbed + E_alpha_deposited (sources kept in plasma)
     #     = Σ in-plasma channels + E_rad_boundary (escape) + residual_gap
