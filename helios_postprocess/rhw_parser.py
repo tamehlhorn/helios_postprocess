@@ -168,50 +168,26 @@ class RHWParser:
     
     def _parse_flux_limiter(self, lines: list) -> tuple:
         """
-        Parse electron thermal flux limiter from the .rhw file.
+        Aggregate flux-limiter state across regions (backward-compat helper).
 
-        The .rhw has four copies of the flux-limiter block — one per region
-        (DT vapor, DT ice, CH skin, foam). Pattern:
-
-            Use flux limiter       = 1
-            Flux limiter mult.     = 0.06
-
-        Normally identical across regions. Take the first (enabled, value)
-        pair seen. Warn once if a later block has a different value.
+        Use _parse_flux_limiter_per_region for the full per-region distribution.
+        This aggregate returns (any_enabled, first_value) — kept so downstream
+        code that only reads scalar fields continues to work, but without the
+        "varies across regions" warning since the per-region parser exposes
+        the variation explicitly.
 
         Returns
         -------
         (enabled, value) : (bool, float)
+            enabled = True if any region has flux limiter enabled.
+            value   = first region's flux-limiter multiplier (legacy convention).
             (False, 0.0) if no flux-limiter line is present.
         """
-        import warnings as _w
-        enabled_first = None
-        value_first = None
-        warned = False
-        for line in lines:
-            lstrip = line.strip().lower()
-            if lstrip.startswith('use flux limiter'):
-                try:
-                    v = int(line.split('=')[-1].strip())
-                except (ValueError, IndexError):
-                    continue
-                if enabled_first is None:
-                    enabled_first = (v == 1)
-            elif lstrip.startswith('flux limiter mult'):
-                try:
-                    f = float(line.split('=')[-1].strip())
-                except (ValueError, IndexError):
-                    continue
-                if value_first is None:
-                    value_first = f
-                elif abs(f - value_first) > 1e-9 and not warned:
-                    _w.warn(
-                        f'RHW flux limiter varies across regions '
-                        f'(first={value_first}, later={f}); reporting first.',
-                        stacklevel=2)
-                    warned = True
-        return (bool(enabled_first) if enabled_first is not None else False,
-                float(value_first) if value_first is not None else 0.0)
+        per_region = self._parse_flux_limiter_per_region(lines)
+        if not per_region:
+            return (False, 0.0)
+        any_enabled = any(r['enabled'] for r in per_region)
+        return (any_enabled, per_region[0]['value'])
 
     def _parse_eos_models(self, lines: list) -> list:
         """Parse EOS model type and file for each spatial region."""
@@ -708,8 +684,23 @@ class RHWParser:
                            f"values were found (need {2 * n_rows})")
             return None, None
 
-        return values[:n_rows], values[n_rows:2 * n_rows]
+        time_arr = values[:n_rows]
+        temp_arr = values[n_rows:2 * n_rows]
 
+        # Helios pads the drive table with sentinel times (~1e18 s) to mean
+        # "this drive level extends indefinitely after the last real point."
+        # Trim those so log output and downstream consumers see only physical times.
+        SENTINEL_T_S = 1e-3       # 1 ms — well past any physical simulation duration
+        keep = time_arr < SENTINEL_T_S
+        if not keep.all():
+            n_trim = int((~keep).sum())
+            logger.info(f"Drive temperature at {location}: trimmed {n_trim} "
+                        f"sentinel time value(s) (t ≥ {SENTINEL_T_S*1e9:.0f} ns)")
+            time_arr = time_arr[keep]
+            temp_arr = temp_arr[keep]
+
+        return time_arr, temp_arr
+    
     @staticmethod
     def _find_first_line(lines: list, marker: str,
                          start: int = 0) -> Optional[int]:
