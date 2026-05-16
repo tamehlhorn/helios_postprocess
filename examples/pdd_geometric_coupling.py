@@ -393,8 +393,8 @@ def main() -> int:
                              '(default: from beam 1 in .rhw).')
     parser.add_argument('--w-cm', type=float, default=None,
                         help='Gaussian 1/e² beam radius w [cm] '
-                             '(default: 2× spot from beam 1 in .rhw, '
-                             'interpreting "spot" as σ).')
+                             '(default: laser_spot_size_cm from beam 1 in .rhw, '
+                             'which Helios defines as the 1/e² radius).')
     parser.add_argument('--wavelength-um', type=float, default=None,
                         help='Laser wavelength [µm] for n_crit '
                              '(default: from .rhw).')
@@ -415,27 +415,53 @@ def main() -> int:
 
     logger.info(f"Loading {exo_path.name}")
     run = HeliosRun(str(exo_path), verbose=False)
-    data = build_run_data(run, time_unit='s', verbose=False)
 
-    rhw = getattr(data, 'rhw_config', None)
-    if rhw is None:
-        logger.error("rhw_config is None — cannot determine beam geometry. "
-                     "Pass --d, --theta-deg, --w-cm, --wavelength-um manually.")
+    # Load rhw_config explicitly — build_run_data does not parse it
+    # automatically, so we must hand it in.  (See examples/energy_balance_diagnostic.py
+    # for the same pattern.)
+    rhw_path = exo_path.with_suffix('.rhw')
+    rhw_config = None
+    if rhw_path.exists():
+        try:
+            from helios_postprocess.rhw_parser import load_rhw_configuration
+            rhw_config = load_rhw_configuration(str(rhw_path))
+        except Exception as exc:
+            logger.warning(f"Could not parse rhw: {exc}")
+    else:
+        logger.warning(f"No .rhw found at {rhw_path} — geometry must come from CLI flags.")
+
+    data = build_run_data(run, time_unit='s', rhw_config=rhw_config, verbose=False)
+
+    rhw = getattr(data, 'rhw_config', None) or rhw_config
+    if rhw is None and (args.d is None or args.theta_deg is None
+                         or args.wavelength_um is None):
+        logger.error("rhw_config is None and required geometry flags not "
+                     "given.  Pass --d, --theta-deg, --w-cm, --wavelength-um manually.")
         return 1
 
     # ── Resolve geometric parameters
-    beams = getattr(rhw, 'beams', None) or getattr(rhw, 'beam_list', None)
-    beam1 = beams[0] if beams else None
-    def _beam(attr, default=None):
-        if beam1 is None:
-            return default
-        return getattr(beam1, attr, default)
+    # Prefer per-beam list (beam 1 by default) if present; fall back to the
+    # top-level "laser_*" attributes; fall back to CLI defaults.
+    per_beam = getattr(rhw, 'laser_geometry_per_beam', None) if rhw else None
+    beam1    = per_beam[0] if per_beam else None
 
-    d_cm        = args.d            if args.d            is not None else _beam('focus_cm', _beam('focus_position_cm', 0.22))
-    theta_deg   = args.theta_deg    if args.theta_deg    is not None else _beam('cone_half_angle_deg', _beam('cone_deg', 1.0))
-    spot_cm     = _beam('spot_radius_cm', _beam('spot_cm', 0.25))
-    w_cm        = args.w_cm         if args.w_cm         is not None else 2.0 * spot_cm
-    wavelength  = args.wavelength_um if args.wavelength_um is not None else _beam('wavelength_um', 0.351)
+    def _from_rhw(per_beam_key, top_attr, fallback):
+        if beam1 is not None and per_beam_key in beam1:
+            return beam1[per_beam_key]
+        if rhw is not None and hasattr(rhw, top_attr):
+            v = getattr(rhw, top_attr)
+            if v is not None and v != 0:
+                return v
+        return fallback
+
+    d_cm        = args.d            if args.d            is not None else _from_rhw('focus_position',   'laser_focus_position_cm',    0.22)
+    theta_deg   = args.theta_deg    if args.theta_deg    is not None else _from_rhw('half_cone_angle',  'laser_half_cone_angle_deg',  1.0)
+    spot_cm     = _from_rhw('spot_size', 'laser_spot_size_cm', 0.25)
+    # In Helios .rhw, "spot size" is the 1/e² Gaussian beam radius (w).
+    # σ = w/2 for the conventional Gaussian-RMS interpretation, but the
+    # Option-1 formula η = 1 - exp(-2 R²/w²) uses w directly.
+    w_cm        = args.w_cm         if args.w_cm         is not None else spot_cm
+    wavelength  = args.wavelength_um if args.wavelength_um is not None else _from_rhw('wavelength', 'laser_wavelength_um', 0.351)
     theta = np.radians(theta_deg)
 
     logger.info(f"Geometry:  d = {d_cm:.4f} cm,  θ = {theta_deg:.2f}°,  "
