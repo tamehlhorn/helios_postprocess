@@ -104,26 +104,49 @@ _TRAPZ = getattr(np, 'trapezoid', None) or np.trapz
 def view_factor_ratio(R: np.ndarray, d: float, theta: float) -> np.ndarray:
     """
     Option 2 — solid-angle view factor of a sphere of radius R(t) at distance
-    d, normalized so that f_geom = 1 whenever the sphere fills the cone:
+    d from a focal point, for a beam of cone half-angle θ.
 
-        Ω_sphere(t) = 2π(1 - sqrt(1 - (R/d)^2))         (R < d)
-        Ω_cone     = 2π(1 - cos(θ))
+    Three regimes:
 
-        f_geom(t) = min(1, Ω_sphere(t) / Ω_cone)
+      • R/d ≥ 1                — focal point inside the corona; the beam must
+                                  traverse the corona to reach its focus, so
+                                  the corona fully captures the beam.  f = 1.
+      • sin(θ) ≤ R/d < 1       — sphere subtends a cone larger than (or equal
+                                  to) the beam cone; the beam is fully
+                                  captured by the corona.  f = 1.
+      • R/d < sin(θ)           — sphere subtends a cone smaller than the beam
+                                  cone; only the central portion of the beam
+                                  hits the sphere.  f equals the ratio of
+                                  the two solid angles:
+
+                                  f = [1 - cos(arcsin(R/d))] / [1 - cos(θ)]
+                                    = [1 - √(1 - (R/d)²)]    / [1 - cos(θ)]
 
     Returns
     -------
-    f_geom : ndarray same shape as R
-        Geometric coupling efficiency in [0, 1].  NaN where R/d ≥ 1
-        (focal point inside corona — pre-processor is not applicable then).
+    f : ndarray same shape as R
+        Coupling fraction in [0, 1].  NaN where R is NaN or non-positive.
     """
-    with np.errstate(invalid='ignore', divide='ignore'):
-        ratio = np.where(R < d, np.sqrt(1.0 - (R / d) ** 2), np.nan)
-        omega_sphere = 1.0 - ratio                              # 1 - cos(arcsin(R/d))
-        omega_cone   = 1.0 - np.cos(theta)                      # scalar
-        f = omega_sphere / omega_cone
-    # cap at 1 (sphere fills the cone)
-    return np.where(np.isfinite(f), np.minimum(f, 1.0), np.nan)
+    R = np.asarray(R, dtype=float)
+    sin_theta = np.sin(theta)
+    cos_theta = np.cos(theta)
+    omega_cone = 1.0 - cos_theta  # > 0 for any θ > 0
+
+    with np.errstate(invalid='ignore'):
+        # Clamp R/d to [0, 1] for the partial-cap branch; out-of-range values
+        # are handled by the where() selectors below.
+        ratio_clamped = np.minimum(np.abs(R) / d, 1.0)
+        cos_arcsin    = np.sqrt(1.0 - ratio_clamped ** 2)
+        f_partial     = (1.0 - cos_arcsin) / omega_cone
+
+        # Build the result: f = 1 in fully-captured regimes, f_partial otherwise
+        ratio = R / d
+        fully_captured = (ratio >= sin_theta)        # also catches ratio ≥ 1
+        f = np.where(fully_captured, 1.0, f_partial)
+
+    # Mask invalid R
+    valid = np.isfinite(R) & (R > 0)
+    return np.where(valid, f, np.nan)
 
 
 def gaussian_disk_ratio(R: np.ndarray, w: float) -> np.ndarray:
@@ -237,11 +260,12 @@ def normalize_f_geom(eta: np.ndarray,
     return a normalized correction ``f_geom(t) = eta(t) / eta(anchor)``
     clipped to ``[0, 1]``.
 
-    The anchor is the first time step where the laser is on AND ``eta`` is
-    finite — i.e. the moment the corrected pulse begins.  Choosing the anchor
-    here (rather than at t=0) means the correction describes the *time
-    evolution* of the geometric miss, not a static absolute coupling
-    estimate.  At the anchor, ``f_geom == 1`` (no correction).
+    The anchor is the **maximum** of ``eta`` over the laser-on window.  This is
+    the moment of strongest geometric coupling — typically when the corona is
+    at peak expansion — and reflects the implicit assumption of the
+    uncorrected 1D ray-trace that the laser is fully captured by the spherical
+    target.  At later times when the absorbing surface shrinks below this
+    maximum, f_geom < 1 and the corrected power is scaled down accordingly.
 
     Returns
     -------
@@ -262,7 +286,13 @@ def normalize_f_geom(eta: np.ndarray,
                        "uncorrected pulse (f_geom ≡ 1).")
         return f_geom, int(np.argmax(on))
 
-    anchor_idx = int(np.argmax(valid))
+    # Anchor at the MAX eta among laser-on samples — i.e. when the geometric
+    # coupling is at its strongest.  Anchoring at the first laser-on sample
+    # is unsafe because the corona is just forming there and eta is at a local
+    # *minimum*, which would make f_geom = eta/anchor exceed 1 and get clipped
+    # at all later times — masking the entire correction.
+    eta_masked = np.where(valid, eta, -np.inf)
+    anchor_idx = int(np.argmax(eta_masked))
     anchor_eta = float(eta[anchor_idx])
 
     with np.errstate(invalid='ignore'):
@@ -473,8 +503,10 @@ def main() -> int:
     if not np.any(np.isfinite(R_cm)):
         logger.error(f"R(t) ({args.r_source}) is all NaN — cannot proceed.")
         return 1
-    t_s = data.time
-    t_ns = t_s * 1e9
+    # data.time is in nanoseconds regardless of `time_unit` (which describes
+    # the unit of the *incoming* raw exo times — see data_builder.py).
+    t_ns = data.time
+    t_s  = t_ns * 1e-9
 
     # ── f_geom(t) — absolute coupling fraction eta(t), then normalize
     if args.formula == 'view_factor':
@@ -531,6 +563,20 @@ def main() -> int:
     E_corr_kJ = float(_TRAPZ(P_corr_TW * 1e12, t_s)) * 1e-3
     f_min     = float(np.nanmin(f_geom)) if np.any(np.isfinite(f_geom)) else float('nan')
 
+    # f_geom at peak laser power — the most calibration-relevant single number
+    on = P_orig_TW > 0
+    if on.any():
+        t_peak_idx = int(np.argmax(P_orig_TW))
+        f_at_peak  = float(f_geom[t_peak_idx])
+        t_peak_ns  = float(t_ns[t_peak_idx])
+        # Statistics restricted to laser-on window
+        f_geom_on  = f_geom[on]
+        f_min_on   = float(np.nanmin(f_geom_on))
+        f_mean_on  = float(np.nanmean(f_geom_on))
+    else:
+        f_at_peak = float('nan'); t_peak_ns = float('nan')
+        f_min_on = float('nan');  f_mean_on = float('nan')
+
     print()
     print("─" * 62)
     print(f"  Geometric coupling pre-processor — {base_path.name}")
@@ -542,10 +588,33 @@ def main() -> int:
     if args.formula == 'gaussian':
         print(f"  w (1/e² beam radius):  {w_cm:.4f} cm")
     print(f"  Wavelength λ:          {wavelength:.3f} µm")
-    print(f"  min f_geom(t):         {f_min:.3f}")
+    print(f"  Sphere-fills-cone at:  R ≥ d·sin(θ) = {d_cm*np.sin(theta)*1e4:.1f} µm")
+    print()
+    print(f"  --- During laser-on window ---")
+    print(f"  f_geom at peak power:  {f_at_peak:.3f}    (t = {t_peak_ns:.2f} ns)")
+    print(f"  mean f_geom (on):      {f_mean_on:.3f}")
+    print(f"  min  f_geom (on):      {f_min_on:.3f}")
+    print(f"  min  f_geom (any t):   {f_min:.3f}")
+    print()
     print(f"  ∫P_original dt:        {E_orig_kJ:8.2f} kJ")
     print(f"  ∫P_corrected dt:       {E_corr_kJ:8.2f} kJ")
-    print(f"  Δ energy:              {100*(E_corr_kJ/E_orig_kJ - 1.0):+6.2f} %")
+    if E_orig_kJ > 0:
+        print(f"  Δ energy:              {100*(E_corr_kJ/E_orig_kJ - 1.0):+6.2f} %")
+
+    # Diagnostic warning when correction is essentially nil during laser-on
+    if np.isfinite(f_min_on) and f_min_on > 0.95 and args.r_source == 'r_crit':
+        print()
+        print("  ⚠  Correction is essentially nil during the laser-on window.")
+        print("     R(t) stays above d·sin(θ) throughout — the critical surface")
+        print("     (corona) fills the beam cone the whole time the laser is on.")
+        print("     This is the expected behaviour when R(t) = r_crit and the")
+        print("     corona is well-expanded.  The geometric-miss problem really")
+        print("     manifests at the *imploding shell*, not the critical surface.")
+        print()
+        print("     To diagnose the shell-tracking miss instead, try:")
+        print(f"       --r-source r_ablation     (steepest -∂ρ/∂r outside HS)")
+        print(f"     or override R(0) and the focal distance with --d to test")
+        print(f"     a tighter geometry.")
     print("─" * 62)
     print(f"  Outputs:")
     print(f"    {csv_path}")
