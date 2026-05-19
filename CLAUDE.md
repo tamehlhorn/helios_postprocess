@@ -1087,37 +1087,6 @@ CLAUDE.md 0.2 threshold). MULTI-IFE feedback subsequently indicated Helios's
 flux-limiter implementation may not be running properly — motivating a much
 tighter f = 0.005 test on WfCDT_01b as the highest-priority next-session item.
 
-### Next-session priorities (ordered)
-
-1. **WfCDT_01b f = 0.005 rerun** + clean ice-only baseline at f = 0.06.
-   Tests the MULTI-IFE FL feedback (much tighter limiter, 12× below baseline)
-   and gives the first clean WfCDT adiabat number under all current conventions.
-
-2. **Restore notebook RANSAC shock-tracking algorithm** to the postprocessor.
-   Algorithm: iterative `sklearn.linear_model.RANSACRegressor` with
-   `LinearRegression` estimator, fits straight lines to shock-front points in
-   (t, r) space, removes inliers and repeats until exhausted, then computes
-   pairwise line intersections to find shock-coalescence points. Output: list
-   of shock fronts (slope, intercept, n_inliers) plus list of coalescence
-   points (t, r) filtered to physically meaningful region. Open implementation
-   questions: candidate-point source (peak-finder on dP/dr at each timestep?),
-   normalization of `residual_threshold`, max-shocks cap, `r_max` definition.
-
-3. **Late-time laser-power scaling experiment.** Mimic the 3D ray-trace miss
-   that happens as the capsule shrinks below the NIF PDD beam-pointing solid
-   angle. First cut: ramp factor on `LaserPwrDeliveredForBeam` starting at
-   ~9 ns reducing total absorbed energy by ~22 percentage points (Helios 87% →
-   LILAC 65%). More careful version: extract time-dependent absorbed-energy
-   curve from Olson 2021 directly and scale to match.
-
-4. **EOS variation on WfCDT_01b.** DT ice EOS (SESAME 5271 → 5263 or LEOS) and
-   CH ablator EOS (SESAME 7384 → 7593 or LEOS), holding f = 0.06. Most-likely
-   physics lever for the WfCDT adiabat gap if (1)–(3) don't close it.
-
-5. **Full WfCDT flux-limiter scan** f = 0.005, 0.06, 0.10. Deferred until
-   shock tracking from (2) is mature so we can attribute changes to actual
-   physics rather than guess.
-
 ### Background TODOs (when convenient)
 
 - `target_class` attribute refactor (replaces ad-hoc single-region guards)
@@ -2086,3 +2055,237 @@ Residual closure                 0.6%   0.9%   0.9%   0.9%
 - helios_exodus_variable_reference.md: new "Boundary-tally" section
   with wishlist of future accounting variables.
 - examples/energy_balance_diagnostic.py: new standalone tool.
+
+## May 2026 Appendix — 1D Geometric Coupling Correction (CLOSED)
+
+### Motivation
+
+Helios is a 1D spherical hydrodynamics code with a laser ray-trace that
+models the beam as a single cone of half-angle θ from a focal point at
+distance d.  By construction the cone always intercepts the spherical
+target — Helios cannot reproduce the geometric coupling reduction that
+occurs in 3D PDD/HDD configurations, where fixed-pointing beams
+increasingly miss the imploding capsule as it shrinks.  This appendix
+documents the empirical investigation of whether that 1D limitation is
+the binding constraint blocking the cluster match.
+
+### Tools added
+
+- `examples/pdd_geometric_coupling.py` — pre-processor that computes
+  `f_geom(t) = eta(t) / eta(anchor)` from a baseline no-burn EXODUS run.
+  Uses view-factor formula `(1 − √(1 − (R/d)²)) / (1 − cos θ)` in the
+  partial-coupling regime and f = 1 when R/d ≥ sin θ (sphere fills cone)
+  or R/d ≥ 1 (focal point inside corona).  Three R(t) source options:
+  `r_crit`, `r_outer`, `r_ablation`.  Use `--r-source r_ablation` for
+  PDD calibration — it tracks the cold-shell trajectory rather than the
+  laser-coupling surface.  Writes `<base>_geomcorr_power.csv` and a
+  diagnostic PDF.
+
+- `examples/apply_geomcorr_to_rhw.py` — rhw patcher that injects the
+  corrected pulse table back into the rhw.  Locates `[Laser Source
+  Data]:` block, walks `Parameters for beam:  = N` headers, finds each
+  `[table format=2]:` block, **resamples the pulse table from its
+  original 6 control points to 200** (configurable via `--n-points`) and
+  rewrites three rhw lines per beam: `# table rows = N`, times row, and
+  powers row.  Resampling is critical because the original 6-point
+  table uses piecewise-linear interpolation between control points; a
+  single-point per-control modification creates artificial linear ramps
+  across the peak plateau that don't reflect the actual f_geom shape.
+  Resampling correctly captures the f_geom variation under Helios's
+  linear-interp model.  Round-trip energy matches the analytical
+  `∫(P_orig × f_geom) dt` to within 0.03%.
+
+### rhw file format (mapped this session)
+
+The Olson_PDD rhw layout is (line numbers approximate for an
+unmodified PDD_35 rhw):
+
+```
+[Header Data]:
+[Geometry Data]:
+[Spatial Grid Data]:        <-- many [table format=2] sub-blocks
+[Hydro Data]:               <-- "Allow free expansion at Rmax" flag
+[Rad Trans Data]:
+[Rad Source Data]:          <-- prepulse Tr table for X-ray drive
+[Laser Source Data]:        <-- starts ~line 808 for PDD_35
+   Number of laser beams = 3
+   Parameters for beam:          = 1     <-- note colon after "beam"
+     Wavelength = ...
+     Spot size = ...
+     Half cone angle = ...
+     Focus position = ...
+     [table format=2]:    Time-dependent laser powers:
+       table is 3D  = 0
+       # table rows = K      <-- number of (time, power) pairs
+       # table cols = 2
+       <K times in seconds, space-separated>
+       <K powers in TW, space-separated>
+   Parameters for beam:          = 2
+   Parameters for beam:          = 3
+[End Laser Source Data]
+[Ion Beam]:
+[MHD Data]:
+[Time Control Data]:
+[Output Control Data]:
+[Atomic Processes Parameters]:
+[Dialog Settings Data]:
+[End of Workspace File]
+```
+
+The beam-header colon syntax (`Parameters for beam:  = N`, with colon
+*after* "beam") is non-obvious — original assumption was no colon, which
+caused the patcher to silently locate zero pulse tables on its first
+run.  Both rhw_parser and apply_geomcorr_to_rhw now accept either form.
+
+### Helios CLI on macOS
+
+Helios is installed at `~/Codes/Prism/Helios_11.0.0/`.  On macOS the
+`.app` is a bundle — the actual binary lives inside.  Invocation:
+
+```bash
+~/Codes/Prism/Helios_11.0.0/Helios.app/Contents/MacOS/Helios -b \
+    -i /path/to/run.rhw \
+    -d /path/to/sims_root \
+    -o run_name \
+    -x
+```
+
+`-b` runs headless, `-d` sets the results-directory root, `-o` sets
+the run folder name, `-x` overwrites if it already exists.
+
+### PDD_20_s016 (narrow cone) — pre-processor only
+
+Geometry: θ = 20°, d = 0.22 cm, spot = 0.16 cm, λ = 0.350 µm.
+Miss threshold d·sin(θ) = 753 µm.
+
+| Metric                          | Value   |
+|---------------------------------|---------|
+| f_geom at peak power (t = 12 ns)| 1.000   |
+| Mean f_geom over laser-on       | 0.971   |
+| Min f_geom over laser-on        | 0.384   |
+| Integrated ΔE_delivered         | −3.7 %  |
+
+The ablation front sits well above 753 µm during peak power — the
+correction kicks in only on the late tail of the main pulse.  Pre-
+processor only; no Helios round-trip needed (too small to matter).
+
+### PDD_35_s016 (wide cone) — full Helios round-trip
+
+Geometry: θ = 35°, d = 0.22 cm, spot = 0.16 cm, λ = 0.350 µm.
+Miss threshold d·sin(θ) = 1262 µm.
+
+Pre-processor: f_geom at peak power = 1.000 (t = 10.7 ns), mean f_geom
+on-pulse = 0.897, integrated ΔE_delivered = −14.9 %.
+
+Helios round-trip (corrected rhw, no-burn, Helios 11.0.0):
+
+| Metric                       | Baseline   | Corrected  | Δ       | Cluster   |
+|------------------------------|-----------:|-----------:|--------:|----------:|
+| Laser energy on target (MJ)  | 1.656      | 1.452      | −12.3 % | 1.40      |
+| Spot–sphere coupling (%)     | 79.6       | 82.0       | +2.4 pp | 65 ± 9    |
+| Peak velocity (km/s)         | 450.6      | 443.3      | −1.6 %  | 470       |
+| Mass-avg adiabat at peak v   | 1.79       | **1.07**   | **−40%**| 3.0 ± 0.3 |
+| Base adiabat at breakout     | 0.39       | 0.39       | 0 %     | —         |
+| ⟨ρR_cf⟩ (g/cm²)              | 0.96       | 0.76       | −21 %   | 1.10      |
+| ⟨P_hs⟩ (Gbar)                | 90.6       | 56.3       | −38 %   | 193 ± 20  |
+| CR_max                       | 38.3       | 33.4       | −13 %   | 29 ± 3    |
+| Imploded DT mass (mg)        | **0.60**   | **0.60**   | **0 %** | ~3.0      |
+| Hydro efficiency (%)         | 10.8       | 11.4       | +6 %    | —         |
+| Yield no-burn (MJ)           | 0.316      | 0.170      | −46 %   | —         |
+
+### Key findings
+
+1. **Pre-processor prediction validated.**  Predicted −14.9 %, Helios
+   delivered −12.3 %.  The 2.6 pp slippage is a second-order shift in
+   Helios's spot–sphere coupling factor (79.6 → 82.0 %): the slightly
+   less violent implosion keeps the target larger longer and captures
+   more of the Gaussian spot.  Real second-order coupling effect, not
+   a numerical artifact.
+
+2. **Foot-pulse-set metrics are structurally outside the correction's
+   reach.**  Base adiabat at breakout (0.39 → 0.39 exactly), imploded
+   DT mass (0.60 → 0.60 mg exactly), and shock breakout time (9.55 ns
+   both) are all set during the foot pulse where f_geom = 1, so they
+   are unaffected by the correction by construction.
+
+3. **Peak velocity barely moves (−1.6 %).**  Confirms the structural
+   argument: f_geom = 1.000 at peak laser power for both anchors, so
+   the rocket-equation work integral on the imploding shell is
+   essentially unchanged.  Residual comes from reduced late-tail
+   coasting drive.
+
+4. **Compression channel absorbs the full reduction.**  ⟨P_hs⟩ −38 %,
+   ⟨ρR_cf⟩ −21 %, yield −46 %, peak density −25 %.  **Adiabat falls
+   from 1.79 to 1.07 — moving the wrong way relative to cluster 3.0
+   — because the correction reduces late-pulse re-heating of the
+   assembling cold fuel, leaving it softer than baseline.**
+
+5. **The correction lands delivered energy on the cluster mark.**
+   1.452 MJ vs cluster 1.40 MJ.  Despite this, the binding calibration
+   residuals (adiabat shortfall, ρR_cf shortfall, imploded-mass
+   shortfall, yield gap) survive intact or worsen.
+
+### Disposition
+
+The 1D ray-trace is not the limiting physics for matching the 3D-code
+cluster.  The compression-deficit chain — shell-fuel mass distribution
+at stagnation, EOS, drive-symmetry effects not captured in 1D —
+remains the binding constraint.
+
+**Options 2 and 3 (in-Helios source-code modifications) are not
+pursued.**  The pre-processor + rhw patcher pipeline is retained as
+an end-to-end diagnostic for future targets where the geometric miss
+could be larger (wider cones, shorter focal distances, more aggressive
+implosions that compress the ablation surface below the miss threshold
+earlier in the pulse).  The Option 1 test can be re-run in minutes on
+any new candidate geometry.
+
+**Anchor-selection circular logic resolved.**  The natural concern
+("the anchor was selected without the correction in the loop, biasing
+selection toward geometries where the correction is small") was
+addressed by running the correction on a wide-cone anchor where the
+geometric miss is 6× larger than at the narrow-cone PDD_20 anchor.
+The corrected wide-cone result does not unlock a better cluster
+match — it just shifts which subset of metrics agrees.  Re-running
+the calibration loop with the correction applied would shift the
+chosen anchor but would not close the compression residuals.
+
+### Reference document
+
+Full memo with derivation, four-options analysis, validation
+criteria, and disposition: `docs/Helios_1D_Coupling_Correction_Memo.docx`.
+
+## Open items / Next priorities (post-May 2026 geomcorr closeout)
+
+In order of expected information yield:
+
+1. **HDD lrm4 with 150 eV prepulse** (Tr 130 → 150 eV at lrm4
+   geometry, no-burn).  The cleanest isolated adiabat-lever test we
+   can run on HDD.  The lrm4 free-Rmax baseline already matches
+   imploded DT mass and ⟨T_hs⟩; the residual is α = 2.12 vs target 6.
+   If stiffer prepulse lifts α toward the target without breaking the
+   other matched metrics, the prepulse strength is a real knob.  If
+   not, the adiabat shortfall is structural to Helios's foot-shock
+   physics.  Path: `~/Sims/Xcimer/HDD_26/HDD26_DTI40_1ns150_FL06_lrm4_nb/`
+   (run name pattern).  Modify the prepulse temperature in the rhw's
+   `[Rad Source Data]:` block — specifically the time-dependent drive
+   temperature table at Rmax.
+
+2. **HDD lrm4-at-FL-0.06 inverse-FL test.**  Revert the FL=0.04 on
+   ice/foam/CD shell back to 0.06 (the PDD baseline value) via
+   `examples/edit_rhw_flux_limiter.py`.  Prediction: yield and energy
+   ledger essentially unchanged, confirming FL is a non-lever in HDD
+   as it was in PDD.  Quick test (1 hr of compute, 5 min of analysis).
+
+3. **PDD compression-channel investigation.**  EOS sensitivity (SESAME
+   vs PROPACEOS vs alternative tables), foot-pulse adiabat physics,
+   shock-timing sensitivity to the foot/ramp transition.  The
+   compression deficit is the binding residual across all calibration
+   anchors — both PDD_20_s016 (geomcorr-confirmed-clean drive
+   delivery, still α = 1.05) and PDD_35_s016 corrected (delivery on
+   cluster mark, still α = 1.07).  The lever is somewhere in the
+   foot/peak EOS-shock chain that's identical at both anchors.
+
+4. **HDD lrm5 spot=0.27 at FL=0.04** — absorbed-fraction monotonicity
+   test.  Deprioritized pending (1) and (2); will pick up later if
+   the prepulse lever does not close the adiabat gap.
