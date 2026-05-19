@@ -546,7 +546,7 @@ def main() -> int:
         fh.write("# Columns:        time[ns], R[cm], f_geom, P_orig[TW], P_corr[TW]\n")
         for i in range(len(t_ns)):
             fh.write(f"{t_ns[i]:11.5f}  {R_cm[i]:11.5e}  "
-                     f"{f_geom[i] if np.isfinite(f_geom[i]) else float('nan'):8.4f}  "
+                     f"{f_geom[i] if np.isfinite(f_geom[i]) else float('nan'):10.6f}  "
                      f"{P_orig_TW[i]:11.4f}  {P_corr_TW[i]:11.4f}\n")
     logger.info(f"Wrote {csv_path}")
 
