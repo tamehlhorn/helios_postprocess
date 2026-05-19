@@ -97,44 +97,14 @@ def is_numeric_row(line: str, n_cols: int) -> bool:
         return False
 
 
-def format_power_row(powers: np.ndarray, template_line: str) -> str:
-    """
-    Format the corrected power row, attempting to preserve the column-width
-    of the original line.  Falls back to a sensible default if the original
-    formatting can't be inferred.
-    """
-    # Try to infer column width from the original line: count whitespace runs
-    # and use 6 decimal digits.
-    orig_vals = template_line.strip().split()
-    n_vals = len(orig_vals)
-    if n_vals != len(powers):
-        # Mismatch — use safe default
-        return '  '.join(f'{p:.6e}' for p in powers) + '\n'
-
-    # Compute width based on longest token in the original
-    widths = [len(t) for t in orig_vals]
-    avg_width = max(max(widths), 14)
-
-    # Try to preserve the leading indent
-    indent = ''
-    for c in template_line:
-        if c in (' ', '\t'):
-            indent += c
-        else:
-            break
-
-    formatted = indent + ' '.join(f'{p:>{avg_width}.6e}' for p in powers)
-    if not formatted.endswith('\n'):
-        formatted += '\n'
-    return formatted
-
-
 class BeamPulseTable:
     """A located pulse-table block inside the rhw file."""
     def __init__(self, beam_id: int,
+                  rows_meta_idx: int,
                   time_line_idx: int, power_line_idx: int,
                   times_s: np.ndarray, powers_TW: np.ndarray):
         self.beam_id        = beam_id
+        self.rows_meta_idx  = rows_meta_idx
         self.time_line_idx  = time_line_idx
         self.power_line_idx = power_line_idx
         self.times_s        = times_s
@@ -173,6 +143,7 @@ def locate_pulse_tables(lines: List[str]) -> List[BeamPulseTable]:
     in_table   = False
     n_rows     = 0
     rows_seen  = 0
+    rows_meta_idx = None
     time_idx   = None
     time_vals  = None
 
@@ -191,6 +162,7 @@ def locate_pulse_tables(lines: List[str]) -> List[BeamPulseTable]:
             in_table = False
             n_rows = 0
             rows_seen = 0
+            rows_meta_idx = None
             time_idx = None
             time_vals = None
             continue
@@ -199,6 +171,7 @@ def locate_pulse_tables(lines: List[str]) -> List[BeamPulseTable]:
             in_table = True
             n_rows = 0
             rows_seen = 0
+            rows_meta_idx = None
             time_idx = None
             time_vals = None
             continue
@@ -206,10 +179,12 @@ def locate_pulse_tables(lines: List[str]) -> List[BeamPulseTable]:
         if not in_table or beam_id is None:
             continue
 
-        # Number-of-rows comment
+        # Number-of-rows comment (this is the LINE we will rewrite when
+        # resampling changes the table length).
         m2 = TABLE_ROWS_RE.search(line)
         if m2:
             n_rows = int(m2.group(1))
+            rows_meta_idx = i
             continue
 
         # Numeric data row
@@ -220,8 +195,12 @@ def locate_pulse_tables(lines: List[str]) -> List[BeamPulseTable]:
                 time_vals = vals.copy()
                 rows_seen += 1
             elif rows_seen == 1:
+                # Empty / all-zero power tables (turned-off beams) are
+                # uninteresting — record them but they'll get filtered
+                # later if the user wants to skip them.
                 tables.append(BeamPulseTable(
                     beam_id=beam_id,
+                    rows_meta_idx=rows_meta_idx,
                     time_line_idx=time_idx,
                     power_line_idx=i,
                     times_s=time_vals,
@@ -236,21 +215,83 @@ def locate_pulse_tables(lines: List[str]) -> List[BeamPulseTable]:
 
 def apply_correction(table: BeamPulseTable,
                       csv_t_ns: np.ndarray,
-                      csv_f_geom: np.ndarray) -> np.ndarray:
+                      csv_f_geom: np.ndarray,
+                      n_fine: int = 200,
+                      ) -> Tuple[np.ndarray, np.ndarray]:
     """
-    Compute P_new = P_orig × f_geom(t).  f_geom is interpolated onto the
-    rhw time grid; samples before the first CSV time get f_geom = 1
-    (no correction), and samples beyond the last CSV time are held at
-    the CSV's last value (deep post-laser tail).
+    Resample the pulse table at higher temporal resolution and apply f_geom(t).
+
+    The original .rhw stores the pulse as a small set of control points (6
+    in typical Olson PDD configurations) which Helios linearly interpolates
+    between.  If we simply multiply the existing control-point powers by
+    f_geom at those control-point times, two consecutive flat-plateau points
+    (e.g. ``329 / 329`` for the peak) end up with different values, and the
+    resulting linear ramp does not reproduce the shape of the geometric
+    correction during the plateau.
+
+    Instead, we resample onto a uniform fine grid spanning the original
+    time range, interpolate ``P_orig`` piecewise-linearly (matching how
+    Helios reads the table), interpolate ``f_geom`` from the CSV, and
+    multiply.  The new pulse table has ``n_fine`` points and reproduces the
+    correction shape correctly under Helios's linear interpolation.
+
+    Returns
+    -------
+    t_new_s : ndarray (n_fine,)
+        New time grid in seconds (same as rhw convention).
+    P_new_TW : ndarray (n_fine,)
+        Corrected powers in TW.
     """
-    t_rhw_ns = table.times_s * 1e9
-    f_at_t = np.interp(t_rhw_ns,
-                        csv_t_ns,
-                        csv_f_geom,
-                        left=1.0,
-                        right=float(csv_f_geom[-1]),)
-    f_at_t = np.clip(f_at_t, 0.0, 1.0)
-    return table.powers_TW * f_at_t
+    t_orig_s  = table.times_s
+    P_orig_TW = table.powers_TW
+
+    # Reuse the original endpoints exactly so we don't move the pulse start/end
+    t_min, t_max = float(t_orig_s.min()), float(t_orig_s.max())
+    t_new_s = np.linspace(t_min, t_max, n_fine)
+
+    # Helios uses piecewise-linear between control points
+    P_orig_fine = np.interp(t_new_s, t_orig_s, P_orig_TW)
+
+    # f_geom from CSV (CSV times in ns; rhw times in seconds)
+    t_new_ns = t_new_s * 1e9
+    f_at_t   = np.interp(t_new_ns, csv_t_ns, csv_f_geom,
+                          left=1.0, right=float(csv_f_geom[-1]))
+    f_at_t   = np.clip(f_at_t, 0.0, 1.0)
+
+    P_new_TW = P_orig_fine * f_at_t
+    return t_new_s, P_new_TW
+
+
+def format_data_row(values: np.ndarray, template_line: str,
+                    prec: int = 6) -> str:
+    """
+    Format a numeric data row, preserving the leading indent of `template_line`
+    and using fixed-width scientific notation.  Values are space-separated;
+    line-length is unbounded (Helios's rhw reader is whitespace-tolerant).
+    """
+    indent = ''
+    for c in template_line:
+        if c in (' ', '\t'):
+            indent += c
+        else:
+            break
+    width = prec + 8  # e.g. " 3.290000e+02" = 13 chars for prec=6
+    body = ' '.join(f'{v:>{width}.{prec}e}' for v in values)
+    return indent + body + '\n'
+
+
+def format_table_rows_line(template_line: str, n_new: int) -> str:
+    """
+    Replace the integer in a ``# table rows = N`` line with ``n_new``,
+    preserving everything else (indent, spacing around ``=``, trailing
+    whitespace, end-of-line).
+    """
+    new = re.sub(r'(table rows\s*=\s*)\d+',
+                  lambda m: f'{m.group(1)}{n_new}',
+                  template_line, count=1, flags=re.IGNORECASE)
+    if not new.endswith('\n'):
+        new += '\n'
+    return new
 
 
 def trapz(y, x):
@@ -272,6 +313,11 @@ def main() -> int:
                              '<input_stem>_geomcorr_power.csv in same dir.')
     parser.add_argument('--out', default=None,
                         help='Output .rhw path.  Default: <input_stem>_geomcorr.rhw')
+    parser.add_argument('--n-points', type=int, default=200,
+                        help='Number of points in the resampled pulse table '
+                             '(replaces the original control-point grid).  '
+                             '200 gives ~50 ps resolution over a 10 ns pulse, '
+                             'comfortably resolving the geometric correction.')
     parser.add_argument('--dry-run', action='store_true',
                         help='Print what would change without writing the output.')
     parser.add_argument('--verbose', action='store_true')
@@ -364,27 +410,51 @@ def main() -> int:
     total_E_orig = 0.0
     total_E_corr = 0.0
     for tab in tables:
-        p_new = apply_correction(tab, csv_t_ns, csv_f_geom)
-        new_line = format_power_row(p_new, lines[tab.power_line_idx])
-        replacements[tab.power_line_idx] = new_line
+        # Skip beams that have no energy in their original pulse (turned-off
+        # beams with zero powers everywhere).  Resampling them is a no-op
+        # that just bloats the file.
+        if not np.any(tab.powers_TW > 0):
+            if args.verbose:
+                print(f"  beam {tab.beam_id}: empty pulse (all zeros) — left "
+                      f"unchanged")
+            continue
+
+        t_new, P_new = apply_correction(tab, csv_t_ns, csv_f_geom,
+                                         n_fine=args.n_points)
+
+        # Build the three replacement lines: rows-meta, times row, powers row
+        if tab.rows_meta_idx is not None:
+            replacements[tab.rows_meta_idx] = format_table_rows_line(
+                lines[tab.rows_meta_idx], len(t_new))
+        replacements[tab.time_line_idx]  = format_data_row(t_new,
+                                            lines[tab.time_line_idx])
+        replacements[tab.power_line_idx] = format_data_row(P_new,
+                                            lines[tab.power_line_idx])
 
         E_orig = float(trapz(tab.powers_TW * 1e12, tab.times_s)) * 1e-3
-        E_corr = float(trapz(p_new          * 1e12, tab.times_s)) * 1e-3
+        E_corr = float(trapz(P_new          * 1e12, t_new       )) * 1e-3
         total_E_orig += E_orig
         total_E_corr += E_corr
 
-        on = tab.powers_TW > 0
-        f_at_on = (p_new[on] / tab.powers_TW[on])
         if args.verbose:
+            f_at_new = P_new / np.where(np.interp(t_new, tab.times_s,
+                                                    tab.powers_TW) > 0,
+                                          np.interp(t_new, tab.times_s,
+                                                    tab.powers_TW),
+                                          1.0)
+            f_on = f_at_new[P_new > 0]
+            f_mean = float(f_on.mean()) if f_on.size else float('nan')
             print(f"  beam {tab.beam_id}: "
+                  f"{len(tab.powers_TW)} → {len(t_new)} points; "
                   f"∫P_orig = {E_orig:7.2f} kJ → "
                   f"∫P_corr = {E_corr:7.2f} kJ  "
                   f"(Δ {100*(E_corr/E_orig - 1):+5.2f} %; "
-                  f"mean f_geom on-pulse = {float(f_at_on.mean()):.3f})")
+                  f"mean f_geom on-pulse = {f_mean:.3f})")
 
-    print(f"Total laser energy: "
-          f"{total_E_orig:.2f} kJ → {total_E_corr:.2f} kJ "
-          f"(Δ {100*(total_E_corr/total_E_orig - 1):+5.2f} %)")
+    if total_E_orig > 0:
+        print(f"Total laser energy: "
+              f"{total_E_orig:.2f} kJ → {total_E_corr:.2f} kJ "
+              f"(Δ {100*(total_E_corr/total_E_orig - 1):+5.2f} %)")
     print()
 
     # ── Emit corrected rhw
@@ -395,9 +465,24 @@ def main() -> int:
     if args.dry_run:
         print(f"--dry-run: would write {out_rhw}")
         for tab in tables:
-            print(f"  beam {tab.beam_id} power row at line {tab.power_line_idx+1}:")
-            print(f"    OLD: {lines[tab.power_line_idx].rstrip()}")
-            print(f"    NEW: {replacements[tab.power_line_idx].rstrip()}")
+            if not np.any(tab.powers_TW > 0):
+                continue
+            print(f"  beam {tab.beam_id}: rewriting lines "
+                  f"{tab.rows_meta_idx+1 if tab.rows_meta_idx else '?'} "
+                  f"(table-rows meta), "
+                  f"{tab.time_line_idx+1} (times), "
+                  f"{tab.power_line_idx+1} (powers)")
+            if tab.rows_meta_idx is not None and tab.rows_meta_idx in replacements:
+                print(f"    rows: '{lines[tab.rows_meta_idx].rstrip()}' "
+                      f"→ '{replacements[tab.rows_meta_idx].rstrip()}'")
+            # Truncate long preview rows so the terminal stays readable
+            def trunc(s, n=110):
+                s = s.rstrip()
+                return s if len(s) <= n else s[:n] + ' ...[truncated]'
+            print(f"    times OLD: {trunc(lines[tab.time_line_idx])}")
+            print(f"    times NEW: {trunc(replacements[tab.time_line_idx])}")
+            print(f"    powers OLD: {trunc(lines[tab.power_line_idx])}")
+            print(f"    powers NEW: {trunc(replacements[tab.power_line_idx])}")
         return 0
 
     out_rhw.parent.mkdir(parents=True, exist_ok=True)
