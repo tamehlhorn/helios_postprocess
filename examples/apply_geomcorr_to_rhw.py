@@ -50,8 +50,10 @@ from typing import List, Optional, Tuple
 import numpy as np
 
 
-# Regex for "Parameters for beam = N" lines
-BEAM_HEADER_RE  = re.compile(r'Parameters for beam\s*=\s*(\d+)', re.IGNORECASE)
+# Regex for "Parameters for beam = N" or "Parameters for beam: = N" lines.
+# Helios .rhw files use the form "Parameters for beam:        = 1" (with a
+# trailing colon after "beam"), so the colon is required-to-tolerate.
+BEAM_HEADER_RE  = re.compile(r'Parameters for beam\s*:?\s*=\s*(\d+)', re.IGNORECASE)
 TABLE_FORMAT_RE = re.compile(r'\[table format', re.IGNORECASE)
 TABLE_ROWS_RE   = re.compile(r'#\s*table rows\s*=\s*(\d+)', re.IGNORECASE)
 
@@ -311,9 +313,38 @@ def main() -> int:
     # ── Locate pulse tables
     tables = locate_pulse_tables(lines)
     if not tables:
-        print("ERROR: no laser pulse tables located in the input rhw.  "
-              "Confirm it has a [Laser Source Data] section with one "
-              "[table format ...] block per beam.", file=sys.stderr)
+        print("ERROR: no laser pulse tables located in the input rhw.",
+              file=sys.stderr)
+        print("       Dumping bracketed section markers and the first 30 lines",
+              file=sys.stderr)
+        print("       so we can diagnose the format mismatch:", file=sys.stderr)
+        print("", file=sys.stderr)
+        print(f"--- All bracketed [...] section markers in {in_rhw.name} ---",
+              file=sys.stderr)
+        section_re = re.compile(r'^\s*(\[[^\]]+\])')
+        for i, raw in enumerate(lines):
+            m = section_re.match(raw)
+            if m:
+                print(f"  line {i+1:5d}: {m.group(1)}", file=sys.stderr)
+        print("", file=sys.stderr)
+        # If we didn't find a [Laser Source Data] marker, that's the problem
+        any_laser = any('[Laser Source Data]' in ln for ln in lines)
+        any_beam  = any(BEAM_HEADER_RE.search(ln) for ln in lines)
+        any_tab   = any(TABLE_FORMAT_RE.search(ln) for ln in lines)
+        any_rows  = any(TABLE_ROWS_RE.search(ln) for ln in lines)
+        print("--- Marker-presence summary ---", file=sys.stderr)
+        print(f"  '[Laser Source Data]' substring : {'FOUND' if any_laser else 'NOT FOUND'}",
+              file=sys.stderr)
+        print(f"  'Parameters for beam = N'       : {'FOUND' if any_beam  else 'NOT FOUND'}",
+              file=sys.stderr)
+        print(f"  '[table format'                 : {'FOUND' if any_tab   else 'NOT FOUND'}",
+              file=sys.stderr)
+        print(f"  '# table rows = N'              : {'FOUND' if any_rows  else 'NOT FOUND'}",
+              file=sys.stderr)
+        print("", file=sys.stderr)
+        print("Tell Claude which markers were NOT FOUND and paste a 20-line "
+              "snippet of the rhw around the laser-pulse section.  The state-"
+              "machine markers are configurable.", file=sys.stderr)
         return 1
 
     print(f"Located {len(tables)} pulse table(s) in {in_rhw.name}:")
