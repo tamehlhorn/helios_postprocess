@@ -1852,3 +1852,237 @@ and are preferred over inferred fractions when computing residuals.
 ### Closure equation with current wiring
 
 After patches 1–3:
+## Session 2026-05-12 — Energy-balance diagnostic + lrm4 HDD milestone
+
+### New tooling
+
+- **examples/energy_balance_diagnostic.py** (standalone, 387 lines, uses HeliosRun
+  + build_run_data, NOT ICFRunBuilder). Side-by-side ledger for two runs.
+  Produces console snapshot tables at peak-v / stagnation / end-of-run plus
+  3-page PDF. Tracks: KE inward, KE outward, plasma thermal (ideal gas
+  (3/2)(P_i+P_e)V), in-grid radiation (3 P_rad_true V), absorbed laser,
+  fusion released (split into alpha-deposited and neutron-escaped), direct
+  rad escape from EXODUS boundary tally. Closure: absorbed + alpha_deposited
+  = Σ in-plasma channels + rad_boundary + residual_gap. Residual <1% for
+  all tested runs.
+
+- **data_builder** now loads boundary tallies:
+  - `radiation_energy_at_boundary_cum` ← `TimeIntRadiationLossAtBds` (J)
+  - `particle_energy_escaped_cum` ← `particle_time_int_energy_escaped` (J)
+    Note: particle escape variable does NOT include neutrons; for DT
+    neutron escape we use the 14.1/17.6 fractional split. Logic prefers
+    direct tally only when it's >30% of fusion (sanity check).
+
+- **rhw_parser** cleanups:
+  - Legacy `_parse_flux_limiter` retired (now thin wrapper over
+    per-region parser; no more "FL varies" UserWarning).
+  - `_parse_drive_temp_table` trims sentinel times (Helios pads with
+    t≈1e18 s meaning "extend last value forever"). Anything ≥ 1 ms dropped.
+
+- **helios_exodus_variable_reference.md** gained a "Boundary-tally and
+  global cumulative quantities" section documenting both currently-wired
+  variables and an expansion wishlist (FreqIntgRadEnLossRmax/Rmin per-boundary
+  split, EnTotRadiation cross-check on in-grid U_rad, EnExchEleToRadTimeIntg
+  e→rad coupling, HeatFluxAtRegionBdEle/Ion for per-region accounting,
+  TimeIntFusionProd_* alpha cross-check).
+
+### Key scientific findings (energy-ledger derived)
+
+After all patches the ledger closes to <1% residual for VI_6 and all HDD26
+variants. Direct measurements (not inferred):
+
+| Channel (peak v, % of absorbed) | VI_6 | lrm1 | lrm2 | lrm4 |
+|---|---|---|---|---|
+| Absorbed (kJ)                   | 3075 | 1537 | 1571 | 1580 |
+| KE inward                       | 10.1% | 14.8% | 14.9% | 15.2% |
+| KE outward (blowoff)            | 51.3% | 0.0% | 0.0% | 0.0% |
+| Plasma thermal                  | 32.4% | 57.5% | 56.1% | 55.6% |
+| Rad escape (boundary tally)     | 5.5% | 26.7% | 28.0% | 28.2% |
+| Residual closure                | 0.6% | 0.9% | 0.9% | 0.9% |
+
+- HDD radiates 5× harder per unit absorbed than VI_6. The 27–28% rad
+  escape is structurally floored for current target architecture +
+  laser geometry; FL changes within 0.02–0.04 don't move it.
+- HDD's hydro efficiency per absorbed (15%) is actually BETTER than
+  VI_6's (10%). The HDD residual against published is in the absorbed-
+  energy budget (50% vs 97%), not in coupling-efficiency.
+- Energy ledger does NOT see mass-partitioning changes — same shell KE
+  and v_peak with very different cold-fuel composition shows up as
+  identical ledger but very different implosion physics.
+- Beam 3 in HDD26 (fires 14.5–15.6 ns) contributes nothing to the
+  implosion in 1D — fires after peak velocity. Geometry-fixing it
+  (focus -10.22 → -0.22) changed absorbed energy +5% with zero change
+  to any implosion metric.
+- Indirect-drive prepulse is NOT the gap: HDD has hotter prepulse
+  (130 eV / 2 ns) than VI_6 (104 eV / 2 ns). Hypothesis retired.
+
+### Milestone: HDD26 lrm4 calibration state
+
+lrm4 = `HDD26_DTI40_1ns130_FL04_lrm4_nb`. First HDD config to match
+Imploded DT and ⟨T_hs⟩ to published within error bars.
+
+| Metric | lrm4 | Published | Status |
+|---|---|---|---|
+| Imploded DT (mg) | 2.91 | 3.00 ± 0.15 | ✓ |
+| ⟨T_hs⟩ (keV) | 4.62 | 4.80 ± 0.2 | ✓ |
+| In-flight KE (kJ) | 239 | 300 ± 15 | -20% |
+| v_peak (km/s) | 503 | 410 ± 20 | +23% |
+| Adiabat | 2.12 | 6.0 ± 0.5 | -65% |
+| ρR_cf (g/cm²) | 0.62 | 2.06 ± 0.10 | -70% |
+| ⟨P_hs⟩ (Gbar) | 42 | 212 ± 11 | -80% |
+| Frac absorbed (%) | 50.1 | 97 ± 5 | -48% |
+| Yield (MJ) | 0.057 | 0.6 | -90% |
+
+Configuration:
+- FL: gas=0.06, DT ice/foam/CD=0.04
+- Beam 1 spot=0.25 cm, beam 2 spot=0.22, beam 3 spot=0.18, all focus +0.22, cone 1.0°
+- Pulse: foot 180 TW (4.5–10.3 ns), peak 614 TW (10.31–11.7 ns)
+- Prepulse: 130 eV peak, 0–2 ns
+- DT ice 40 µm
+
+lrm progression (held FL=0.04 for lrm2/lrm4, varied spot):
+- lrm1 (FL=0.02, spot 0.30): over-thermal-trap, cold fuel preserved but poor compression
+- lrm2 (FL=0.04, spot 0.22): over-ablation, hot spot good but cold fuel destroyed (0.77 mg)
+- lrm4 (FL=0.04, spot 0.25): SWEET SPOT — cold fuel preserved AND good compression
+
+### Remaining residuals decompose to two independent levers
+
+1. **Absorbed-fraction deficit (50% vs 97%)** — geometric beam-target overlap.
+   Candidates: spot=0.27/0.28 (further into intermediate), cone=0.5°
+   (more parallel beam to handle long focal column).
+2. **Adiabat too low (2.1 vs 6.0)** — independent of beam geometry; needs
+   prepulse + foot work. Candidates: Tr 130 → 150 eV, prepulse duration
+   2.0 → 2.5 ns, foot power 180 → 220 TW.
+
+Cascading residuals (P_hs, ρR_cf, yield) will follow from these two.
+P_hs scales like ρR_cf², so closing α and ρR_cf is the leverage.
+
+### Limitations of the energy-ledger diagnostic
+
+- Sees energy distribution, NOT mass partitioning. lrm1→lrm2 and
+  lrm2→lrm4 had ~zero shift in ledger but very different cold-fuel
+  composition.
+- Stagnation snapshot falls back to t_end when data.stag_time isn't
+  set on the loaded ICFRunData (we don't run icf_analysis). For lrm2
+  this samples at 16.0 ns instead of actual 14.8 ns — visible in
+  output but doesn't break peak-v interpretation.
+- Ideal-gas plasma thermal slightly overstates in dense ignited
+  states (VI_6 stagnation residual = -0.8%, consistent with missed
+  EOS-internal energy). Tolerable; could refine with EOS-derived U.
+- particle_time_int_energy_escaped tally semantically ambiguous;
+  not used for neutron escape (fractional 14.1/17.6 split used instead).
+
+### Open items / minor bugs
+
+- lrm2 fusion-yield discrepancy: EXODUS dt_neutron_count gives 48 kJ
+  but summary reports 81 kJ. May be stale EXODUS file or different
+  yield-computation path in icf_analysis. Worth checking which is
+  authoritative.
+- Filename convention drift: lrm2_nb and lrm4_nb have Burn ON in rhw.
+  Either rename files or document the convention.
+
+  **PDD anchor (validated): PDD_20_s016**
+Geometry: cone 20°, spot 0.16 cm, f=0.06
+Per May 2026 briefing — wins on every priority-1/2 metric:
+  Yield:        59.1 MJ        (cluster 87.4, −32%)
+  Neutron:      2.10×10¹⁹      (cluster 3.10, −32%)
+  Peak v:       463 km/s       (cluster 470, −1.5%)
+  Bang:         13.65 ns       (LILAC 13.5, +1%)
+  HS ρR:        ~0.11          (1D Helios universal residual)
+  ⟨ρR_cf⟩:      0.67 g/cm²     (cluster 1.10, geometry-independent)
+  CR_max:       31.7           (cluster 29±3, ✓)
+  Adiabat:      1.05           (cluster 3.0±0.3, low — 1D residual)
+  Frac abs:     83.9%          (cluster 65±9.3%, slightly over)
+  T_hs/P_hs:    overshoot (de-prioritized — Helios burn physics may differ
+                from LILAC/xRAGE/HYDRA)
+
+Note: prior CLAUDE.md / memory references to "PDD_26b" as the calibrated
+state refer to an April 2026 vintage that was superseded by the s016
+calibration in May 2026. PDD_20_s016 is the current authoritative anchor.
+
+## Session 2026-05-12 — Energy-balance diagnostic, HDD lrm4 milestone, PDD anchor correction
+
+### PDD anchor (validated): PDD_20_s016 — supersedes PDD_26b
+Geometry: cone 20°, spot 0.16 cm, f=0.06 (May 2026 briefing)
+Wins on every priority-1/2 metric vs LILAC/xRAGE/HYDRA cluster:
+  Yield 59.1 MJ (cluster 87.4, -32%) | Neutron 2.10e19 (-32%)
+  Peak v 463 km/s (-1.5%) | Bang 13.65 ns (+1%)
+  HS ρR ~0.11 | ρR_cf 0.67 g/cm² (cluster 1.10) | CR_max 31.7 (cluster 29±3) ✓
+  Adiabat 1.05 (cluster 3.0±0.3, low — 1D residual)
+  Frac abs 83.9% (cluster 65±9.3%, slightly over)
+  T_hs/P_hs overshoot — deprioritized; Helios burn physics may differ from LILAC.
+NOTE: HS ρR ~0.11 and ρR_cf 0.67 stated as geometry-independent 1D Helios
+residuals — implies a structural 1D floor below cluster values. Worth
+cross-checking against HDD residuals.
+
+### HDD26 lrm4 milestone
+File: HDD26_DTI40_1ns130_FL04_lrm4_nb
+Path: ~/Sims/Xcimer/HDD_26/HDD26_DTI40_1ns130_FL04_lrm4_nb/
+Config: FL gas=0.06, ice/foam/CD=0.04. Beam 1 spot=0.25, beam 2 spot=0.22,
+beam 3 spot=0.18, all focus +0.22, cone 1.0°. Pulse foot 180 TW (4.5-10.3),
+peak 614 TW (10.31-11.7). Prepulse 130 eV / 0-2 ns. DT ice 40 µm.
+
+FIRST HDD config to match published within error bars:
+  Imploded DT: 2.91 mg vs 3.00 ± 0.15 ✓
+  ⟨T_hs⟩: 4.62 keV vs 4.8 ± 0.2 ✓
+
+Remaining residuals:
+  v_peak 503 vs 410 (+23%)
+  Adiabat 2.12 vs 6.0 (-65%) — independent of beam geometry
+  ρR_cf 0.62 vs 2.06 (-70%)
+  ⟨P_hs⟩ 42 vs 212 Gbar (-80%)
+  Frac absorbed 50% vs 97% (-48%)
+  Yield 0.057 vs 0.6 MJ (-90%)
+
+Two independent levers for remaining work:
+  1. Absorbed-fraction (geometry — spot/cone/focus)
+  2. Adiabat (prepulse Tr, prepulse duration, foot power)
+
+### Energy-balance diagnostic (examples/energy_balance_diagnostic.py)
+Standalone side-by-side ledger using build_run_data (not ICFRunBuilder).
+Tracked channels: KE inward, KE outward, plasma thermal (ideal-gas
+(3/2)(P_i+P_e)V), in-grid radiation (3·P_rad_true·V — uses
+rad_pressure_true not 3-component rad_pressure), absorbed laser
+(cumulative), fusion released (split into alpha-deposited + neutron-escaped
+via 14.1/17.6 fractional split since EXODUS particle_time_int_energy_escaped
+does NOT include neutrons), direct rad escape from boundary tally.
+Closure equation: E_absorbed + E_alpha = Σ_in-plasma + E_rad_boundary + residual.
+Closes to <1% residual across VI_6 and all HDD26 variants. Runs as:
+  python3 examples/energy_balance_diagnostic.py <run1_base> <run2_base>
+Output: console snapshot tables at peak-v/stag/end + 3-page PDF.
+
+KNOWN LIMITATIONS:
+- Sees energy distribution, NOT mass partitioning. lrm1→lrm2→lrm4 had
+  ~zero shift in peak-v ledger but very different cold-fuel composition.
+- Stagnation snapshot falls back to t_end when data.stag_time isn't on
+  loaded ICFRunData. For runs with stag < t_end (e.g. lrm2 stag=14.8,
+  t_end=16.0), snapshot is mislabeled. Peak-v snapshot is correct.
+- Plasma thermal uses ideal gas — slightly overstates in dense ignited
+  states (VI_6 stag residual -0.8%, consistent with EOS-internal miss).
+
+### Key HDD vs VI_6 ledger findings (energy distribution at peak v, % of absorbed)
+                                VI_6   lrm1   lrm2   lrm4
+Absorbed (kJ)                   3075   1537   1571   1580
+KE inward                       10.1%  14.8%  14.9%  15.2%
+KE outward (blowoff)            51.3%   0.0%   0.0%   0.0%
+Plasma thermal                  32.4%  57.5%  56.1%  55.6%
+Rad escape (boundary, measured)  5.5%  26.7%  28.0%  28.2%
+Residual closure                 0.6%   0.9%   0.9%   0.9%
+
+- HDD hydro efficiency per absorbed (15%) is BETTER than VI_6 (10%).
+- HDD's residual against published is in ABSORBED ENERGY (50% vs 97%),
+  not coupling-efficiency.
+- HDD corona radiates 5× harder per absorbed than VI_6's. Structural
+  floor for current target+geometry+FL class — FL changes within
+  0.02-0.04 don't move it.
+- Beam 3 contributes nothing in 1D (fires 14.5-15.6 ns, after peak-v).
+- Indirect drive prepulse NOT the lever — HDD has 130 eV vs VI_6's 104 eV.
+
+### Code changes this session (all committed/pushed)
+- data_builder loads radiation_energy_at_boundary_cum and
+  particle_energy_escaped_cum from EXODUS.
+- rhw_parser: legacy _parse_flux_limiter retired (thin wrapper);
+  drive-temperature sentinel filter (trims t ≥ 1 ms).
+- helios_exodus_variable_reference.md: new "Boundary-tally" section
+  with wishlist of future accounting variables.
+- examples/energy_balance_diagnostic.py: new standalone tool.
