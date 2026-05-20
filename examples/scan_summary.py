@@ -51,22 +51,24 @@ _RE_SCALAR = re.compile(
 )
 
 # Scalar key -> list of regex patterns matched against summary lines.
-# First match wins. The summary text is the public API here; keep these
-# patterns aligned with icf_output.py when adding new diagnostics.
+# First match wins. The summary text is the public API here; labels are
+# from icf_output.py (_metric helper writes "  <label:36s> <value> <unit>").
+# When the summary format changes, update these patterns.
 SCALAR_PATTERNS: Dict[str, List[re.Pattern]] = {
-    'peak_velocity_kms':    [re.compile(r'Peak implosion velocity.*?(\d+\.\d+)\s*km/s')],
-    'adiabat':              [re.compile(r'Adiabat \(mass-averaged.*?(\d+\.\d+)'),
-                             re.compile(r'⟨α⟩.*?(\d+\.\d+)')],
-    'hs_pressure_ignition': [re.compile(r'Hot-spot pressure at ignition.*?(\d+\.\d+)\s*Gbar')],
-    'P_abl_peak_Gbar':      [re.compile(r'Peak ablation pressure.*?(\d+\.\d+)\s*Gbar')],
+    'peak_velocity_kms':    [re.compile(r'Peak implosion velocity\s+(\d+\.\d+)\s*km/s')],
+    'adiabat':              [re.compile(r'Mass-avg adiabat \(peak-vel\)\s+(\d+\.\d+)')],
+    'base_adiabat':         [re.compile(r'Base adiabat \(at breakout\)\s+(\d+\.\d+)')],
+    'hs_pressure_ignition': [re.compile(r'HS pressure at ignition\s+(\d+\.\d+)\s*Gbar')],
+    'hs_radius_ignition_um':[re.compile(r'HS radius at ignition\s+(\d+\.\d+)')],
     'peak_total_rhoR':      [re.compile(r'Peak total ρR\s+(\d+\.\d+)')],
     'peak_hs_rhoR_T_mask':  [re.compile(r'Peak HS ρR \(T>4\.5 keV\)\s+(\d+\.\d+)')],
-    'yield_MJ':             [re.compile(r'Yield.*?(\d+\.\d+)\s*MJ'),
+    'hot_spot_pressure':    [re.compile(r'Hot-spot pressure\s+(\d+\.\d+)\s*Gbar')],
+    'yield_MJ':             [re.compile(r'Yield\s+(\d+\.\d+)\s*MJ'),
                              re.compile(r'Fusion energy output.*?(\d+\.\d+)\s*MJ')],
-    'gain':                 [re.compile(r'Target gain.*?(\d+\.\d+)'),
-                             re.compile(r'Fusion Gain.*?(\d+\.\d+)')],
-    'stag_time_ns':         [re.compile(r'Stagnation time.*?(\d+\.\d+)\s*ns')],
-    'bang_time_ns':         [re.compile(r'Bang time.*?(\d+\.\d+)\s*ns')],
+    'gain':                 [re.compile(r'Target gain\s+(\d+\.\d+)'),
+                             re.compile(r'Fusion Gain\s+(\d+\.\d+)')],
+    'stag_time_ns':         [re.compile(r'Stagnation time\s+(\d+\.\d+)\s*ns')],
+    'bang_time_ns':         [re.compile(r'Bang time\s+(\d+\.\d+)\s*ns')],
     't_foot_shock_ns':      [],  # filled from SHOCK TRAIN block below
     't_ramp_shock_ns':      [],
     't_peak_shock_ns':      [],
@@ -199,8 +201,9 @@ def main(argv=None):
         'run',
         't_foot_shock_ns', 't_ramp_shock_ns', 't_peak_shock_ns',
         'peak_total_rhoR', 'peak_hs_rhoR_T_mask',
-        'hs_pressure_ignition', 'P_abl_peak_Gbar',
-        'peak_velocity_kms', 'adiabat',
+        'hs_pressure_ignition', 'hs_radius_ignition_um',
+        'hot_spot_pressure',
+        'peak_velocity_kms', 'adiabat', 'base_adiabat',
         'yield_MJ', 'gain',
         'stag_time_ns', 'bang_time_ns',
         'distance_to_lilac',
