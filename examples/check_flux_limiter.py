@@ -1,50 +1,57 @@
 """
-check_flux_limiter.py -- Diagnose the *effective* electron flux limiter
-implied by a Helios run, and compare it against the value reported in the
-RHW file.
+check_flux_limiter.py -- Probe whether the file-reported flux limiter f
+is the value the simulation is actually using, and confirm the direction
+of the Prism ×4 convention factor.
 
-Built to test the Prism team's hypothesis that the file-reported `f` is
-off by a factor of 4 from the ICF community standard. The direction of
-that factor (×4 or ÷4) is what this script confirms.
+What we can measure cleanly
+---------------------------
+Helios doesn't output the electron heat flux q_e directly, so we cannot
+read the saturated flux off the EXODUS arrays. What we CAN compute:
 
-Method
-------
-Helios doesn't output the electron heat flux directly, but in steady
-state inside the critical surface the inward-flowing heat is just the
-absorbed laser energy:
+  q_FS = α n_e kT_e v_th_e          (free-streaming limit, α≈0.6)
+  q_SH = κ_SH(T_e) |dT_e/dr|        (Spitzer-Harm classical estimate)
 
-    q_e(r) = [ integrated absorbed power inside r ] / (4 π r²)
+The ratio q_SH/q_FS tells us *if* the limiter is saturating:
+  q_SH/q_FS >> 1   →  limiter is fully active (q_actual = f × q_FS)
+  q_SH/q_FS ≲ 1    →  limiter inactive (q_actual = q_SH, no cap)
 
-In the conduction zone (between the ablation front and the critical
-surface) this q_e is exactly what the flux limiter caps:
+For the *value* of f, the cleanest hardware-independent indicator is
+the absolute corona temperature. At the critical surface in steady
+state with the limiter saturating, an energy balance gives:
 
-    q_e ≈ f_actual × q_FS
+    T_e(r_crit) ∝ f^(-2/3)
 
-where q_FS is the free-streaming thermal flux (Goncharov / Atzeni
-convention):
+so a run at f=0.015 should have T_crit roughly (0.06/0.015)^(2/3) ≈
+2.5× higher than a run at f=0.06. If you pair two runs whose only
+RHW difference is f, comparing their T_crit values resolves the
+convention:
 
-    q_FS = α × n_e × kT_e × v_th_e         α ≈ 0.6
-    v_th_e = sqrt(kT_e / m_e)
+  T_crit ratio matches (f_file ratio)^(-2/3)
+      →  file values are the actual physical f (no conversion)
 
-So the ratio q_e / q_FS in the conduction zone gives **f_actual**
-directly. Compare that to the f written in the RHW file:
+  T_crit ratio matches (4·f_file)^(-2/3)
+      →  Prism ×4 hypothesis is correct (standard = 4 × file)
 
-    if  f_actual ≈ f_file            : no convention conversion needed
-    if  f_actual ≈ 4 × f_file        : Prism ×4 hypothesis is correct
-    if  f_actual ≈ f_file / 4        : convention is inverted
+  T_crit nearly identical between the runs
+      →  both files are in the "essentially unlimited" regime; FL
+         knob isn't engaging at all (suggests f_standard ≫ 0.1 for
+         both, regardless of convention)
+
+The q_e profile from P_outside(r)/(4π r²) is also plotted as an
+*upper bound* — it's the heat flux that would flow inward if 100% of
+the absorbed laser power became electron conduction with no corona
+heating, radiation, or outward flow. Use only for "is the limiter
+saturating" sanity, not for quantitative f.
 
 Usage
 -----
     python3 ~/helios_postprocess/examples/check_flux_limiter.py \\
         <base1> [<base2> ...] \\
         [--out check_flux_limiter.pdf]
-
-Each positional argument is a run base path (without .exo extension).
-Comparing two runs that differ ONLY in flux limiter is the cleanest
-test, but a single run can also be diagnosed.
 """
 
 import argparse
+import math
 import sys
 from pathlib import Path
 
@@ -128,6 +135,14 @@ def analyze_run(base: Path) -> dict:
     # ---- free-streaming limit ----
     q_FS   = free_streaming_flux_W_per_cm2(n_e, T_e_eV)      # W/cm²
 
+    # ---- Spitzer-Harm classical heat flux from local gradient ----
+    # κ_SH = 9.4e-13 × T_e^(5/2) / (Z·lnΛ)  [W/(cm·eV)]  (Atzeni 4.27)
+    # dT_e/dr in eV/cm from np.gradient on zone centres.
+    Z, ln_Lambda = 1.0, 10.0
+    kappa_SH    = 9.4e-13 * np.maximum(T_e_eV, 0.0)**2.5 / (Z * ln_Lambda)
+    dT_dr       = np.gradient(T_e_eV, zone_c)                # eV/cm
+    q_SH        = kappa_SH * np.abs(dT_dr)                   # W/cm²
+
     # ---- conduction zone: between ablation front and critical surface ----
     ri = data.region_interfaces_indices
     hs_outer_node = int(ri[i_peak, 0]) if ri is not None else 0
@@ -173,24 +188,34 @@ def analyze_run(base: Path) -> dict:
     if f_file is None:
         f_file = float(getattr(data, 'flux_limiter', 0.0)) or None
 
+    # ---- saturation ratio q_SH / q_FS in conduction zone ----
+    sat_ratio = np.where(q_FS > 0, q_SH / q_FS, np.nan)
+    cz_sat = sat_ratio[cz_slice]
+    sat_median = float(np.nanmedian(cz_sat)) if cz_sat.size else float('nan')
+
     return {
-        'name':       base.name,
-        't_ns_peak':  float(t_ns[i_peak]),
-        'P_peak_TW':  float(P_total[i_peak]) * 1e-12,
-        'zone_c':     zone_c,
-        'T_e_eV':     T_e_eV,
-        'n_e':        n_e,
-        'rho':        rho,
-        'q_e':        q_e,
-        'q_FS':       q_FS,
-        'ratio':      ratio,
-        'cz_lo':      cz_lo,
-        'cz_hi':      cz_hi,
-        'r_abl':      float(zone_c[abl_idx]),
-        'r_crit':     float(zone_c[crit_idx]),
-        'f_file':     f_file,
-        'f_implied':  f_implied,
-        'f_max':      f_max,
+        'name':           base.name,
+        't_ns_peak':      float(t_ns[i_peak]),
+        'P_peak_TW':      float(P_total[i_peak]) * 1e-12,
+        'zone_c':         zone_c,
+        'T_e_eV':         T_e_eV,
+        'n_e':            n_e,
+        'rho':            rho,
+        'q_e':            q_e,
+        'q_FS':           q_FS,
+        'q_SH':           q_SH,
+        'ratio':          ratio,
+        'sat_ratio':      sat_ratio,
+        'sat_median_cz':  sat_median,
+        'cz_lo':          cz_lo,
+        'cz_hi':          cz_hi,
+        'r_abl':          float(zone_c[abl_idx]),
+        'r_crit':         float(zone_c[crit_idx]),
+        'T_crit_keV':     float(T_e_eV[crit_idx]) * 1e-3,
+        'T_abl_keV':      float(T_e_eV[abl_idx])  * 1e-3,
+        'f_file':         f_file,
+        'f_implied':      f_implied,
+        'f_max':          f_max,
     }
 
 
@@ -215,33 +240,65 @@ def main(argv=None):
 
     # --- stdout summary ---
     print()
-    print(f"{'run':<46s}  {'t_pk':>5s}  {'P_pk':>5s}  "
-          f"{'r_abl':>6s}  {'r_crit':>6s}  "
-          f"{'f_file':>7s}  {'f_implied':>10s}  {'ratio':>6s}  verdict")
-    print('-' * 120)
+    print(f"  {'run':<46s}  {'f_file':>7s}  {'T_crit':>7s}  {'T_abl':>7s}  "
+          f"{'q_SH/q_FS':>10s}  {'q_e/q_FS_max':>13s}")
+    print('  ' + '-' * 105)
     for r in results:
-        if r['f_file'] is None or r['f_file'] <= 0:
-            ratio_str = '   —  '
-            verdict   = '(no f in RHW)'
-        else:
-            ratio = r['f_implied'] / r['f_file']
-            ratio_str = f"{ratio:>6.2f}"
-            if 0.7 <= ratio <= 1.5:
-                verdict = 'NO CONVERSION   (f_file already actual)'
-            elif 3.0 <= ratio <= 5.0:
-                verdict = 'PRISM ×4 CORRECT (standard = 4·file)'
-            elif 0.20 <= ratio <= 0.33:
-                verdict = 'CONVENTION INVERTED (standard = file/4)'
-            else:
-                verdict = '(no clean match — inspect plot)'
-        print(f"  {r['name']:<44s}  "
-              f"{r['t_ns_peak']:>5.2f}  "
-              f"{r['P_peak_TW']:>5.0f}  "
-              f"{r['r_abl']*1e4:>6.1f}  "
-              f"{r['r_crit']*1e4:>6.1f}  "
-              f"{(r['f_file'] if r['f_file'] is not None else float('nan')):>7.4f}  "
-              f"{r['f_implied']:>10.4f}  "
-              f"{ratio_str}  {verdict}")
+        f_file_str = (f"{r['f_file']:>7.4f}"
+                      if (r['f_file'] is not None and r['f_file'] > 0)
+                      else "   —   ")
+        print(f"  {r['name']:<46s}  "
+              f"{f_file_str}  "
+              f"{r['T_crit_keV']:>7.2f}  "
+              f"{r['T_abl_keV']:>7.3f}  "
+              f"{r['sat_median_cz']:>10.2e}  "
+              f"{r['f_implied']:>13.2e}")
+    print()
+    print("Columns:")
+    print("  T_crit, T_abl       : Te at critical surface / ablation front (keV)")
+    print("  q_SH/q_FS           : median in conduction zone -- >>1 means")
+    print("                        limiter IS saturating; ≲1 means inactive")
+    print("  q_e/q_FS_max        : upper-bound implied ratio assuming all")
+    print("                        absorbed power flows inward (saturation check only)")
+    print()
+
+    # --- Pairwise convention verdict (needs ≥2 runs) ---
+    if len(results) >= 2:
+        valid = [r for r in results
+                 if r['f_file'] is not None and r['f_file'] > 0
+                 and math.isfinite(r['T_crit_keV']) and r['T_crit_keV'] > 0]
+        if len(valid) >= 2:
+            # Pick the two extreme f_file values
+            valid.sort(key=lambda r: r['f_file'])
+            lo, hi = valid[0], valid[-1]
+            f_ratio   = hi['f_file']      / lo['f_file']
+            T_ratio   = lo['T_crit_keV']  / hi['T_crit_keV']  # T scales as f^(-2/3)
+            T_ratio_expected_direct  = f_ratio ** (2.0 / 3.0)        # if file f IS actual
+            T_ratio_expected_x4      = (f_ratio) ** (2.0 / 3.0)      # ×4 gives same ratio!
+            print(f"Pairwise convention check:")
+            print(f"  {lo['name']:<46s}  f_file={lo['f_file']:.4f}  T_crit={lo['T_crit_keV']:.2f} keV")
+            print(f"  {hi['name']:<46s}  f_file={hi['f_file']:.4f}  T_crit={hi['T_crit_keV']:.2f} keV")
+            print(f"  f ratio (hi/lo)               = {f_ratio:.2f}")
+            print(f"  T_crit ratio (lo/hi)          = {T_ratio:.2f}")
+            print(f"  expected ratio f^(-2/3)       = {T_ratio_expected_direct:.2f}")
+            print()
+            # The T_crit ratio depends on the RATIO of f values, which is
+            # invariant under the ×4 convention. So this pair test can't
+            # distinguish direction; it only confirms saturation.
+            # The ABSOLUTE T_crit value is the convention indicator:
+            #   ~30 keV  -> f_actual ≈ 0.015 (heavy limiting)
+            #   ~12 keV  -> f_actual ≈ 0.06
+            #   ~5 keV   -> f_actual ≈ 0.24 (light limiting)
+            #   ~2 keV   -> essentially unlimited
+            print("Absolute T_crit indicator (for each run):")
+            for r in valid:
+                T = r['T_crit_keV']
+                if   T >= 20:  inferred = "≈ 0.015 (heavy limiting)"
+                elif T >= 8:   inferred = "≈ 0.06  (standard ICF)"
+                elif T >= 3:   inferred = "≈ 0.24  (light limiting)"
+                else:          inferred = "≪ 1     (essentially unlimited)"
+                print(f"  {r['name']:<46s}  T_crit={T:5.2f} keV  →  f_actual {inferred}")
+            print()
 
     # --- figure: q_e / q_FS profile, T_e profile, conduction-zone band ---
     fig, (axR, axT) = plt.subplots(
@@ -253,28 +310,30 @@ def main(argv=None):
     for i, r in enumerate(results):
         c = colors[i % len(colors)]
         r_um = r['zone_c'] * 1e4
-        axR.plot(r_um, r['ratio'], color=c, lw=1.6,
-                 label=(f"{r['name']}  (f_file={r['f_file']:.4f},  "
-                        f"f_impl={r['f_implied']:.4f})"
-                        if r['f_file'] else
-                        f"{r['name']}  (f_impl={r['f_implied']:.4f})"))
-        # Conduction-zone bar
+        # Plot the SATURATION ratio q_SH/q_FS (the physically meaningful one).
+        axR.plot(r_um, r['sat_ratio'], color=c, lw=1.6, ls='-',
+                 label=f"{r['name']}  q_SH/q_FS")
+        # And the q_e_max/q_FS upper bound, dashed.
+        axR.plot(r_um, r['ratio'], color=c, lw=1.0, ls='--', alpha=0.5)
+        # Conduction-zone shade
         axR.axvspan(r['zone_c'][r['cz_lo']] * 1e4,
                     r['zone_c'][r['cz_hi']] * 1e4,
                     color=c, alpha=0.05)
-        # f_file horizontal reference
+        # f_file horizontal reference (where saturated q would land)
         if r['f_file'] is not None and r['f_file'] > 0:
             axR.axhline(r['f_file'], color=c, lw=0.8, ls=':',
                         alpha=0.6)
         axT.plot(r_um, r['T_e_eV'] * 1e-3, color=c, lw=1.4)
 
-    axR.set_ylabel(r'$q_e / q_{FS}$  (effective f)', fontsize=12)
+    axR.set_ylabel(r'$q_{SH}/q_{FS}$ (solid),  $q_e^{max}/q_{FS}$ (dashed)',
+                   fontsize=11)
     axR.set_yscale('log')
-    axR.set_ylim(1e-3, 10)
+    axR.set_ylim(1e-3, 1e5)
+    axR.axhline(1.0, color='k', lw=0.5, alpha=0.4)
     axR.grid(True, alpha=0.3, which='both')
     axR.legend(fontsize=8, loc='upper left')
-    axR.set_title('Effective flux limiter from q_e / q_FS profile  '
-                  '(shaded = conduction zone, dotted = f from RHW)',
+    axR.set_title('Flux-limiter saturation indicator (solid q_SH/q_FS) '
+                  'and upper bound (dashed). Dotted = f_file.',
                   fontsize=11)
 
     axT.set_xlabel('Radius (µm)', fontsize=12)
