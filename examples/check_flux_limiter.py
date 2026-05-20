@@ -74,8 +74,20 @@ def free_streaming_flux_W_per_cm2(n_e_cm3: np.ndarray, T_e_eV: np.ndarray) -> np
 
 def analyze_run(base: Path) -> dict:
     """Return a diagnostic dict for one run."""
-    run  = HeliosRun(str(base) + ".exo")
-    data = build_run_data(run)
+    run = HeliosRun(str(base) + ".exo")
+    # Load the RHW so data.flux_limiter_per_region / data.flux_limiter get
+    # populated. run_analysis.py does this in two steps; mirror that.
+    rhw_config = None
+    rhw_path = Path(str(base) + ".rhw")
+    if rhw_path.exists():
+        try:
+            from helios_postprocess.rhw_parser import load_rhw_configuration
+            rhw_config = load_rhw_configuration(rhw_path)
+        except Exception as e:
+            print(f"  WARNING: RHW parse failed for {base.name}: {e}",
+                  file=sys.stderr)
+    data = build_run_data(run, time_unit='s', rhw_config=rhw_config)
+    run.close()
 
     # ---- time and laser deposition geometry ----
     t_raw = np.asarray(data.time)
@@ -96,18 +108,22 @@ def analyze_run(base: Path) -> dict:
     n_e    = np.asarray(data.electron_density[i_peak])
     rho    = np.asarray(data.mass_density[i_peak])
 
-    # ---- Cumulative absorbed power inside each radius ----
-    # LaserPwrSrc is W/cm³ per zone. Multiply by zone volume (spherical
-    # shell) and cumulate from r=0 outward.
+    # ---- Cumulative absorbed power outside each radius ----
+    # LaserPwrSrc is W/cm³ per zone. The laser deposits OUTSIDE the
+    # conduction zone (at / near the critical surface). The heat flowing
+    # INWARD through a radius r in the conduction zone equals the total
+    # power absorbed OUTSIDE that radius (steady-state spherical
+    # conservation with no inner sources/sinks):
+    #     q_e(r) = [ P_absorbed at r' > r ] / (4 π r²)
     P_src = np.asarray(data.laser_power_source[i_peak])
     dV    = (4.0 / 3.0) * np.pi * (zb[1:]**3 - zb[:-1]**3)   # cm³ per zone
     P_per_zone = P_src * dV                                  # W per zone
     P_inside   = np.cumsum(P_per_zone)                       # W absorbed inside r
+    P_outside  = P_inside[-1] - P_inside                     # W absorbed outside r
 
     # ---- implied inward heat flux ----
-    # q_e(r) = P_absorbed(<r) / (4 π r²)
     safe_r = np.maximum(zone_c, 1e-8)
-    q_e    = P_inside / (4.0 * np.pi * safe_r**2)            # W/cm²
+    q_e    = P_outside / (4.0 * np.pi * safe_r**2)           # W/cm²
 
     # ---- free-streaming limit ----
     q_FS   = free_streaming_flux_W_per_cm2(n_e, T_e_eV)      # W/cm²
