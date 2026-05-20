@@ -183,12 +183,54 @@ class ICFAnalyzer:
                 total_laser = np.sum(led, axis=1)          # sum over zones
             else:
                 total_laser = led                           # already per-timestep
-            self.data.laser_energy = np.max(total_laser) * 1e-6   # J → MJ
-            logger.info(f"Laser energy delivered: {self.data.laser_energy:.3f} MJ")
+            # Legacy attribute -- max(absorbed) in MJ, kept for backward
+            # compat with downstream (target_gain uses this denominator).
+            self.data.laser_energy = float(np.max(total_laser)) * 1e-6
+            self.data.laser_energy_absorbed_MJ = self.data.laser_energy
+            logger.info(f"Laser energy absorbed: {self.data.laser_energy:.3f} MJ "
+                        f"(legacy 'laser_energy' field)")
         else:
             self.data.laser_energy = 0.0
-            logger.info("No laser energy data available")
-        
+            self.data.laser_energy_absorbed_MJ = 0.0
+            logger.info("No laser deposition data available")
+
+        # ── Coupling diagnostics: E_abs(t) / E_del(t) ──
+        # Uses Helios's own cumulative integrals (EnLaserDepositedTimeIntg
+        # and LaserEnDeliveredTimeInt), which share a time grid so the
+        # ratio is self-consistent at every step (no python-side cumtrapz
+        # discretization noise).
+        E_del = self.data.laser_energy_delivered_cum
+        if E_del is not None and self.data.laser_energy_deposited is not None:
+            E_del = np.asarray(E_del)
+            if E_del.ndim == 2:
+                E_del = E_del.sum(axis=1)
+            E_abs = (self.data.laser_energy_deposited.sum(axis=1)
+                     if self.data.laser_energy_deposited.ndim == 2
+                     else self.data.laser_energy_deposited)
+            E_del_max = float(np.max(E_del))
+            self.data.laser_energy_delivered_MJ = E_del_max * 1e-6
+            if E_del_max > 0:
+                self.data.eff_avg_coupling_pct = (
+                    100.0 * float(np.max(E_abs)) / E_del_max
+                )
+                # Peak instantaneous coupling fraction after a 0.5 ns warmup
+                # (pre-laser timesteps and the IC transient produce
+                # noise-dominated 0/0 in this ratio).
+                t_ns = (self.data.time
+                        if float(np.max(self.data.time)) > 1e-3
+                        else self.data.time * 1e9)
+                mask = (t_ns > 0.5) & (E_del > 1e-3)
+                if np.any(mask):
+                    inst = np.where(mask, E_abs / np.maximum(E_del, 1e-12), 0.0)
+                    self.data.eff_peak_coupling_pct = 100.0 * float(np.max(inst))
+            logger.info(
+                f"Laser energy delivered: {self.data.laser_energy_delivered_MJ:.3f} MJ; "
+                f"coupling avg = {self.data.eff_avg_coupling_pct:.1f}%, "
+                f"peak = {self.data.eff_peak_coupling_pct:.1f}%"
+            )
+        elif E_del is None:
+            logger.info("LaserEnDeliveredTimeInt absent — coupling diagnostics skipped.")
+
         # Track critical density position (laser absorption surface)
         self._track_critical_density_position()
         

@@ -179,7 +179,19 @@ class ICFOutputGenerator:
         # ---- Energy / performance ----
         _a('ENERGY & PERFORMANCE')
         _a('-' * width)
-        _a(self._metric('Laser energy',        d.laser_energy,     'MJ',  fmt='.3f'))
+        # Legacy "Laser energy" line holds max(absorbed) in MJ -- preserved
+        # because target_gain divides by it. The two explicit delivered/
+        # absorbed lines below use Helios's own LaserEnDeliveredTimeInt /
+        # EnLaserDepositedTimeIntg integrals.
+        _a(self._metric('Laser energy',          d.laser_energy,             'MJ',  fmt='.3f'))
+        _a(self._metric('  Laser energy (delivered)',
+                        getattr(d, 'laser_energy_delivered_MJ', 0.0), 'MJ',  fmt='.3f'))
+        _a(self._metric('  Laser energy (absorbed)',
+                        getattr(d, 'laser_energy_absorbed_MJ',  0.0), 'MJ',  fmt='.3f'))
+        _a(self._metric('  Avg coupling (E_abs/E_del)',
+                        getattr(d, 'eff_avg_coupling_pct',      0.0), '%',   fmt='.1f'))
+        _a(self._metric('  Peak coupling (instantaneous)',
+                        getattr(d, 'eff_peak_coupling_pct',     0.0), '%',   fmt='.1f'))
         _a(self._metric('Fusion yield',        d.energy_output,    'MJ',  fmt='.3f'))
         _a(self._metric('DT neutron yield',    d.dt_neutron_yield, '',    fmt='.3e'))
         _a(self._metric('Target gain',         d.target_gain,      '',    fmt='.3f'))

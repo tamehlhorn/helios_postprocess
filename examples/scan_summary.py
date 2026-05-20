@@ -104,7 +104,14 @@ SCALAR_PATTERNS: Dict[str, List[re.Pattern]] = {
     # Fraction absorbed -- pulled from the comparison-table row format
     # ("Fraction absorbed (%)        <sim>   <pub>   <Δ%>"). The bare label
     # only appears in the comparison block, so the row is sim_value here.
-    'fraction_absorbed_pct': [re.compile(r'Fraction absorbed \(%\)\s+(\d+\.\d+)')],
+    'fraction_absorbed_pct':       [re.compile(r'Fraction absorbed \(%\)\s+(\d+\.\d+)')],
+    # Coupling diagnostics from analyze_drive_phase (May 2026 -- pipeline
+    # integration of LaserEnDeliveredTimeInt). Lines are indented with two
+    # leading spaces inside the ENERGY & PERFORMANCE block.
+    'laser_energy_delivered_MJ':   [re.compile(r'Laser energy \(delivered\)\s+(\d+\.\d+)')],
+    'laser_energy_absorbed_MJ':    [re.compile(r'Laser energy \(absorbed\)\s+(\d+\.\d+)')],
+    'eff_avg_coupling_pct':        [re.compile(r'Avg coupling \(E_abs/E_del\)\s+(\d+\.\d+)')],
+    'eff_peak_coupling_pct':       [re.compile(r'Peak coupling \(instantaneous\)\s+(\d+\.\d+)')],
     't_foot_shock_ns':      [],  # filled from SHOCK TRAIN block below
     't_ramp_shock_ns':      [],
     't_peak_shock_ns':      [],
@@ -312,6 +319,8 @@ def main(argv=None):
         'hot_spot_pressure',
         'peak_velocity_kms', 'adiabat', 'base_adiabat',
         'fraction_absorbed_pct',
+        'laser_energy_delivered_MJ', 'laser_energy_absorbed_MJ',
+        'eff_avg_coupling_pct', 'eff_peak_coupling_pct',
         'yield_MJ', 'gain',
         'stag_time_ns', 'bang_time_ns',
         'distance_to_lilac',

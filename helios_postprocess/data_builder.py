@@ -75,6 +75,7 @@ class ICFRunData:
         # ------------------------------------------------------------------
         self.fusion_power: Optional[np.ndarray] = None            # (n_times, n_zones) — zone-level DT fusion rate
         self.laser_energy_deposited: Optional[np.ndarray] = None  # (n_times, n_zones) J  (time-integrated)
+        self.laser_energy_delivered_cum: Optional[np.ndarray] = None  # (n_times,) J  Helios cumulative integral of LaserEnDeliveredTimeInt
         self.laser_power_source: Optional[np.ndarray] = None      # (n_times, n_zones) W/cm³
         self.laser_power_delivered: Optional[np.ndarray] = None   # (n_times,) W — total laser power on target
         self.laser_power_delivered_per_beam: Optional[np.ndarray] = None  # (n_times, n_beam) W — preserved for multi-beam
@@ -177,6 +178,14 @@ class ICFRunData:
         self.energy_output: float = 0.0    # MJ  (fusion yield)
         self.dt_neutron_yield: float = 0.0 # total DT neutrons produced
         self.laser_energy: float = 0.0     # MJ
+        # Note: data.laser_energy is currently max(absorbed) in MJ -- legacy
+        # naming, see analyze_drive_phase. The two explicit scalars below
+        # disambiguate when both sources are available.
+        self.laser_energy_delivered_MJ: float = 0.0   # max of LaserEnDeliveredTimeInt
+        self.laser_energy_absorbed_MJ:  float = 0.0   # max of EnLaserDepositedTimeIntg
+        # Coupling diagnostics from analyze_drive_phase
+        self.eff_avg_coupling_pct:  float = 0.0       # 100 * E_abs(end) / E_del(end)
+        self.eff_peak_coupling_pct: float = 0.0       # max(E_abs(t)/E_del(t)) after IC
         self.rad_energy: float = 0.0       # MJ  (radiation / IDD deposited)
         self.target_gain: float = 0.0
         self.max_dt_temp: float = 0.0      # keV
@@ -312,6 +321,12 @@ _VARIABLE_MAP = [
                                "fusion_power", "neutron_rate"],                   False),
     ("laser_energy_deposited", ["EnLaserDepositedTimeIntg",
                                 "laser_energy_deposited"],                        False),
+    # Helios's own cumulative integral of delivered laser power, used as
+    # the authoritative E_delivered(t) for coupling diagnostics. Has the
+    # same time-stepping as EnLaserDepositedTimeIntg so the
+    # E_abs(t) / E_del(t) ratio is self-consistent.
+    ("laser_energy_delivered_cum", ["LaserEnDeliveredTimeInt",
+                                    "laser_energy_delivered_cum"],                False),
     ("laser_power_source",    ["LaserPwrSrc", "laser_power_source",
                                "laser_power"],                                    False),
     ("laser_power_delivered", ["LaserPwrDeliveredForBeam",

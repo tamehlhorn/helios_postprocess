@@ -54,24 +54,38 @@ def load_run(base: Path):
         e_abs = e_abs.sum(axis=1)
     E_abs_MJ = np.asarray(e_abs) * 1e-6           # J -> MJ
 
-    # Delivered: cumulative trapezoid integral of laser_power_delivered.
-    P_del = data.laser_power_delivered
-    if P_del is None:
-        P_del = np.zeros_like(t_ns)
-        E_del_MJ = np.zeros_like(t_ns)
+    # Delivered: prefer Helios's own cumulative integral
+    # (LaserEnDeliveredTimeInt, loaded as laser_energy_delivered_cum). It
+    # shares the EnLaserDepositedTimeIntg time grid so the absorbed/
+    # delivered ratio is self-consistent at every step. Fallback to a
+    # python-side trapezoid integral of laser_power_delivered if the new
+    # variable isn't in this EXODUS file.
+    E_del_cum = getattr(data, 'laser_energy_delivered_cum', None)
+    if E_del_cum is not None:
+        E_del = np.asarray(E_del_cum)
+        if E_del.ndim == 2:
+            E_del = E_del.sum(axis=1)
+        E_del_MJ = E_del * 1e-6                                # J -> MJ
+        P_del_arr = np.asarray(data.laser_power_delivered) \
+                    if data.laser_power_delivered is not None \
+                    else np.zeros_like(t_ns)
     else:
-        P_del = np.asarray(P_del)
-        if P_del.ndim == 2:
-            P_del = P_del.sum(axis=1)
-        # cumtrapz with W*ns -> J, then *1e-6 -> MJ; but ns is 1e-9 s, so
-        # W*ns is 1e-9 J; total factor 1e-9 to convert to J, then 1e-6 to MJ
-        E_del = np.zeros_like(t_ns)
-        if len(t_ns) > 1:
-            E_del[1:] = np.cumsum(0.5 * (P_del[1:] + P_del[:-1])
-                                  * (t_ns[1:] - t_ns[:-1])) * 1e-9   # J
-        E_del_MJ = E_del * 1e-6                                       # MJ
+        P_del = data.laser_power_delivered
+        if P_del is None:
+            P_del_arr = np.zeros_like(t_ns)
+            E_del_MJ  = np.zeros_like(t_ns)
+        else:
+            P_del_arr = np.asarray(P_del)
+            if P_del_arr.ndim == 2:
+                P_del_arr = P_del_arr.sum(axis=1)
+            # cumtrapz: W*ns = 1e-9 J; * 1e-6 -> MJ; total factor 1e-15
+            E_del = np.zeros_like(t_ns)
+            if len(t_ns) > 1:
+                E_del[1:] = np.cumsum(0.5 * (P_del_arr[1:] + P_del_arr[:-1])
+                                      * (t_ns[1:] - t_ns[:-1])) * 1e-9
+            E_del_MJ = E_del * 1e-6
 
-    return base.name, t_ns, E_abs_MJ, E_del_MJ, np.asarray(P_del)
+    return base.name, t_ns, E_abs_MJ, E_del_MJ, P_del_arr
 
 
 def main(argv=None):
