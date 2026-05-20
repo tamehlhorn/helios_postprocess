@@ -115,7 +115,37 @@ SCALAR_PATTERNS: Dict[str, List[re.Pattern]] = {
     't_foot_shock_ns':      [],  # filled from SHOCK TRAIN block below
     't_ramp_shock_ns':      [],
     't_peak_shock_ns':      [],
+    # Alpha-deposition mode + flux limiter: filled by dedicated handlers
+    # (not regex one-shots) because the summary format is multi-line / has
+    # branching value strings -- see parse_summary().
+    'alpha_deposition_mode':    [],
+    'flux_limiter_prism':       [],
+    'flux_limiter_standard':    [],
 }
+
+
+# Standard simulation FL value (Spitzer-Harm cap) under Prism's convention
+# is reportedly off by a factor of 4 vs the ICF community standard. So a
+# value reported as f = 0.015 in Helios output corresponds to f ~ 0.06 in
+# the conventional sense. This is documented in CLAUDE.md and may change
+# if the Prism team confirms or revises the factor.
+PRISM_FL_TO_STANDARD = 4.0
+
+
+# Alpha-deposition mode strings written by icf_output.py
+_ALPHA_MODE_PATTERNS = [
+    (re.compile(r'Alpha burn model\s+Full \(local \+ non-local'),  'both'),
+    (re.compile(r'Alpha burn model\s+Local only'),                 'local'),
+    (re.compile(r'Alpha burn model\s+Non-local'),                  'nonlocal'),
+    (re.compile(r'Alpha burn model\s+Disabled'),                   'disabled'),
+]
+
+# Flux limiter (uniform-region case). Per-region varying case is handled
+# below by parse_summary() walking the per-region block and reporting the
+# first-region value plus a 'varying' flag in alpha_deposition_mode-style
+# free text (logged but not surfaced as a numeric column here).
+_FL_UNIFORM_PATTERN = re.compile(r'Flux limiter \(f\)\s+([\d.]+)')
+_FL_PER_REGION_HEADER = re.compile(r'Flux limiter \(f\) per region:')
 
 
 # Shock-train table row: leading whitespace, class word, then five whitespace-
@@ -132,28 +162,60 @@ _RE_SHOCK_ROW = re.compile(
 
 
 def parse_summary(summary_path: Path) -> Dict[str, Optional[float]]:
-    """Parse one _summary.txt into a flat metrics dict (None when missing)."""
+    """Parse one _summary.txt into a flat metrics dict (None when missing).
+
+    Numeric scalars come from SCALAR_PATTERNS regex matches; SHOCK TRAIN
+    rows come from a dedicated table walker; alpha-deposition mode + flux
+    limiter need a small inline state machine because their summary
+    formats are multi-line or have free-text values.
+    """
     metrics: Dict[str, Optional[float]] = {k: None for k in SCALAR_PATTERNS}
     in_shock_block = False
+    in_fl_per_region = False
+    fl_per_region_first = None
 
     with open(summary_path) as f:
         for line in f:
-            # Track entry/exit of the SHOCK TRAIN block to avoid grabbing
-            # similarly-formatted rows from other tables.
+            # SHOCK TRAIN block tracking
             if line.startswith('SHOCK TRAIN'):
-                in_shock_block = True
-                continue
+                in_shock_block = True; continue
             if in_shock_block and line.strip() == '':
-                in_shock_block = False
-                continue
-
+                in_shock_block = False; continue
             if in_shock_block:
                 m = _RE_SHOCK_ROW.match(line)
                 if m:
-                    key = f"t_{m.group('cls')}_shock_ns"
-                    metrics[key] = float(m.group('t'))
+                    metrics[f"t_{m.group('cls')}_shock_ns"] = float(m.group('t'))
 
-            # Free-text scalar patterns
+            # Alpha-deposition mode (string, not numeric)
+            if metrics['alpha_deposition_mode'] is None:
+                for pat, mode in _ALPHA_MODE_PATTERNS:
+                    if pat.search(line):
+                        metrics['alpha_deposition_mode'] = mode
+                        break
+
+            # Flux limiter -- two formats:
+            #   uniform:   "Flux limiter (f)            0.060"
+            #   varying:   "Flux limiter (f) per region:" then indented
+            #              "<region>                    0.060"
+            if metrics['flux_limiter_prism'] is None:
+                if _FL_PER_REGION_HEADER.search(line):
+                    in_fl_per_region = True; continue
+                if in_fl_per_region:
+                    # First numeric line inside the per-region block wins;
+                    # we report it as the representative value (matches
+                    # the legacy flux_limiter field on ICFRunData).
+                    m_pr = re.search(r'^\s{4,}\S.*?(\d+\.\d+)', line)
+                    if m_pr:
+                        fl_per_region_first = float(m_pr.group(1))
+                        in_fl_per_region = False
+                    elif line.strip() == '':
+                        in_fl_per_region = False
+                else:
+                    m_fl = _FL_UNIFORM_PATTERN.search(line)
+                    if m_fl:
+                        metrics['flux_limiter_prism'] = float(m_fl.group(1))
+
+            # Numeric SCALAR_PATTERNS
             for key, patterns in SCALAR_PATTERNS.items():
                 if metrics[key] is not None or not patterns:
                     continue
@@ -165,6 +227,16 @@ def parse_summary(summary_path: Path) -> Dict[str, Optional[float]]:
                             break
                         except (IndexError, ValueError):
                             pass
+
+    # Resolve per-region FL if no uniform value was found
+    if metrics['flux_limiter_prism'] is None and fl_per_region_first is not None:
+        metrics['flux_limiter_prism'] = fl_per_region_first
+
+    # ×4 convention conversion: standard FL = 4 * Prism FL
+    if metrics['flux_limiter_prism'] is not None:
+        metrics['flux_limiter_standard'] = (
+            metrics['flux_limiter_prism'] * PRISM_FL_TO_STANDARD
+        )
 
     return metrics
 
@@ -323,6 +395,10 @@ def main(argv=None):
         'eff_avg_coupling_pct', 'eff_peak_coupling_pct',
         'yield_MJ', 'gain',
         'stag_time_ns', 'bang_time_ns',
+        # Configuration columns (let user filter local vs nonlocal alpha,
+        # cross-compare flux limiter values in both conventions).
+        'alpha_deposition_mode',
+        'flux_limiter_prism', 'flux_limiter_standard',
         'distance_to_lilac',
     ]
 
@@ -346,9 +422,12 @@ def main(argv=None):
           f"3-shock bonus ×{THREE_SHOCK_BONUS}")
     print(f"α sanity range: {ADIABAT_SANITY_RANGE} "
           "(outside → treated as missing)")
+    print(f"Prism FL convention: standard FL = {PRISM_FL_TO_STANDARD}× reported "
+          "(see CLAUDE.md). 'FLstd' column shows the standard value × 1000.")
     print()
     hdr = (f"  {'run':<46s}  {'foot':>5s}  {'ramp':>5s}  {'peak':>5s}  "
            f"{'totρR':>6s}  {'hsρR':>6s}  {'V':>5s}  {'α':>5s}  "
+           f"{'mod':>3s}  {'FLstd':>5s}  "
            f"{'3sh':>3s}  {'dist':>5s}")
     print(hdr)
     print('  ' + '-' * (len(hdr) - 2))
@@ -363,6 +442,13 @@ def main(argv=None):
         if not (lo <= v <= hi):
             return f"{v:>4.1f}*"     # asterisk = flagged broken (excluded from dist)
         return f"{v:>5.2f}"
+    _MODE_CODE = {'local': 'L', 'nonlocal': 'N', 'both': 'B', 'disabled': 'D'}
+    def _mode_str(s):
+        return f"{_MODE_CODE.get(s, '-'):>3s}"
+    def _flstd_str(v):
+        if v is None or not isinstance(v, (int, float)) or not math.isfinite(v):
+            return f"{'-':>5}"
+        return f"{v*1000:>5.0f}"     # 0.060 -> '   60', 0.240 -> '  240'
     for r in rows:
         n_sh = sum(1 for k in ('t_foot_shock_ns', 't_ramp_shock_ns', 't_peak_shock_ns')
                    if r.get(k) is not None
@@ -376,6 +462,8 @@ def main(argv=None):
               f"{_f(r.get('peak_hs_rhoR_T_mask'))}  "
               f"{_f(r.get('peak_velocity_kms'), 5, 0)}  "
               f"{_alpha_str(r.get('adiabat'))}  "
+              f"{_mode_str(r.get('alpha_deposition_mode'))}  "
+              f"{_flstd_str(r.get('flux_limiter_standard'))}  "
               f"{marker:>3s}  "
               f"{_f(r.get('distance_to_lilac'))}")
 

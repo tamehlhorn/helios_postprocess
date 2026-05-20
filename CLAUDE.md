@@ -203,6 +203,39 @@ Each entry is `[value, uncertainty]`. Entries with `[0.0, 0.0]` are skipped.
     spike from being incorrectly identified as the peak implosion velocity.
     Fixed April 2026.
 
+16. **Flux-limiter convention (May 2026)**: Prism's Helios reports the flux
+    limiter `f` as a value that is **4× smaller than the ICF-community
+    standard convention** (Spitzer–Harm cap). To convert:
+
+        f_standard  =  4 × f_prism
+
+    So `f_prism = 0.015` in the RHW file is equivalent to `f_standard = 0.060`
+    (the simulation default for ICF). A run reported as "fab02" / f = 0.020
+    is actually at f_standard = 0.080.
+
+    The factor is the Prism team's working hypothesis as of May 2026 — pending
+    formal confirmation. `examples/scan_summary.py` exposes both columns
+    (`flux_limiter_prism`, `flux_limiter_standard`) so cross-run comparison
+    against published f values is unambiguous.
+
+17. **Alpha-deposition mode (May 2026)**: `data.alpha_deposition_local` and
+    `data.alpha_deposition_nonlocal` flags from the RHW parser determine the
+    alpha-transport model. **Local deposition** (alpha energy deposited in
+    the zone of birth instantaneously) over-estimates burn / hot-spot
+    pressure / yield by typical factors of 2-5× relative to non-local
+    transport (which respects mean free path).
+
+    For LILAC / xRAGE / HYDRA comparisons, use **non-local transport only**
+    (`alpha_deposition_nonlocal = True`, `alpha_deposition_local = False`).
+    Local-deposition runs are diagnostic curiosities and should be flagged
+    by their `alpha_deposition_mode = 'local'` column in `scan_summary.csv`
+    before being included in any calibration comparison.
+
+    Example diagnosis: `PDD_TM_4nb` (local α) gives gain = 92, yield = 131 MJ
+    even though its cold-implosion diagnostics (coupling 68.5%, HS ρR 1.01,
+    adiabat 1.98) match LILAC well — the burn numbers are inflated by the
+    local-α model, not by physics.
+
 ## Laser Deposition Model (Helios vs reference codes)
 
 Helios uses a 1D spherical ray-trace with refraction (Snell's law, geometrical optics).
