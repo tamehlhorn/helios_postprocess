@@ -109,8 +109,11 @@ def main(base):
             fontsize=8, color="firebrick",
         )
 
-    # Timing markers
-    t_stag = float(data.stag_time) if data.stag_time > 0 else float(t_ns[-1])
+    # Timing markers -- data.stag_time follows the same unit convention as
+    # data.time. Use the same magnitude check so we don't end up with a
+    # second-valued upper bound on a ns-valued x-axis.
+    _stag_raw = float(data.stag_time) if data.stag_time > 0 else 0.0
+    t_stag = _stag_raw * 1e9 if 0 < _stag_raw < 1e-3 else (_stag_raw or float(t_ns[-1]))
     if t_stag > 0:
         ax.axvline(t_stag, color="darkred", lw=1, ls=":", alpha=0.6)
         ax.text(t_stag + 0.05, 0.97, "stagnation", fontsize=8,
