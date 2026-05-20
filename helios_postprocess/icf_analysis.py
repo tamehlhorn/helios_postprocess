@@ -905,7 +905,12 @@ class ICFAnalyzer:
             total_P = self.data.ion_pressure + (
                 self.data.rad_pressure if self.data.rad_pressure is not None else 0.0
             )
-            t_ns = self.data.time
+            # data.time is *nominally* in ns (per data_builder field doc) but
+            # the build_run_data default does not convert from raw seconds.
+            # Auto-detect by magnitude: implosion times are 1-30 ns, so any
+            # max value below 1e-3 means the array is still in seconds.
+            raw_time = np.asarray(self.data.time)
+            t_ns = raw_time * 1e9 if float(np.max(raw_time)) < 1e-3 else raw_time
             n_zones = total_P.shape[1]
 
             # Gas/ice interface = inner edge of the cold fuel. ri[:, 0] is the

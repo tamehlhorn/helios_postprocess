@@ -35,7 +35,10 @@ def main(base):
     analyzer.analyze_drive_phase()
     analyzer.analyze_stagnation_phase()   # runs analyze_implosion_phase -> _compute_shock_train
 
-    t_ns        = data.time
+    # data.time nominally in ns but build_run_data default leaves it in
+    # seconds for some EXODUS files. Auto-detect by magnitude.
+    _raw_t      = np.asarray(data.time)
+    t_ns        = _raw_t * 1e9 if float(np.max(_raw_t)) < 1e-3 else _raw_t
     ri          = data.region_interfaces_indices
     trajectories = data.shock_trajectories
     breakouts    = data.shock_breakouts
