@@ -127,7 +127,13 @@ def main(base):
                  fontsize=12)
     ax.set_xlim(left=max(0.0, float(t_ns[0])),
                 right=min(float(t_ns[-1]), t_stag + 0.3))
-    ax.set_ylim(bottom=0)
+    # Cap y-axis at initial capsule outer radius + 10% so the expanding
+    # corona/ablator-blowoff doesn't squash the shell + shock detail.
+    if ri is not None:
+        y_top = float(data.zone_boundaries[0, min(int(ri[0, cap_idx]), n_nodes - 1)]) * 1e4 * 1.1
+        ax.set_ylim(bottom=0, top=y_top)
+    else:
+        ax.set_ylim(bottom=0)
     ax.grid(True, alpha=0.3)
     ax.legend(fontsize=8, loc="upper right", ncol=2)
     fig.tight_layout()
