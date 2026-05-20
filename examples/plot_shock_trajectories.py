@@ -43,23 +43,33 @@ def main(base):
     trajectories = data.shock_trajectories
     breakouts    = data.shock_breakouts
     coalescences = data.shock_coalescence_events
+    events       = getattr(data, 'shock_events', []) or []
+
+    # Map each trajectory id -> shock class via the merged-id list on each
+    # consolidated event. Anything not in a consolidated event is uncategorised.
+    traj_class = {}
+    for ev in events:
+        for tr_id in ev.get('merged_trajectory_ids', []):
+            traj_class[tr_id] = ev['class']
 
     print(f"Detected {len(trajectories)} trajectories, "
           f"{len(coalescences)} coalescence events, "
-          f"{len(breakouts)} gas/ice breakouts")
+          f"{len(breakouts)} raw breakouts -> {len(events)} consolidated events")
     for k, tr in enumerate(trajectories):
         n = tr['indices'].size
+        cls = traj_class.get(k, '-')
         print(f"  traj #{k:>2d}: n={n:>3d}, "
               f"t=[{tr['time_ns'][0]:6.3f}, {tr['time_ns'][-1]:6.3f}] ns, "
               f"r=[{tr['radius'].min()*1e4:7.1f}, {tr['radius'].max()*1e4:7.1f}] um, "
               f"P_ratio_max={tr['P_ratio'].max():5.2f}, "
-              f"end={tr['reason_ended']}")
-    for b in breakouts:
-        print(f"  trajectory #{b['trajectory_id']:>2d}  "
-              f"breakout at t = {b['time_ns']:6.3f} ns, "
-              f"r = {b['radius']*1e4:6.1f} um, "
-              f"P_post = {b['P_post_Gbar']:6.1f} Gbar, "
-              f"P_ratio = {b['P_ratio']:5.2f}")
+              f"class={cls:<5s} end={tr['reason_ended']}")
+    print("Consolidated breakouts:")
+    for e in events:
+        print(f"  {e['class']:<5s} (#{e['order']}) at t = {e['time_ns']:6.3f} ns, "
+              f"r = {e['radius']*1e4:6.1f} um, "
+              f"P_post_max = {e['P_post_Gbar_max']*1000.0:7.2f} Mbar, "
+              f"P_ratio_max = {e['P_ratio_max']:5.2f}  "
+              f"(merged {e['n_merged']} raw)")
 
     # ---- Figure: R-T overlay + inward-velocity panel ------------------------
     fig, (ax, axv) = plt.subplots(
@@ -86,44 +96,66 @@ def main(base):
         ax.plot(t_ns, r_outer, color="0.5", lw=1.0, ls=":",
                 label="ablator outer boundary")
 
-    # Trajectories: r(t) on top, v_inward = -dr/dt on bottom (same colors)
-    colors = plt.cm.tab10(np.linspace(0, 1, max(10, len(trajectories))))
-    traj_velocities = {}    # k -> per-step v_inward (km/s)
+    # Trajectories: r(t) on top, v_inward = -dr/dt on bottom.
+    # Color by shock class (foot/ramp/peak) for the classified ones;
+    # uncategorised trajectories drawn semi-transparent gray.
+    CLASS_COLORS = {
+        'foot': 'tab:blue',
+        'ramp': 'tab:orange',
+        'peak': 'tab:red',
+    }
+    UNCLASSIFIED_COLOR = '0.55'
+    seen_labels = set()
+    traj_velocities = {}
     for k, tr in enumerate(trajectories):
         if tr['indices'].size < 3:
             continue
-        c = colors[k % len(colors)]
+        cls = traj_class.get(k)
+        if cls in CLASS_COLORS:
+            c     = CLASS_COLORS[cls]
+            lw    = 1.8
+            alpha = 0.95
+            label = f"{cls} shock" if cls not in seen_labels else None
+            seen_labels.add(cls)
+        else:
+            c     = UNCLASSIFIED_COLOR
+            lw    = 1.0
+            alpha = 0.55
+            label = 'other / pile-up' if 'other' not in seen_labels else None
+            seen_labels.add('other')
         ax.plot(tr['time_ns'], tr['radius'] * 1e4,
-                color=c, lw=1.4, alpha=0.9, label=f"shock #{k}")
-        # dr/dt in cm/ns -> km/s via x1e4 (1 cm/ns = 1e7 m/s = 1e4 km/s).
-        # Inward shock has dr/dt < 0, plot -dr/dt so inward = positive.
+                color=c, lw=lw, alpha=alpha, label=label)
+        # cm/ns -> km/s via x1e4
         v_in = -np.gradient(tr['radius'], tr['time_ns']) * 1e4
         traj_velocities[k] = v_in
-        axv.plot(tr['time_ns'], v_in, color=c, lw=1.4, alpha=0.9)
+        axv.plot(tr['time_ns'], v_in, color=c, lw=lw, alpha=alpha)
 
     # Coalescence markers (R-T panel only)
-    for ev in coalescences:
-        ax.plot(ev['time_ns'], ev['radius'] * 1e4,
+    for ev_co in coalescences:
+        ax.plot(ev_co['time_ns'], ev_co['radius'] * 1e4,
                 marker="x", color="black", ms=8, mew=1.5)
 
-    # Breakout markers on both panels + annotation
-    for b in breakouts:
-        ax.plot(b['time_ns'], b['radius'] * 1e4,
-                marker="o", mfc="white", mec="firebrick", ms=8, mew=1.5)
+    # One marker per consolidated event (foot/ramp/peak), not per raw breakout.
+    for e in events:
+        c_e = CLASS_COLORS.get(e['class'], 'firebrick')
+        ax.plot(e['time_ns'], e['radius'] * 1e4,
+                marker="o", mfc="white", mec=c_e, ms=10, mew=2.0,
+                zorder=5)
         ax.annotate(
-            f"BO #{b['trajectory_id']}\nt={b['time_ns']:.2f} ns",
-            xy=(b['time_ns'], b['radius'] * 1e4),
+            f"{e['class']}\nt={e['time_ns']:.2f} ns",
+            xy=(e['time_ns'], e['radius'] * 1e4),
             xytext=(8, 8), textcoords="offset points",
-            fontsize=8, color="firebrick",
+            fontsize=9, color=c_e, fontweight='bold',
         )
-        v_arr = traj_velocities.get(b['trajectory_id'])
+        # Mirror marker on the velocity panel.
+        tr_b = trajectories[e['trajectory_id']]
+        v_arr = traj_velocities.get(e['trajectory_id'])
         if v_arr is not None:
-            tr_b = trajectories[b['trajectory_id']]
-            k_b_arr = np.where(tr_b['indices'] == b['t_idx'])[0]
+            k_b_arr = np.where(tr_b['indices'] == e['t_idx'])[0]
             if k_b_arr.size > 0:
-                axv.plot(b['time_ns'], float(v_arr[int(k_b_arr[0])]),
-                         marker="o", mfc="white", mec="firebrick",
-                         ms=8, mew=1.5)
+                axv.plot(e['time_ns'], float(v_arr[int(k_b_arr[0])]),
+                         marker="o", mfc="white", mec=c_e,
+                         ms=10, mew=2.0, zorder=5)
 
     # Timing marker (stagnation) on both panels
     _stag_raw = float(data.stag_time) if data.stag_time > 0 else 0.0
@@ -147,6 +179,26 @@ def main(base):
     ax.grid(True, alpha=0.3)
     ax.legend(fontsize=8, loc="upper right", ncol=2)
 
+    # Headline summary box: one line per foot/ramp/peak slot. Missing slots
+    # show "—" so the comparison against LILAC's 3-shock pattern is obvious.
+    summary_lines = ["Shock arrivals at gas/ice:"]
+    for cls in ("foot", "ramp", "peak"):
+        ev_cls = next((e for e in events if e['class'] == cls), None)
+        if ev_cls is not None:
+            summary_lines.append(
+                f"  {cls:<5s} {ev_cls['time_ns']:5.2f} ns  "
+                f"P={ev_cls['P_post_Gbar_max']*1000:5.1f} Mbar"
+            )
+        else:
+            summary_lines.append(f"  {cls:<5s}   —")
+    ax.text(
+        0.02, 0.02, "\n".join(summary_lines),
+        transform=ax.transAxes, fontsize=9, family="monospace",
+        va="bottom", ha="left",
+        bbox=dict(boxstyle="round,pad=0.4", facecolor="white",
+                  edgecolor="0.6", alpha=0.9),
+    )
+
     axv.set_xlabel("Time (ns)", fontsize=12)
     axv.set_ylabel("Inward shock\nspeed (km/s)", fontsize=11)
     axv.axhline(0.0, color="k", lw=0.6, alpha=0.4)
@@ -160,6 +212,29 @@ def main(base):
     fig.savefig(out, dpi=150)
     plt.close(fig)
     print(f"Saved: {out}")
+
+    # CSV of consolidated events, ready for batch comparison across runs.
+    csv_path = base + "_shock_events.csv"
+    with open(csv_path, "w") as f:
+        f.write("order,class,time_ns,radius_um,P_post_Gbar_max,"
+                "P_ratio_max,n_merged,trajectory_id\n")
+        for e in events:
+            f.write(f"{e['order']},{e['class']},{e['time_ns']:.4f},"
+                    f"{e['radius']*1e4:.2f},{e['P_post_Gbar_max']:.6f},"
+                    f"{e['P_ratio_max']:.3f},{e['n_merged']},"
+                    f"{e['trajectory_id']}\n")
+    print(f"Saved: {csv_path}")
+
+    # One-line summary that batch sweeps can grep for.
+    def _fmt(t):
+        return f"{t:5.2f}" if t is not None else "    -"
+    foot = next((e['time_ns'] for e in events if e['class'] == 'foot'), None)
+    ramp = next((e['time_ns'] for e in events if e['class'] == 'ramp'), None)
+    peak = next((e['time_ns'] for e in events if e['class'] == 'peak'), None)
+    print(
+        f"[shock_summary] {os.path.basename(base)}  "
+        f"foot={_fmt(foot)}  ramp={_fmt(ramp)}  peak={_fmt(peak)}  (ns)"
+    )
 
 
 if __name__ == "__main__":

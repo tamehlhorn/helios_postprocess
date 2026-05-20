@@ -215,6 +215,11 @@ class ICFRunData:
         self.shock_coalescence_events: list = []
         self.shock_breakouts: list = []
         self.shock_breakout_times_ns: np.ndarray = np.array([], dtype=float)
+        # Consolidated foot/ramp/peak events + class-keyed scalars
+        self.shock_events: list = []
+        self.t_foot_shock_ns: float = float('nan')
+        self.t_ramp_shock_ns: float = float('nan')
+        self.t_peak_shock_ns: float = float('nan')
 
         # ------------------------------------------------------------------
         # 4. Metadata

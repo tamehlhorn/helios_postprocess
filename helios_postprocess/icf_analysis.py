@@ -1095,17 +1095,33 @@ class ICFAnalyzer:
                 [b['time_ns'] for b in result['breakouts']], dtype=float
             )
 
+            # Consolidated foot/ramp/peak events: raw breakouts that fire
+            # within min_breakout_separation_ns of each other are merged.
+            from helios_postprocess.pressure_gradients import (
+                consolidate_breakouts,
+            )
+            sep_ns = self.config.get('shock_train_min_breakout_separation_ns', 0.3)
+            events = consolidate_breakouts(result['breakouts'], sep_ns)
+            self.data.shock_events = events
+            # Class-keyed convenience scalars (NaN if absent).
+            for cls in ('foot', 'ramp', 'peak'):
+                t_val = next(
+                    (e['time_ns'] for e in events if e['class'] == cls),
+                    float('nan'),
+                )
+                setattr(self.data, f't_{cls}_shock_ns', float(t_val))
+
             n_tr = len(result['trajectories'])
             n_bo = len(result['breakouts'])
+            n_ev = len(events)
             n_co = len(result['coalescence_events'])
-            if n_bo > 0:
-                bo_times = ", ".join(
-                    f"{b['time_ns']:.3f}" for b in result['breakouts']
+            if n_ev > 0:
+                ev_summary = ", ".join(
+                    f"{e['class']}={e['time_ns']:.2f} ns" for e in events
                 )
                 logger.info(
-                    f"Shock train: {n_tr} trajectories, "
-                    f"{n_co} coalescence events, "
-                    f"{n_bo} gas/ice breakouts at t=[{bo_times}] ns"
+                    f"Shock train: {n_tr} trajectories, {n_bo} raw breakouts "
+                    f"-> {n_ev} consolidated events  [{ev_summary}]"
                 )
             else:
                 logger.info(

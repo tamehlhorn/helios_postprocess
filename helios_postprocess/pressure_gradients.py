@@ -1132,3 +1132,61 @@ def track_shock_trajectories(
         'time':               time,
         'interface_radius':   interface_radius,
     }
+
+
+# Canonical names for the first three shocks in an ICF foot-ramp-peak
+# pulse. The tracker reports up to len(SHOCK_CLASSES) classified events;
+# any additional breakouts beyond peak are labelled 'shock_N'.
+SHOCK_CLASSES = ('foot', 'ramp', 'peak')
+
+
+def consolidate_breakouts(
+    breakouts: List[Dict],
+    min_separation_ns: float = 0.3,
+) -> List[Dict]:
+    """
+    Group breakouts that fire within min_separation_ns of each other into
+    a single event, keeping the earliest time and the strongest P_ratio.
+
+    The tracker produces one breakout per trajectory, so a single physical
+    shock whose leading edge + tail are detected as 2-3 short trajectories
+    (each crossing the interface in turn over ~0.1 ns) shows up as multiple
+    breakouts that should be merged. Two truly distinct shocks (foot vs
+    ramp) are separated by 1-3 ns and survive consolidation.
+
+    Each event in the returned list adds:
+        - 'order'      : zero-based event index (0=foot, 1=ramp, 2=peak)
+        - 'class'      : 'foot' | 'ramp' | 'peak' | 'shock_<n>'
+        - 'n_merged'   : how many raw breakouts were folded into this event
+        - 'P_post_Gbar_max' : peak P_post across the merged set
+        - 'P_ratio_max'     : peak P_ratio across the merged set
+
+    Input list is assumed sorted by time_ns (the tracker output is).
+    """
+    if not breakouts:
+        return []
+
+    events: List[Dict] = []
+    current = [breakouts[0]]
+    for b in breakouts[1:]:
+        if b['time_ns'] - current[-1]['time_ns'] < min_separation_ns:
+            current.append(b)
+        else:
+            events.append(current)
+            current = [b]
+    events.append(current)
+
+    consolidated: List[Dict] = []
+    for order, group in enumerate(events):
+        head = dict(group[0])  # earliest in cluster
+        head['order'] = order
+        head['class'] = (
+            SHOCK_CLASSES[order] if order < len(SHOCK_CLASSES)
+            else f'shock_{order + 1}'
+        )
+        head['n_merged'] = len(group)
+        head['P_post_Gbar_max'] = float(max(b['P_post_Gbar'] for b in group))
+        head['P_ratio_max']     = float(max(b['P_ratio']     for b in group))
+        head['merged_trajectory_ids'] = [int(b['trajectory_id']) for b in group]
+        consolidated.append(head)
+    return consolidated
