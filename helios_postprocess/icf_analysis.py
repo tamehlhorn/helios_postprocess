@@ -989,7 +989,7 @@ class ICFAnalyzer:
                 interface_radius=ir_track,
                 search_inner_zone=inner_zone,
                 search_outer_zone=outer_zone,
-                dP_dr_threshold=self.config.get('shock_train_dP_dr_threshold', 5e8),
+                dP_dr_threshold=self.config.get('shock_train_dP_dr_threshold', 2e8),
                 smoothing_sigma=1.5,
                 min_P_ratio=self.config.get('shock_train_min_P_ratio', 2.0),
                 max_shock_velocity=0.05,    # cm/ns (~500 km/s)
@@ -997,7 +997,7 @@ class ICFAnalyzer:
                 group_separation=self.config.get(
                     'shock_train_group_separation', 1e-2),  # cm (100 µm)
                 breakout_tolerance=1e-3,    # cm (10 µm) -- 1 zone width slack
-                max_gap_steps=self.config.get('shock_train_max_gap_steps', 5),
+                max_gap_steps=self.config.get('shock_train_max_gap_steps', 20),
                 min_time_ns=t_floor,
             )
 
@@ -1045,27 +1045,28 @@ class ICFAnalyzer:
                     f"min_P_ratio="
                     f"{self.config.get('shock_train_min_P_ratio', 2.0):.1f}"
                 )
-                print(f"[shock_train] {'t_ns':>7s} {'max|dP/dr|':>12s} "
-                      f"{'n_shocks':>8s}")
+                print(f"[shock_train] {'t_ns':>7s} {'r_int_um':>9s} "
+                      f"{'max|dP/dr|':>12s} {'n_shocks':>8s}")
                 for ti in range(0, len(t_ns), stride):
                     p_sl = total_P[ti, inner_zone:outer_zone + 1]
                     zb_sl = self.data.zone_boundaries[ti, inner_zone:outer_zone + 2]
                     dpdr, _ = calculate_pressure_gradient(p_sl, zb_sl, 1.5)
                     max_grad = float(np.max(np.abs(dpdr))) if dpdr.size else 0.0
+                    r_int_um = float(interface_radius[ti]) * 1e4
                     if t_ns[ti] < t_floor or t_ns[ti] > t_ceiling:
                         n_sh = 0
                     else:
                         sh = identify_shocks(
                             p_sl, zb_sl,
                             dP_dr_threshold=self.config.get(
-                                'shock_train_dP_dr_threshold', 5e8),
+                                'shock_train_dP_dr_threshold', 2e8),
                             smoothing_sigma=1.5,
                             min_separation=self.config.get(
                                 'shock_train_group_separation', 1e-2),
                         )
                         n_sh = len(sh)
-                    print(f"[shock_train] {t_ns[ti]:7.3f} {max_grad:12.3e} "
-                          f"{n_sh:8d}")
+                    print(f"[shock_train] {t_ns[ti]:7.3f} {r_int_um:9.1f} "
+                          f"{max_grad:12.3e} {n_sh:8d}")
             except Exception as _e:
                 print(f"[shock_train] diagnostic failed: {_e}")
 
