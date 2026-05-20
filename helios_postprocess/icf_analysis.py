@@ -997,6 +997,7 @@ class ICFAnalyzer:
                 group_separation=self.config.get(
                     'shock_train_group_separation', 1e-2),  # cm (100 µm)
                 breakout_tolerance=1e-3,    # cm (10 µm) -- 1 zone width slack
+                max_gap_steps=self.config.get('shock_train_max_gap_steps', 5),
                 min_time_ns=t_floor,
             )
 

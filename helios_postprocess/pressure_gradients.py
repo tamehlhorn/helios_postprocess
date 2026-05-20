@@ -878,6 +878,7 @@ def track_shock_trajectories(
     min_separation: float = 5e-4,
     group_separation: Optional[float] = None,
     breakout_tolerance: float = 0.0,
+    max_gap_steps: int = 0,
     min_time_ns: Optional[float] = None,
     lookback_steps: int = 5,
 ) -> Dict:
@@ -980,7 +981,15 @@ def track_shock_trajectories(
             if strength < min_P_ratio:
                 continue
             nearest = int(np.argmin(np.abs(zc - sh['radius'])))
-            P_post_Gbar = pressure[i, search_inner_zone + nearest] * 1e-8
+            # P_post = local peak pressure in a 5-zone window centred on the
+            # shock zone. Using the nearest-zone value alone picks up the
+            # low-density gas zone when the shock has just crossed an
+            # interface, masking the actual post-shock pressure of the
+            # transmitted/reflected wave on the compressed side.
+            abs_zone = search_inner_zone + nearest
+            lo = max(0, abs_zone - 2)
+            hi = min(pressure.shape[1], abs_zone + 3)
+            P_post_Gbar = float(np.max(pressure[i, lo:hi])) * 1e-8
             detections[i].append({
                 'radius':      float(sh['radius']),
                 'P_ratio':     float(strength),
@@ -1001,6 +1010,7 @@ def track_shock_trajectories(
             'ended':       i,
             'reason_ended': 'active',
             '_active':     True,
+            '_misses':     0,
         }
 
     for i in range(n_times):
@@ -1038,10 +1048,13 @@ def track_shock_trajectories(
                 tr['P_ratio'].append(d['P_ratio'])
                 tr['P_post_Gbar'].append(d['P_post_Gbar'])
                 tr['ended'] = i
+                tr['_misses'] = 0
                 unmatched.remove(best_j)
             else:
-                tr['_active'] = False
-                tr['reason_ended'] = 'no_match'
+                tr['_misses'] += 1
+                if tr['_misses'] > max_gap_steps:
+                    tr['_active'] = False
+                    tr['reason_ended'] = 'no_match'
 
         for j in unmatched:
             trajectories.append(_seed(i, dets[j]))
@@ -1050,6 +1063,7 @@ def track_shock_trajectories(
         if tr['_active']:
             tr['reason_ended'] = 'end_of_sim'
         del tr['_active']
+        del tr['_misses']
         tr['indices']     = np.asarray(tr['indices'], dtype=int)
         tr['radius']      = np.asarray(tr['radius'])
         tr['time_ns']     = np.asarray(tr['time_ns'])

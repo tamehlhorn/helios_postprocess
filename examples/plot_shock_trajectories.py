@@ -47,6 +47,13 @@ def main(base):
     print(f"Detected {len(trajectories)} trajectories, "
           f"{len(coalescences)} coalescence events, "
           f"{len(breakouts)} gas/ice breakouts")
+    for k, tr in enumerate(trajectories):
+        n = tr['indices'].size
+        print(f"  traj #{k:>2d}: n={n:>3d}, "
+              f"t=[{tr['time_ns'][0]:6.3f}, {tr['time_ns'][-1]:6.3f}] ns, "
+              f"r=[{tr['radius'].min()*1e4:7.1f}, {tr['radius'].max()*1e4:7.1f}] um, "
+              f"P_ratio_max={tr['P_ratio'].max():5.2f}, "
+              f"end={tr['reason_ended']}")
     for b in breakouts:
         print(f"  trajectory #{b['trajectory_id']:>2d}  "
               f"breakout at t = {b['time_ns']:6.3f} ns, "
