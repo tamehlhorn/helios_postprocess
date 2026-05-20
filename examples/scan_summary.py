@@ -101,6 +101,10 @@ SCALAR_PATTERNS: Dict[str, List[re.Pattern]] = {
                              re.compile(r'Fusion Gain\s+(\d+\.\d+)')],
     'stag_time_ns':         [re.compile(r'Stagnation time\s+(\d+\.\d+)\s*ns')],
     'bang_time_ns':         [re.compile(r'Bang time\s+(\d+\.\d+)\s*ns')],
+    # Fraction absorbed -- pulled from the comparison-table row format
+    # ("Fraction absorbed (%)        <sim>   <pub>   <Δ%>"). The bare label
+    # only appears in the comparison block, so the row is sim_value here.
+    'fraction_absorbed_pct': [re.compile(r'Fraction absorbed \(%\)\s+(\d+\.\d+)')],
     't_foot_shock_ns':      [],  # filled from SHOCK TRAIN block below
     't_ramp_shock_ns':      [],
     't_peak_shock_ns':      [],
@@ -307,6 +311,7 @@ def main(argv=None):
         'hs_pressure_ignition', 'hs_radius_ignition_um',
         'hot_spot_pressure',
         'peak_velocity_kms', 'adiabat', 'base_adiabat',
+        'fraction_absorbed_pct',
         'yield_MJ', 'gain',
         'stag_time_ns', 'bang_time_ns',
         'distance_to_lilac',
