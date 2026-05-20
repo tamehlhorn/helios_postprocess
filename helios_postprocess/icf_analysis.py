@@ -938,7 +938,11 @@ class ICFAnalyzer:
             n_nodes = self.data.zone_boundaries.shape[1]
             outer_node = min(int(ri[0, fa_idx]), n_nodes - 1)
             outer_zone = max(0, outer_node - 1)
-            inner_zone = max(0, int(ri[0, 0]))
+            # Extend inner by 5 zones into the gas cavity so shocks crossing
+            # the gas/ice interface are detected as the breakout event
+            # (otherwise the innermost detected zone-center is just outside
+            # the interface and the r_shock <= r_interface check never fires).
+            inner_zone = max(0, int(ri[0, 0]) - 5)
             if outer_zone <= inner_zone + 4:
                 logger.info(
                     f"Skipping shock train: degenerate search window "
@@ -973,6 +977,11 @@ class ICFAnalyzer:
             # gradients in PDD_20-class runs sit near 5e7 J/cm⁴; 1e9 — the
             # default used by analyze_first_shock in the ICE-only slice — is
             # too restrictive once the search window includes the full shell.
+            # Typical zone width in the cold fuel (~50 µm) is much larger
+            # than min_separation=5e-4 cm, so a single smoothed shock
+            # straddles multiple zones and identify_shocks over-segments
+            # without a separate grouping width. Set group_separation to
+            # ~2 zone widths (1e-2 cm) by default.
             result = track_shock_trajectories(
                 pressure=P_track,
                 zone_boundaries=zb_track,
@@ -984,7 +993,10 @@ class ICFAnalyzer:
                 smoothing_sigma=1.5,
                 min_P_ratio=self.config.get('shock_train_min_P_ratio', 2.0),
                 max_shock_velocity=0.05,    # cm/ns (~500 km/s)
-                min_separation=5e-4,        # cm (5 µm)
+                min_separation=5e-4,        # cm (5 µm) -- coalescence
+                group_separation=self.config.get(
+                    'shock_train_group_separation', 1e-2),  # cm (100 µm)
+                breakout_tolerance=1e-3,    # cm (10 µm) -- 1 zone width slack
                 min_time_ns=t_floor,
             )
 
@@ -1047,7 +1059,8 @@ class ICFAnalyzer:
                             dP_dr_threshold=self.config.get(
                                 'shock_train_dP_dr_threshold', 5e8),
                             smoothing_sigma=1.5,
-                            min_separation=5e-4,
+                            min_separation=self.config.get(
+                                'shock_train_group_separation', 1e-2),
                         )
                         n_sh = len(sh)
                     print(f"[shock_train] {t_ns[ti]:7.3f} {max_grad:12.3e} "

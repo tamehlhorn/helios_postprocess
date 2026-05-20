@@ -876,6 +876,8 @@ def track_shock_trajectories(
     min_P_ratio: float = 1.5,
     max_shock_velocity: float = 0.05,
     min_separation: float = 5e-4,
+    group_separation: Optional[float] = None,
+    breakout_tolerance: float = 0.0,
     min_time_ns: Optional[float] = None,
     lookback_steps: int = 5,
 ) -> Dict:
@@ -947,6 +949,8 @@ def track_shock_trajectories(
     n_zones = pressure.shape[1]
     if search_outer_zone is None:
         search_outer_zone = n_zones - 1
+    if group_separation is None:
+        group_separation = min_separation
 
     t_floor = min_time_ns if min_time_ns is not None else (time[0] + 1e-3)
 
@@ -963,7 +967,7 @@ def track_shock_trajectories(
             p_slice, zb_slice,
             dP_dr_threshold=dP_dr_threshold,
             smoothing_sigma=smoothing_sigma,
-            min_separation=min_separation,
+            min_separation=group_separation,
         )
         if not shocks:
             continue
@@ -1080,10 +1084,14 @@ def track_shock_trajectories(
                     break  # one event per pair (earliest convergence)
 
     # ---- 4. Breakout records: first crossing of interface_radius ----
+    # A shock detected in the innermost cold-fuel zone has zone-center
+    # radius slightly larger than r_interface (= zb[ri[:,0]]). Use
+    # breakout_tolerance (default 0; pass a fraction of a zone width when
+    # the search window doesn't extend into the gas cavity).
     breakouts: List[Dict] = []
     for tr_id, tr in enumerate(trajectories):
         for k, i_t in enumerate(tr['indices']):
-            if tr['radius'][k] > interface_radius[i_t]:
+            if tr['radius'][k] > interface_radius[i_t] + breakout_tolerance:
                 continue
             lo = max(0, k - lookback_steps)
             pr_window = tr['P_ratio'][lo:k + 1]
