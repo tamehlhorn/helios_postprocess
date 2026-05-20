@@ -61,10 +61,15 @@ def main(base):
               f"P_post = {b['P_post_Gbar']:6.1f} Gbar, "
               f"P_ratio = {b['P_ratio']:5.2f}")
 
-    # ---- Figure: R-T overlay --------------------------------------------------
-    fig, ax = plt.subplots(figsize=(9, 6))
+    # ---- Figure: R-T overlay + inward-velocity panel ------------------------
+    fig, (ax, axv) = plt.subplots(
+        2, 1, figsize=(9, 8), sharex=True,
+        gridspec_kw={'height_ratios': [2, 1], 'hspace': 0.08},
+    )
 
-    # Region boundaries vs time (Lagrangian envelope)
+    # Region boundaries vs time (Lagrangian envelope) on R-T panel
+    cap_idx = data.capsule_outer_idx if ri is not None else 0
+    n_nodes = data.zone_boundaries.shape[1]
     if ri is not None:
         r_gas_ice = np.array([
             data.zone_boundaries[t, int(ri[t, 0])] * 1e4 for t in range(len(t_ns))
@@ -74,8 +79,6 @@ def main(base):
         # outer ablator boundary -- clamp because Helios stores ri as
         # slice-end indices (one past the last zone), which can equal n_zones
         # while zone_boundaries has only n_zones+1 elements indexed 0..n_zones.
-        cap_idx = data.capsule_outer_idx
-        n_nodes = data.zone_boundaries.shape[1]
         r_outer = np.array([
             data.zone_boundaries[t, min(int(ri[t, cap_idx]), n_nodes - 1)] * 1e4
             for t in range(len(t_ns))
@@ -83,22 +86,27 @@ def main(base):
         ax.plot(t_ns, r_outer, color="0.5", lw=1.0, ls=":",
                 label="ablator outer boundary")
 
-    # Trajectories
+    # Trajectories: r(t) on top, v_inward = -dr/dt on bottom (same colors)
     colors = plt.cm.tab10(np.linspace(0, 1, max(10, len(trajectories))))
+    traj_velocities = {}    # k -> per-step v_inward (km/s)
     for k, tr in enumerate(trajectories):
-        # Only plot trajectories of meaningful length
         if tr['indices'].size < 3:
             continue
+        c = colors[k % len(colors)]
         ax.plot(tr['time_ns'], tr['radius'] * 1e4,
-                color=colors[k % len(colors)], lw=1.4, alpha=0.9,
-                label=f"shock #{k}")
+                color=c, lw=1.4, alpha=0.9, label=f"shock #{k}")
+        # dr/dt in cm/ns -> km/s via x1e4 (1 cm/ns = 1e7 m/s = 1e4 km/s).
+        # Inward shock has dr/dt < 0, plot -dr/dt so inward = positive.
+        v_in = -np.gradient(tr['radius'], tr['time_ns']) * 1e4
+        traj_velocities[k] = v_in
+        axv.plot(tr['time_ns'], v_in, color=c, lw=1.4, alpha=0.9)
 
-    # Coalescence markers
+    # Coalescence markers (R-T panel only)
     for ev in coalescences:
         ax.plot(ev['time_ns'], ev['radius'] * 1e4,
                 marker="x", color="black", ms=8, mew=1.5)
 
-    # Breakout annotations
+    # Breakout markers on both panels + annotation
     for b in breakouts:
         ax.plot(b['time_ns'], b['radius'] * 1e4,
                 marker="o", mfc="white", mec="firebrick", ms=8, mew=1.5)
@@ -108,27 +116,29 @@ def main(base):
             xytext=(8, 8), textcoords="offset points",
             fontsize=8, color="firebrick",
         )
+        v_arr = traj_velocities.get(b['trajectory_id'])
+        if v_arr is not None:
+            tr_b = trajectories[b['trajectory_id']]
+            k_b_arr = np.where(tr_b['indices'] == b['t_idx'])[0]
+            if k_b_arr.size > 0:
+                axv.plot(b['time_ns'], float(v_arr[int(k_b_arr[0])]),
+                         marker="o", mfc="white", mec="firebrick",
+                         ms=8, mew=1.5)
 
-    # Timing markers -- data.stag_time follows the same unit convention as
-    # data.time. Use the same magnitude check so we don't end up with a
-    # second-valued upper bound on a ns-valued x-axis.
+    # Timing marker (stagnation) on both panels
     _stag_raw = float(data.stag_time) if data.stag_time > 0 else 0.0
     t_stag = _stag_raw * 1e9 if 0 < _stag_raw < 1e-3 else (_stag_raw or float(t_ns[-1]))
     if t_stag > 0:
-        ax.axvline(t_stag, color="darkred", lw=1, ls=":", alpha=0.6)
+        for _a in (ax, axv):
+            _a.axvline(t_stag, color="darkred", lw=1, ls=":", alpha=0.6)
         ax.text(t_stag + 0.05, 0.97, "stagnation", fontsize=8,
                 color="darkred", rotation=90, va="top",
                 transform=ax.get_xaxis_transform())
 
     name = os.path.basename(base)
-    ax.set_xlabel("Time (ns)", fontsize=12)
     ax.set_ylabel("Radius (µm)", fontsize=12)
     ax.set_title(f"{name} -- Helios shock train (cf. LILAC 3-shock R-T)",
                  fontsize=12)
-    ax.set_xlim(left=max(0.0, float(t_ns[0])),
-                right=min(float(t_ns[-1]), t_stag + 0.3))
-    # Cap y-axis at initial capsule outer radius + 10% so the expanding
-    # corona/ablator-blowoff doesn't squash the shell + shock detail.
     if ri is not None:
         y_top = float(data.zone_boundaries[0, min(int(ri[0, cap_idx]), n_nodes - 1)]) * 1e4 * 1.1
         ax.set_ylim(bottom=0, top=y_top)
@@ -136,6 +146,14 @@ def main(base):
         ax.set_ylim(bottom=0)
     ax.grid(True, alpha=0.3)
     ax.legend(fontsize=8, loc="upper right", ncol=2)
+
+    axv.set_xlabel("Time (ns)", fontsize=12)
+    axv.set_ylabel("Inward shock\nspeed (km/s)", fontsize=11)
+    axv.axhline(0.0, color="k", lw=0.6, alpha=0.4)
+    axv.grid(True, alpha=0.3)
+    axv.set_xlim(left=max(0.0, float(t_ns[0])),
+                 right=min(float(t_ns[-1]), t_stag + 0.3))
+
     fig.tight_layout()
 
     out = base + "_shock_trajectories.pdf"
