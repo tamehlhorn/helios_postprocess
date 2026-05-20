@@ -70,7 +70,7 @@ def compute_adiabat_history(base_path):
     analyzer.analyze_burn_phase()
 
     ri   = data.region_interfaces_indices  # (n_times, n_regions+1), NODE indices
-    rho  = data.density                    # (n_times, n_zones), g/cc
+    rho  = data.mass_density               # (n_times, n_zones), g/cc
     # Pressures in J/cm^3 on ICFRunData; convert to Mbar (x1e-7) for P_Fermi comparison
     P_total = (data.ion_pressure + data.rad_pressure) * 1e-7   # Mbar
 
@@ -95,7 +95,8 @@ def compute_adiabat_history(base_path):
         adiabat_t[t] = np.sum(alpha_z * m_z) / total_mass
 
     run_label = os.path.basename(base_path)
-    return data.time_ns, adiabat_t, data.peak_velocity_index, data.stag_time_index, run_label
+    stag_idx = int(np.argmin(np.abs(data.time - data.stag_time)))
+    return data.time, adiabat_t, data.peak_velocity_index, stag_idx, run_label
 
 
 def plot_adiabat_histories(base_paths, output_pdf="adiabat_history.pdf",
