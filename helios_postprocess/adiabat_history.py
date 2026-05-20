@@ -107,7 +107,7 @@ def compute_adiabat_history(
     ...     mass_density=data.mass_density,
     ...     zone_mass=data.zone_mass,
     ...     region_interfaces_indices=data.region_interfaces_indices,
-    ...     time=data.time * 1e9,
+    ...     time=data.time,
     ... )
     >>> import matplotlib.pyplot as plt
     >>> plt.plot(result['time'], result['adiabat'])

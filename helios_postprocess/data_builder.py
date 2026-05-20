@@ -366,7 +366,7 @@ def _try_load_nc(ds, data, attr_name, nc_var_name, verbose=True):
 def build_run_data(
     run,
     *,
-    time_unit: str = "ns",
+    time_unit: str = "auto",
     compute_derived: bool = True,
     rhw_config=None,
     drive_temperature: Optional[np.ndarray] = None,
@@ -381,9 +381,10 @@ def build_run_data(
     run : HeliosRun
         Open HeliosRun instance (from ``helios_postprocess.core``).
     time_unit : str
-        Unit of ``run.times``.  ``'s'`` → converted to ns;
-        ``'ns'`` → used as-is (Helios default after netCDF read is seconds,
-        but some pipelines have already converted).
+        Unit of ``run.times``.  ``'auto'`` (default) inspects magnitude:
+        max < 1e-3 → seconds (multiplied by 1e9); else assumed ns.
+        ``'s'`` forces seconds→ns; ``'ns'`` forces passthrough.
+        ``data.time`` on the returned container is always in nanoseconds.
     compute_derived : bool
         If True, compute ``zone_centers`` and ``scale_length`` from loaded data.
     rhw_config : object, optional
@@ -437,12 +438,19 @@ def build_run_data(
     # Time array
     # ------------------------------------------------------------------
     raw_times = np.asarray(run.times, dtype=np.float64)
-    if time_unit == "s":
+    if time_unit == "auto":
+        # Implosion times are O(1-30) ns; raw seconds put max ~1e-8.
+        # Anything below 1e-3 is unambiguously in seconds.
+        if raw_times.size > 0 and float(np.max(raw_times)) < 1e-3:
+            data.time = raw_times * 1e9
+        else:
+            data.time = raw_times.copy()
+    elif time_unit == "s":
         data.time = raw_times * 1e9          # seconds → nanoseconds
     elif time_unit == "ns":
         data.time = raw_times.copy()
     else:
-        raise ValueError(f"Unknown time_unit: {time_unit!r}  (use 's' or 'ns')")
+        raise ValueError(f"Unknown time_unit: {time_unit!r}  (use 'auto', 's', or 'ns')")
 
     n_times = len(data.time)
     if verbose:

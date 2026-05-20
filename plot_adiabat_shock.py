@@ -49,13 +49,13 @@ analyzer.analyze_stagnation_phase()
 analyzer.analyze_burn_phase()
 analyzer.compute_performance_metrics()
 
-t_ns = data.time * 1e9
+t_ns = data.time   # build_run_data now normalises to ns (auto-detect)
 ri   = data.region_interfaces_indices
 name = os.path.basename(base)
 
 print(f"ri[0,:] = {ri[0,:]}")
 print(f"Peak velocity index: {data.peak_velocity_index}, t={t_ns[data.peak_velocity_index]:.3f} ns")
-print(f"Stagnation time: {data.stag_time*1e9:.3f} ns")
+print(f"Stagnation time: {data.stag_time:.3f} ns")
 print(f"Adiabat at peak v: {data.adiabat_mass_averaged_ice:.3f}")
 
 # ── Adiabat history ──────────────────────────────────────────────────────────
@@ -96,8 +96,8 @@ t_foot_end   = data.laser_foot_end_ns   if hasattr(data, 'laser_foot_end_ns')   
 t_peak_start = data.laser_peak_start_ns if hasattr(data, 'laser_peak_start_ns') else 9.0
 t_peak_v     = t_ns[data.peak_velocity_index]
 # stag_time and bang_time are set by ICFAnalyzer on the data object
-t_stag = data.stag_time * 1e9 if hasattr(data, "stag_time") and data.stag_time > 0 else t_ns[data.peak_velocity_index] + 1.0
-t_bang = data.bang_time * 1e9 if hasattr(data, "bang_time") and data.bang_time > 0 else t_stag + 0.1
+t_stag = data.stag_time if hasattr(data, "stag_time") and data.stag_time > 0 else t_ns[data.peak_velocity_index] + 1.0
+t_bang = data.bang_time if hasattr(data, "bang_time") and data.bang_time > 0 else t_stag + 0.1
 
 # ── FIGURE 1: Adiabat history ────────────────────────────────────────────────
 fig1, ax1 = plt.subplots(figsize=(9, 5))
