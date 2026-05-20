@@ -989,9 +989,9 @@ class ICFAnalyzer:
                 interface_radius=ir_track,
                 search_inner_zone=inner_zone,
                 search_outer_zone=outer_zone,
-                dP_dr_threshold=self.config.get('shock_train_dP_dr_threshold', 2e8),
+                dP_dr_threshold=self.config.get('shock_train_dP_dr_threshold', 5e7),
                 smoothing_sigma=1.5,
-                min_P_ratio=self.config.get('shock_train_min_P_ratio', 2.0),
+                min_P_ratio=self.config.get('shock_train_min_P_ratio', 1.5),
                 max_shock_velocity=0.05,    # cm/ns (~500 km/s)
                 min_separation=5e-4,        # cm (5 µm) -- coalescence
                 group_separation=self.config.get(
@@ -1041,9 +1041,9 @@ class ICFAnalyzer:
                     f"n_zones={outer_zone - inner_zone + 1}, "
                     f"t=[{t_floor:.3f},{t_ceiling:.3f}] ns, "
                     f"dP_dr_threshold="
-                    f"{self.config.get('shock_train_dP_dr_threshold', 5e8):.1e}, "
+                    f"{self.config.get('shock_train_dP_dr_threshold', 5e7):.1e}, "
                     f"min_P_ratio="
-                    f"{self.config.get('shock_train_min_P_ratio', 2.0):.1f}"
+                    f"{self.config.get('shock_train_min_P_ratio', 1.5):.1f}"
                 )
                 print(f"[shock_train] {'t_ns':>7s} {'r_int_um':>9s} "
                       f"{'max|dP/dr|':>12s} {'n_shocks':>8s}")
@@ -1059,7 +1059,7 @@ class ICFAnalyzer:
                         sh = identify_shocks(
                             p_sl, zb_sl,
                             dP_dr_threshold=self.config.get(
-                                'shock_train_dP_dr_threshold', 2e8),
+                                'shock_train_dP_dr_threshold', 5e7),
                             smoothing_sigma=1.5,
                             min_separation=self.config.get(
                                 'shock_train_group_separation', 1e-2),
