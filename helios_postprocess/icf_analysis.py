@@ -1580,6 +1580,28 @@ class ICFAnalyzer:
         self.data.hot_spot_rhoR_vs_time = hs_rhoR
         self.data.total_rhoR_vs_time = total_rhoR
 
+        # ---- Peak HS ρR (T_ion > 4.5 keV) and peak total ρR with timing ----
+        # Olson 2021 "complete propagation" anchor: peak of HS ρR(t); also
+        # peak total ρR(t). Both used directly in cross-code comparison.
+        if hs_rhoR.size > 0 and np.any(hs_rhoR > 0):
+            pk_hs = int(np.argmax(hs_rhoR))
+            self.data.peak_hs_rhoR_T_mask = float(hs_rhoR[pk_hs])
+            self.data.peak_hs_rhoR_time_ns = float(self.data.time[pk_hs])
+            logger.info(
+                f"Peak HS ρR (T_ion>4.5 keV): "
+                f"{self.data.peak_hs_rhoR_T_mask:.3f} g/cm² "
+                f"at t={self.data.peak_hs_rhoR_time_ns:.3f} ns"
+            )
+        if total_rhoR.size > 0 and np.any(total_rhoR > 0):
+            pk_tot = int(np.argmax(total_rhoR))
+            self.data.peak_total_rhoR = float(total_rhoR[pk_tot])
+            self.data.peak_total_rhoR_time_ns = float(self.data.time[pk_tot])
+            logger.info(
+                f"Peak total ρR: "
+                f"{self.data.peak_total_rhoR:.3f} g/cm² "
+                f"at t={self.data.peak_total_rhoR_time_ns:.3f} ns"
+            )
+
         # ---- Ignition time: first crossing of ρR_hs = 0.3 g/cm² ----
         above = hs_rhoR >= RHO_R_IGNITION
         if np.any(above):

@@ -388,6 +388,11 @@ class ICFOutputGenerator:
                          'μm', fmt='.0f'))
         _a(self._metric('HS pressure at ignition',      d.ignition_hs_pressure,   'Gbar', fmt='.1f'))
         _a(self._metric('Complete propagation time',     d.burn_propagation_time,  'ns',   fmt='.3f'))
+        # Peak ρR scalars (Olson 2021 ρR-vs-time anchors)
+        _a(self._metric('Peak total ρR',                 getattr(d, 'peak_total_rhoR', 0.0),         'g/cm²', fmt='.3f'))
+        _a(self._metric('  ... at time',                 getattr(d, 'peak_total_rhoR_time_ns', 0.0), 'ns',    fmt='.3f'))
+        _a(self._metric('Peak HS ρR (T>4.5 keV)',        getattr(d, 'peak_hs_rhoR_T_mask', 0.0),     'g/cm²', fmt='.3f'))
+        _a(self._metric('  ... at time',                 getattr(d, 'peak_hs_rhoR_time_ns', 0.0),    'ns',    fmt='.3f'))
         _a('')
 
         _a('=' * width)
