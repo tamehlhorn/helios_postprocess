@@ -136,10 +136,13 @@ def analyze_run(base: Path) -> dict:
     q_FS   = free_streaming_flux_W_per_cm2(n_e, T_e_eV)      # W/cm²
 
     # ---- Spitzer-Harm classical heat flux from local gradient ----
-    # κ_SH = 9.4e-13 × T_e^(5/2) / (Z·lnΛ)  [W/(cm·eV)]  (Atzeni 4.27)
-    # dT_e/dr in eV/cm from np.gradient on zone centres.
+    # Atzeni & Meyer-ter-Vehn eq. 4.27 gives κ_e in CGS:
+    #   κ_e = 9.4e10 × T_e^(5/2) / (Z·lnΛ)  [erg/(s·cm·eV)]
+    # Convert erg/s -> W by *1e-7:
+    #   κ_e = 9.4e3  × T_e^(5/2) / (Z·lnΛ)  [W/(cm·eV)]
+    # Then q_SH [W/cm²] = κ_e × |dT_e/dr [eV/cm]|.
     Z, ln_Lambda = 1.0, 10.0
-    kappa_SH    = 9.4e-13 * np.maximum(T_e_eV, 0.0)**2.5 / (Z * ln_Lambda)
+    kappa_SH    = 9.4e3 * np.maximum(T_e_eV, 0.0)**2.5 / (Z * ln_Lambda)
     dT_dr       = np.gradient(T_e_eV, zone_c)                # eV/cm
     q_SH        = kappa_SH * np.abs(dT_dr)                   # W/cm²
 
