@@ -40,7 +40,39 @@ LILAC = {
     't_foot_ns':         7.50,
     't_ramp_ns':         10.0,
     't_peak_ns':         13.0,
+    'peak_velocity_kms': 410.0,
+    'adiabat':           3.0,
 }
+
+# Composite distance is a weighted-RMS fractional error across metrics that
+# have both a sim value and a LILAC reference. Defaults emphasize HS rhoR
+# (the stated closure metric); foot/ramp shock timing are primary
+# diagnostics; velocity and adiabat are secondary. Peak shock is optional
+# -- it contributes to distance ONLY when sim detected it (most Helios
+# alpha=1.05 runs don't produce a 3rd shock).
+#
+# A run with all four foot/ramp shock arrivals AND all four implosion
+# scalars matching LILAC perfectly gets dist=0. Each metric off by 100%
+# adds its weight to the squared sum. Missing data on a mandatory metric
+# adds a full-weight penalty; missing peak shock adds nothing.
+DEFAULT_WEIGHTS = {
+    'hs_rhoR_T_mask':    2.0,   # primary closure metric
+    'total_rhoR_gcm2':   1.0,
+    't_foot_ns':         1.0,
+    't_ramp_ns':         1.0,
+    'peak_velocity_kms': 0.5,
+    'adiabat':           0.5,
+    't_peak_ns':         0.5,   # optional: contributes only if detected
+}
+
+# Adiabat outliers from broken cold-fuel zone normalization (alpha > 20 or
+# < 0.5) are treated as missing data rather than fed into the distance.
+ADIABAT_SANITY_RANGE = (0.5, 20.0)
+
+# Multiplicative discount applied when ALL three shocks (foot, ramp, peak)
+# were detected at the gas/ice interface -- reflects structural similarity
+# to LILAC's 3-shock R-T pattern.
+THREE_SHOCK_BONUS = 0.85
 
 
 # ── Summary-file parsers ─────────────────────────────────────────────────────
@@ -139,27 +171,69 @@ def run_name_from_summary(path: Path) -> str:
 # ── Ranking ────────────────────────────────────────────────────────────────
 
 
-def distance_to_lilac(m: Dict[str, Optional[float]]) -> float:
+def distance_to_lilac(m: Dict[str, Optional[float]],
+                      weights: Dict[str, float] = None) -> float:
     """Composite distance from LILAC anchor.
 
-    Squared relative errors on the metrics we have a published value for.
-    Missing metrics contribute a fixed penalty so runs with no shock train
-    don't outrank converged runs.
+    Weighted-RMS fractional error across metrics with a LILAC reference.
+    Missing metrics on weighted dimensions contribute a full-weight
+    penalty (1.0 = 100% off). Peak shock is special: missing peak shock
+    adds nothing (most alpha=1.05 runs don't produce a third shock, and
+    we don't want to penalize them for it). A multiplicative discount is
+    applied for runs that detected all three shocks at the gas/ice
+    interface.
     """
-    score = 0.0
+    if weights is None:
+        weights = DEFAULT_WEIGHTS
+
+    # (sim_key_in_parsed_metrics, LILAC_reference_key, is_optional)
     pairs = [
-        ('peak_total_rhoR',     LILAC['total_rhoR_gcm2']),
-        ('peak_hs_rhoR_T_mask', LILAC['hs_rhoR_T_mask']),
-        ('t_foot_shock_ns',     LILAC['t_foot_ns']),
-        ('t_ramp_shock_ns',     LILAC['t_ramp_ns']),
+        ('peak_total_rhoR',      'total_rhoR_gcm2',   False),
+        ('peak_hs_rhoR_T_mask',  'hs_rhoR_T_mask',    False),
+        ('t_foot_shock_ns',      't_foot_ns',         False),
+        ('t_ramp_shock_ns',      't_ramp_ns',         False),
+        ('peak_velocity_kms',    'peak_velocity_kms', False),
+        ('adiabat',              'adiabat',           False),
+        ('t_peak_shock_ns',      't_peak_ns',         True),   # optional
     ]
-    for key, ref in pairs:
-        v = m.get(key)
-        if v is None or not math.isfinite(v) or ref == 0:
-            score += 1.0   # missing-data penalty (RMS error of 100%)
-        else:
-            score += ((v - ref) / ref) ** 2
-    return math.sqrt(score)
+
+    score = 0.0
+    weight_sum = 0.0
+    for sim_key, ref_key, optional in pairs:
+        w = weights.get(ref_key, 0.0)
+        if w <= 0:
+            continue
+        ref = LILAC.get(ref_key, 0.0)
+        if ref == 0:
+            continue
+        v = m.get(sim_key)
+        # Adiabat sanity gate: outliers from broken zone-normalisation
+        # treated as missing rather than letting them dominate the score.
+        if ref_key == 'adiabat' and v is not None:
+            lo, hi = ADIABAT_SANITY_RANGE
+            if not (lo <= v <= hi):
+                v = None
+        if v is None or not isinstance(v, (int, float)) or not math.isfinite(v):
+            if optional:
+                continue                # missing optional metric: skip entirely
+            score      += w * 1.0       # missing mandatory metric: full penalty
+            weight_sum += w
+            continue
+        score      += w * ((v - ref) / ref) ** 2
+        weight_sum += w
+
+    base = math.sqrt(score / weight_sum) if weight_sum > 0 else float('inf')
+
+    # 3-shock structural bonus: runs that detected all three shocks at the
+    # gas/ice interface get a small multiplicative discount, reflecting
+    # similarity to LILAC's R-T pattern even if individual times are off.
+    n_shocks_detected = sum(
+        1 for k in ('t_foot_shock_ns', 't_ramp_shock_ns', 't_peak_shock_ns')
+        if m.get(k) is not None and math.isfinite(m[k])
+    )
+    if n_shocks_detected == 3:
+        base *= THREE_SHOCK_BONUS
+    return base
 
 
 # ── Main ───────────────────────────────────────────────────────────────────
@@ -176,12 +250,41 @@ def main(argv=None):
                     help='Override LILAC total rhoR target (g/cm^2).')
     ap.add_argument('--lilac-hs-rhor',    type=float, default=None,
                     help='Override LILAC HS rhoR target  (g/cm^2).')
+    ap.add_argument('--lilac-velocity',   type=float, default=None,
+                    help='Override LILAC peak velocity target (km/s).')
+    ap.add_argument('--lilac-adiabat',    type=float, default=None,
+                    help='Override LILAC adiabat target.')
+    # Per-metric weights (0 disables a dimension entirely).
+    ap.add_argument('--w-hs-rhor',  type=float, default=DEFAULT_WEIGHTS['hs_rhoR_T_mask'],
+                    help='Weight on HS rhoR error (default 2.0 -- the closure metric).')
+    ap.add_argument('--w-tot-rhor', type=float, default=DEFAULT_WEIGHTS['total_rhoR_gcm2'],
+                    help='Weight on total rhoR error (default 1.0).')
+    ap.add_argument('--w-foot',     type=float, default=DEFAULT_WEIGHTS['t_foot_ns'],
+                    help='Weight on foot shock time error (default 1.0).')
+    ap.add_argument('--w-ramp',     type=float, default=DEFAULT_WEIGHTS['t_ramp_ns'],
+                    help='Weight on ramp shock time error (default 1.0).')
+    ap.add_argument('--w-peak',     type=float, default=DEFAULT_WEIGHTS['t_peak_ns'],
+                    help='Weight on peak shock time error (default 0.5, optional).')
+    ap.add_argument('--w-velocity', type=float, default=DEFAULT_WEIGHTS['peak_velocity_kms'],
+                    help='Weight on peak velocity error (default 0.5).')
+    ap.add_argument('--w-adiabat',  type=float, default=DEFAULT_WEIGHTS['adiabat'],
+                    help='Weight on adiabat error (default 0.5).')
     args = ap.parse_args(argv)
 
-    if args.lilac_total_rhor is not None:
-        LILAC['total_rhoR_gcm2'] = args.lilac_total_rhor
-    if args.lilac_hs_rhor is not None:
-        LILAC['hs_rhoR_T_mask'] = args.lilac_hs_rhor
+    if args.lilac_total_rhor is not None: LILAC['total_rhoR_gcm2']   = args.lilac_total_rhor
+    if args.lilac_hs_rhor    is not None: LILAC['hs_rhoR_T_mask']    = args.lilac_hs_rhor
+    if args.lilac_velocity   is not None: LILAC['peak_velocity_kms'] = args.lilac_velocity
+    if args.lilac_adiabat    is not None: LILAC['adiabat']           = args.lilac_adiabat
+
+    weights = {
+        'hs_rhoR_T_mask':    args.w_hs_rhor,
+        'total_rhoR_gcm2':   args.w_tot_rhor,
+        't_foot_ns':         args.w_foot,
+        't_ramp_ns':         args.w_ramp,
+        't_peak_ns':         args.w_peak,
+        'peak_velocity_kms': args.w_velocity,
+        'adiabat':           args.w_adiabat,
+    }
 
     summaries = find_summary_files(args.root)
     if not summaries:
@@ -193,7 +296,7 @@ def main(argv=None):
         name = run_name_from_summary(sp)
         m = parse_summary(sp)
         rows.append({'run': name, **m,
-                     'distance_to_lilac': distance_to_lilac(m)})
+                     'distance_to_lilac': distance_to_lilac(m, weights)})
 
     rows.sort(key=lambda r: r['distance_to_lilac'])
 
@@ -218,20 +321,39 @@ def main(argv=None):
 
     # ── Ranked stdout table ────────────────────────────────────────────────
     print()
-    print(f"Ranked by |distance to LILAC|  "
-          f"(total ρR={LILAC['total_rhoR_gcm2']:.2f}, "
-          f"HS ρR={LILAC['hs_rhoR_T_mask']:.2f}, "
-          f"foot={LILAC['t_foot_ns']:.1f} ns, ramp={LILAC['t_ramp_ns']:.1f} ns)")
+    print(f"LILAC targets: totρR={LILAC['total_rhoR_gcm2']:.2f}, "
+          f"HSρR={LILAC['hs_rhoR_T_mask']:.2f}, "
+          f"foot={LILAC['t_foot_ns']:.1f}, ramp={LILAC['t_ramp_ns']:.1f}, "
+          f"peak={LILAC['t_peak_ns']:.1f} ns, "
+          f"V={LILAC['peak_velocity_kms']:.0f} km/s, α={LILAC['adiabat']:.2f}")
+    active_w = ", ".join(f"{k.split('_')[0]}={w}"
+                         for k, w in weights.items() if w > 0)
+    print(f"Weights:       {active_w}    "
+          f"3-shock bonus ×{THREE_SHOCK_BONUS}")
+    print(f"α sanity range: {ADIABAT_SANITY_RANGE} "
+          "(outside → treated as missing)")
     print()
     hdr = (f"  {'run':<46s}  {'foot':>5s}  {'ramp':>5s}  {'peak':>5s}  "
-           f"{'totρR':>6s}  {'hsρR':>6s}  {'V':>5s}  {'α':>5s}  {'dist':>5s}")
+           f"{'totρR':>6s}  {'hsρR':>6s}  {'V':>5s}  {'α':>5s}  "
+           f"{'3sh':>3s}  {'dist':>5s}")
     print(hdr)
     print('  ' + '-' * (len(hdr) - 2))
     def _f(v, w=5, p=2):
         if v is None or not isinstance(v, (int, float)) or not math.isfinite(v):
             return f"{'-':>{w}}"
         return f"{v:>{w}.{p}f}"
+    def _alpha_str(v):
+        if v is None or not isinstance(v, (int, float)) or not math.isfinite(v):
+            return f"{'-':>5}"
+        lo, hi = ADIABAT_SANITY_RANGE
+        if not (lo <= v <= hi):
+            return f"{v:>4.1f}*"     # asterisk = flagged broken (excluded from dist)
+        return f"{v:>5.2f}"
     for r in rows:
+        n_sh = sum(1 for k in ('t_foot_shock_ns', 't_ramp_shock_ns', 't_peak_shock_ns')
+                   if r.get(k) is not None
+                   and isinstance(r[k], (int, float)) and math.isfinite(r[k]))
+        marker = '✓✓✓' if n_sh == 3 else f"{n_sh}/3"
         print(f"  {r['run']:<46s}  "
               f"{_f(r.get('t_foot_shock_ns'))}  "
               f"{_f(r.get('t_ramp_shock_ns'))}  "
@@ -239,7 +361,8 @@ def main(argv=None):
               f"{_f(r.get('peak_total_rhoR'))}  "
               f"{_f(r.get('peak_hs_rhoR_T_mask'))}  "
               f"{_f(r.get('peak_velocity_kms'), 5, 0)}  "
-              f"{_f(r.get('adiabat'))}  "
+              f"{_alpha_str(r.get('adiabat'))}  "
+              f"{marker:>3s}  "
               f"{_f(r.get('distance_to_lilac'))}")
 
     return 0
