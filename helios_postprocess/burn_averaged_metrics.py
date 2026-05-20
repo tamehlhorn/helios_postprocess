@@ -365,6 +365,12 @@ def extract_histories_from_run_data(data) -> Dict:
         # Laser intensity metrics (from analyze_laser_intensity); 0.0 if skipped
         'I_at_crit_peak_Wcm2':    getattr(data, 'I_at_crit_peak', None) or 0.0,
         'I_grid_outer_peak_Wcm2': getattr(data, 'I_grid_outer_peak', None) or 0.0,
+        # Shock-train breakouts at gas/ice interface (from _compute_shock_train).
+        # NaN sentinel means "not detected"; comparison code treats it as a
+        # missing value rather than a real 0.0 ns measurement.
+        't_foot_shock_breakout_ns': float(getattr(data, 't_foot_shock_ns', float('nan'))),
+        't_ramp_shock_breakout_ns': float(getattr(data, 't_ramp_shock_ns', float('nan'))),
+        't_peak_shock_breakout_ns': float(getattr(data, 't_peak_shock_ns', float('nan'))),
     }
 
 
@@ -502,6 +508,10 @@ def calculate_burn_averaged_metrics(histories: Dict,
         # Laser intensity metrics (pass through from histories)
         'I_at_crit_peak_Wcm2':    histories.get('I_at_crit_peak_Wcm2',    0.0),
         'I_grid_outer_peak_Wcm2': histories.get('I_grid_outer_peak_Wcm2', 0.0),
+        # Shock-train breakouts (pass through; NaN if not detected)
+        't_foot_shock_breakout_ns': histories.get('t_foot_shock_breakout_ns', float('nan')),
+        't_ramp_shock_breakout_ns': histories.get('t_ramp_shock_breakout_ns', float('nan')),
+        't_peak_shock_breakout_ns': histories.get('t_peak_shock_breakout_ns', float('nan')),
         # Burn-rate weighting profile
         'burn_fraction':    burn_fraction,
         'burn_rate':        burn_rate,
@@ -577,6 +587,24 @@ def compare_with_published(sim_metrics: Dict,
          'I_at_crit_peak_Wcm2',       '.2e'),
         ('I grid outer peak (W/cm²)', sim_metrics.get('I_grid_outer_peak_Wcm2', 0.0),
          'I_grid_outer_peak_Wcm2',    '.2e'),
+        # --- Shock train breakouts (Task 3 Stage 3 multi-shock tracker) ---
+        # NaN sentinel from extract_histories -> mapped to -1.0 so the
+        # existing "<= 0 == missing" skip logic in the row loop kicks in.
+        ('Foot shock breakout (ns)',
+         (sim_metrics.get('t_foot_shock_breakout_ns', float('nan'))
+          if np.isfinite(sim_metrics.get('t_foot_shock_breakout_ns', float('nan')))
+          else -1.0),
+         't_foot_shock_breakout_ns', '.2f'),
+        ('Ramp shock breakout (ns)',
+         (sim_metrics.get('t_ramp_shock_breakout_ns', float('nan'))
+          if np.isfinite(sim_metrics.get('t_ramp_shock_breakout_ns', float('nan')))
+          else -1.0),
+         't_ramp_shock_breakout_ns', '.2f'),
+        ('Peak shock breakout (ns)',
+         (sim_metrics.get('t_peak_shock_breakout_ns', float('nan'))
+          if np.isfinite(sim_metrics.get('t_peak_shock_breakout_ns', float('nan')))
+          else -1.0),
+         't_peak_shock_breakout_ns', '.2f'),
     ]
 
     has_implosion = False

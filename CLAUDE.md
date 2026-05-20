@@ -725,7 +725,57 @@ r_crit (0.099 cm / 992 um) sits inside the drive-phase formula-method
 1-sigma band (0.079 +/- 0.039 cm), consistent with r_crit expanding
 outward at peak drive relative to the all-timesteps mean.
 
+### Shock train pipeline (May 2026 — Task 3 Stage 3 multi-shock)
 
+Foot/ramp/peak gas/ice breakouts extracted automatically and propagated
+through summary, comparison, and report PDF. Used to diagnose Helios
+over-drive vs LILAC's published 7.5 / 10 / 13 ns arrival pattern, and
+to inform foot-pulse calibration. **Shock timing drives the HS ρR
+closure work; treat the SHOCK TRAIN block as a first-class diagnostic.**
+
+| Layer | Contribution |
+|---|---|
+| `helios_postprocess/pressure_gradients.py` | `track_shock_trajectories()` (greedy nearest-radius linker with inward-only motion, velocity bound, max_gap_steps, terminate-at-breakout) and `consolidate_breakouts()` (merges raw breakouts within `min_separation_ns` into foot/ramp/peak events). |
+| `ICFAnalyzer._compute_shock_train()` | Runs inside `analyze_implosion_phase`. Populates `data.shock_trajectories`, `data.shock_coalescence_events`, `data.shock_breakouts`, `data.shock_events` (consolidated) and class-keyed scalars `t_foot_shock_ns`, `t_ramp_shock_ns`, `t_peak_shock_ns` (NaN when not detected). Prints `[shock_train]` diagnostic table sampled uniformly in time. |
+| `ICFPlotter._plot_shock_train()` | 1-page R-T overlay (top, 2/3) + inward-velocity panel (bottom, 1/3). Trajectories colored by class (`foot=blue, ramp=orange, peak=red`); pile-up gray. Headline summary box in bottom-left. |
+| `ICFOutputGenerator` | New `SHOCK TRAIN` block between `LASER INTENSITY` and `EOS MODELS` — trajectory count, consolidated event count, per-event table (class, t [ns], r [µm], P_post [Mbar], P_ratio, merged-raw count). |
+| `burn_averaged_metrics.py` | `t_foot_shock_breakout_ns`, `t_ramp_shock_breakout_ns`, `t_peak_shock_breakout_ns` plumbed through `histories → sim_metrics → compare_with_published`. NaN sim values mapped to `-1.0` so the existing `<= 0 == missing` skip logic in the comparison loop kicks in. |
+| `examples/plot_shock_trajectories.py` | Standalone reproduction (R-T + velocity + CSV emission + `[shock_summary]` grep tag) for ad-hoc runs or scans not going through `run_analysis.py`. |
+
+**Published-JSON keys** (place next to `<base>.exo` as `<base>_published.json`):
+
+    "t_foot_shock_breakout_ns": [7.5,  0.0],   # LILAC reference for foot shock
+    "t_ramp_shock_breakout_ns": [10.0, 0.0],
+    "t_peak_shock_breakout_ns": [13.0, 0.0]    # leave as [0.0, 0.0] to skip
+
+The comparison row prints "—" instead of a number when the sim didn't
+detect that shock (NaN → −1.0 internal sentinel).
+
+**Tuning knobs (via `ICFAnalyzer` config dict):**
+
+    shock_train_dP_dr_threshold            5e7      # J/cm⁴; raise to filter weak shocks
+    shock_train_min_P_ratio                1.5      # compression-ratio gate per detection
+    shock_train_group_separation           1e-2     # cm; identify_shocks grouping width
+    shock_train_max_gap_steps              20       # trajectory persistence across detection dropouts
+    shock_train_min_traj_len               5        # post-filter (bypassed for breakout-ended)
+    shock_train_min_traj_span              5e-3     # cm; drop stationary "trajectories"
+    shock_train_min_breakout_separation_ns 0.3      # consolidate raw breakouts within this window
+
+**Headline measurements (PDD_20_fab02_foot25_s016_burn, α=1.05):**
+
+    foot:  Helios 5.65 ns  vs LILAC 7.5 ns   (−1.85 ns over-drive)
+    ramp:  Helios 8.25 ns  vs LILAC 10  ns   (−1.75 ns over-drive)
+    peak:  Helios —        vs LILAC 13  ns   (absorbed into convergence)
+
+Consistent ~1.8 ns over-drive across both detected shocks → single
+ablation-physics mechanism, not a per-shock issue. Same lever that
+fixes shock timing should also reduce HS pressure (270 → 90 Gbar).
+
+**Graceful degradation:** if the search window is degenerate (gas
+cavity too thin or n_capsule_regions < 2), `_compute_shock_train`
+logs a skip and leaves all four `data.shock_*` containers at their
+empty defaults; the SHOCK TRAIN summary block is omitted and the
+plotter emits no page (rather than crashing on empty arrays).
 
 ### Priority 1 -- cr_inflight (FIXED April 2026)
 - Now uses ablation_front_radius[pv_idx]. Value ~4.5-4.6 is physically correct.
@@ -854,6 +904,7 @@ by separating ablator-phase and fuel-phase averages.
   (`data.time` is already in ns per `data_builder.py:344`).
 - **Stage 3:** Extend shock breakout to N-shock detection, producing
   `shock_breakout_times_ns` list + per-shock scalars.
+  **(SHIPPED May 2026 — see "Shock train pipeline" below.)**
 - **Stage 4:** Material-split `P_abl` via
   `material_index[ablation_front_indices[t]]`; adds
   `P_abl_ablator_peak_Gbar`, `P_abl_fuel_peak_Gbar`,

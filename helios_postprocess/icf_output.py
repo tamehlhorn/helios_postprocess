@@ -328,6 +328,28 @@ class ICFOutputGenerator:
                     pass
             _a('')
 
+        # ---- Shock train (foot/ramp/peak gas/ice breakouts) ----
+        _events = getattr(d, 'shock_events', None) or []
+        _trajs  = getattr(d, 'shock_trajectories', None) or []
+        if _events or _trajs:
+            _a('SHOCK TRAIN')
+            _a('-' * width)
+            _a(f"  {'Trajectories tracked':<36s} {len(_trajs):>10d}")
+            _a(f"  {'Consolidated events':<36s} {len(_events):>10d}")
+            if _events:
+                _a(f"  {'class':<8s}  {'t [ns]':>8s}  {'r [um]':>8s}  "
+                   f"{'P_post [Mbar]':>14s}  {'P_ratio':>8s}  {'merged':>7s}")
+                for _ev in _events:
+                    _a(f"  {_ev['class']:<8s}  "
+                       f"{_ev['time_ns']:>8.3f}  "
+                       f"{_ev['radius']*1e4:>8.1f}  "
+                       f"{_ev['P_post_Gbar_max']*1000.0:>14.3f}  "
+                       f"{_ev['P_ratio_max']:>8.2f}  "
+                       f"{_ev['n_merged']:>7d}")
+            else:
+                _a("  No gas/ice breakouts detected.")
+            _a('')
+
         # ---- EOS models ----
         if getattr(d, 'eos_models', None):
             _a('EOS MODELS')

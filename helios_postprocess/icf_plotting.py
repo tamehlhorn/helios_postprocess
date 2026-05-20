@@ -121,6 +121,8 @@ class ICFPlotter:
             # Pressure gradient and shocks
             self._plot_pressure_gradient_contour(pdf)
             self._plot_shock_tracking(pdf)
+            # Multi-shock train (foot/ramp/peak breakouts at gas/ice interface)
+            self._plot_shock_train(pdf)
             
             # Areal density evolution
             self._plot_areal_density_evolution(pdf)
@@ -1536,6 +1538,148 @@ class ICFPlotter:
             pdf.savefig(fig)
             plt.close(fig)
         
+    def _plot_shock_train(self, pdf):
+        """Multi-shock R-T + inward-velocity page.
+
+        Visualizes data.shock_trajectories + data.shock_events from
+        ICFAnalyzer._compute_shock_train. Foot/ramp/peak trajectories are
+        colored by class; uncategorised pile-up trajectories are gray.
+        Per-event markers carry the headline times referenced in the
+        SHOCK TRAIN section of the summary text.
+        """
+        trajectories = getattr(self.data, 'shock_trajectories', None) or []
+        events       = getattr(self.data, 'shock_events',       None) or []
+        if not trajectories and not events:
+            logger.info("No shock train data to plot")
+            return
+
+        # Map trajectory id -> class via consolidated events
+        traj_class = {}
+        for ev in events:
+            for tr_id in ev.get('merged_trajectory_ids', []):
+                traj_class[tr_id] = ev['class']
+
+        # data.time may be in seconds (build_run_data default no-op branch)
+        _raw_t = np.asarray(self.data.time)
+        t_ns = _raw_t * 1e9 if float(np.max(_raw_t)) < 1e-3 else _raw_t
+        ri   = self.data.region_interfaces_indices
+
+        fig, (ax, axv) = plt.subplots(
+            2, 1, figsize=(10, 8), sharex=True,
+            gridspec_kw={'height_ratios': [2, 1], 'hspace': 0.08},
+        )
+
+        # Region boundaries vs time
+        cap_idx = getattr(self.data, 'capsule_outer_idx', -1)
+        n_nodes = self.data.zone_boundaries.shape[1]
+        if ri is not None:
+            r_gas_ice = np.array([
+                self.data.zone_boundaries[t, int(ri[t, 0])] * 1e4
+                for t in range(len(t_ns))
+            ])
+            ax.plot(t_ns, r_gas_ice, color='k', lw=1.2, ls='--',
+                    label='gas/ice interface')
+            r_outer = np.array([
+                self.data.zone_boundaries[t, min(int(ri[t, cap_idx]), n_nodes - 1)] * 1e4
+                for t in range(len(t_ns))
+            ])
+            ax.plot(t_ns, r_outer, color='0.5', lw=1.0, ls=':',
+                    label='ablator outer boundary')
+
+        CLASS_COLORS = {'foot': 'tab:blue', 'ramp': 'tab:orange', 'peak': 'tab:red'}
+        UNCLASSIFIED_COLOR = '0.55'
+        seen_labels = set()
+        traj_velocities = {}
+        for k, tr in enumerate(trajectories):
+            if tr['indices'].size < 3:
+                continue
+            cls = traj_class.get(k)
+            if cls in CLASS_COLORS:
+                c, lw, alpha = CLASS_COLORS[cls], 1.8, 0.95
+                label = f"{cls} shock" if cls not in seen_labels else None
+                seen_labels.add(cls)
+            else:
+                c, lw, alpha = UNCLASSIFIED_COLOR, 1.0, 0.55
+                label = 'other / pile-up' if 'other' not in seen_labels else None
+                seen_labels.add('other')
+            ax.plot(tr['time_ns'], tr['radius'] * 1e4,
+                    color=c, lw=lw, alpha=alpha, label=label)
+            v_in = -np.gradient(tr['radius'], tr['time_ns']) * 1e4  # km/s
+            traj_velocities[k] = v_in
+            axv.plot(tr['time_ns'], v_in, color=c, lw=lw, alpha=alpha)
+
+        # One marker per consolidated event
+        for e in events:
+            c_e = CLASS_COLORS.get(e['class'], 'firebrick')
+            ax.plot(e['time_ns'], e['radius'] * 1e4,
+                    marker='o', mfc='white', mec=c_e, ms=10, mew=2.0, zorder=5)
+            ax.annotate(
+                f"{e['class']}\nt={e['time_ns']:.2f} ns",
+                xy=(e['time_ns'], e['radius'] * 1e4),
+                xytext=(8, 8), textcoords='offset points',
+                fontsize=9, color=c_e, fontweight='bold',
+            )
+            tr_b = trajectories[e['trajectory_id']]
+            v_arr = traj_velocities.get(e['trajectory_id'])
+            if v_arr is not None:
+                k_b_arr = np.where(tr_b['indices'] == e['t_idx'])[0]
+                if k_b_arr.size > 0:
+                    axv.plot(e['time_ns'], float(v_arr[int(k_b_arr[0])]),
+                             marker='o', mfc='white', mec=c_e,
+                             ms=10, mew=2.0, zorder=5)
+
+        # Stagnation marker
+        _stag_raw = float(getattr(self.data, 'stag_time', 0.0) or 0.0)
+        t_stag = (_stag_raw * 1e9 if 0 < _stag_raw < 1e-3
+                  else (_stag_raw or float(t_ns[-1])))
+        if t_stag > 0:
+            for _a in (ax, axv):
+                _a.axvline(t_stag, color='darkred', lw=1, ls=':', alpha=0.6)
+            ax.text(t_stag + 0.05, 0.97, 'stagnation', fontsize=8,
+                    color='darkred', rotation=90, va='top',
+                    transform=ax.get_xaxis_transform())
+
+        # Headline summary box
+        lines_ = ["Shock arrivals at gas/ice:"]
+        for cls in ('foot', 'ramp', 'peak'):
+            ev_cls = next((e for e in events if e['class'] == cls), None)
+            if ev_cls is not None:
+                lines_.append(
+                    f"  {cls:<5s} {ev_cls['time_ns']:5.2f} ns  "
+                    f"P={ev_cls['P_post_Gbar_max']*1000:5.1f} Mbar"
+                )
+            else:
+                lines_.append(f"  {cls:<5s}   —")
+        ax.text(
+            0.02, 0.02, "\n".join(lines_),
+            transform=ax.transAxes, fontsize=9, family='monospace',
+            va='bottom', ha='left',
+            bbox=dict(boxstyle='round,pad=0.4', facecolor='white',
+                      edgecolor='0.6', alpha=0.9),
+        )
+
+        ax.set_ylabel('Radius (µm)', fontsize=12)
+        ax.set_title(f"{self.data.filename} -- Helios shock train",
+                     fontsize=12)
+        if ri is not None:
+            y_top = float(
+                self.data.zone_boundaries[0, min(int(ri[0, cap_idx]), n_nodes - 1)]
+            ) * 1e4 * 1.1
+            ax.set_ylim(bottom=0, top=y_top)
+        else:
+            ax.set_ylim(bottom=0)
+        ax.grid(True, alpha=0.3)
+        ax.legend(fontsize=8, loc='upper right', ncol=2)
+        axv.set_xlabel('Time (ns)', fontsize=12)
+        axv.set_ylabel('Inward shock\nspeed (km/s)', fontsize=11)
+        axv.axhline(0.0, color='k', lw=0.6, alpha=0.4)
+        axv.grid(True, alpha=0.3)
+        axv.set_xlim(left=max(0.0, float(t_ns[0])),
+                     right=min(float(t_ns[-1]), t_stag + 0.3))
+        fig.tight_layout()
+        pdf.savefig(fig)
+        plt.close(fig)
+
     def _plot_shock_tracking(self, pdf):
         """Plot shock tracking analysis with RANSAC line fitting."""
         if not self.data.shock_times:
