@@ -432,6 +432,10 @@ class ICFAnalyzer:
         # (must run before adiabat routines -- base adiabat uses breakout time)
         self._compute_shock_breakout()
 
+        # Multi-shock tracker: link per-snapshot detections into trajectories,
+        # extract per-shock breakouts at the gas/ice interface (Olson 2021 R-T).
+        self._compute_shock_train()
+
         # Compute adiabat at peak implosion velocity (legacy definition)
         self._compute_adiabat()
 
@@ -860,6 +864,121 @@ class ICFAnalyzer:
             )
         except Exception as e:
             logger.warning(f"Could not compute shock breakout: {e}")
+
+    def _compute_shock_train(self):
+        """
+        Multi-shock tracker: link per-snapshot identify_shocks() detections
+        into trajectories across timesteps, scan for coalescence, and record
+        per-trajectory breakout at the gas/ice interface.
+
+        Olson 2021 R-T plots show LILAC/xRAGE/HYDRA each launch 3 distinct
+        shocks through the cold fuel. This method extracts the analogous
+        trajectories from Helios so the per-shock breakout pattern can be
+        compared to the LILAC panel and used to inform foot-pulse tuning.
+
+        Stores on ICFRunData:
+            shock_trajectories          list of trajectory dicts (radius, time
+                                        history, P_ratio, P_post_Gbar,
+                                        started/ended indices, reason_ended)
+            shock_coalescence_events    list of pairwise convergence events
+            shock_breakouts             per-trajectory gas/ice breakouts,
+                                        sorted by time
+            shock_breakout_times_ns     (n_shocks,) float array of breakout
+                                        times in ns, for quick comparison
+        """
+        # Initialize so downstream code always sees defined values
+        self.data.shock_trajectories       = []
+        self.data.shock_coalescence_events = []
+        self.data.shock_breakouts          = []
+        self.data.shock_breakout_times_ns  = np.array([], dtype=float)
+
+        try:
+            if (self.data.ion_pressure is None
+                    or self.data.zone_boundaries is None):
+                logger.info("Skipping shock train: missing pressure or boundary data")
+                return
+
+            from helios_postprocess.pressure_gradients import (
+                track_shock_trajectories,
+            )
+
+            total_P = self.data.ion_pressure + (
+                self.data.rad_pressure if self.data.rad_pressure is not None else 0.0
+            )
+            t_ns = self.data.time
+            n_zones = total_P.shape[1]
+
+            # Gas/ice interface = inner edge of the cold fuel. ri[:, 0] is the
+            # hot-spot/fuel boundary NODE; before stagnation this is the
+            # gas/ice interface for capsule targets.
+            ri = self.data.region_interfaces_indices
+            if ri is None or ri.shape[1] < 2:
+                logger.info("Skipping shock train: needs >= 2 region interfaces")
+                return
+            interface_radius = np.array([
+                self.data.zone_boundaries[t, int(ri[t, 0])]
+                for t in range(len(t_ns))
+            ])
+
+            # Search window: inside the ablator outer boundary
+            # (capsule_outer_idx) and outside the gas cavity (ri[0, 0]).
+            cap_idx = self.data.capsule_outer_idx
+            outer_zone = max(0, int(ri[0, cap_idx]) - 1)
+            inner_zone = max(0, int(ri[0, 0]))
+            if outer_zone <= inner_zone + 4:
+                logger.info(
+                    f"Skipping shock train: degenerate search window "
+                    f"[{inner_zone}, {outer_zone}]"
+                )
+                return
+
+            # Foot start floor: avoid IC discontinuity counting as a shock
+            t_floor = getattr(self.data, "laser_foot_start_ns", None) or (
+                float(t_ns[0]) + 1e-3
+            )
+
+            result = track_shock_trajectories(
+                pressure=total_P,
+                zone_boundaries=self.data.zone_boundaries,
+                time=t_ns,
+                interface_radius=interface_radius,
+                search_inner_zone=inner_zone,
+                search_outer_zone=outer_zone,
+                dP_dr_threshold=1e9,
+                smoothing_sigma=1.5,
+                min_P_ratio=1.5,
+                max_shock_velocity=0.05,    # cm/ns (~500 km/s)
+                min_separation=5e-4,        # cm (5 µm)
+                min_time_ns=t_floor,
+            )
+
+            self.data.shock_trajectories       = result['trajectories']
+            self.data.shock_coalescence_events = result['coalescence_events']
+            self.data.shock_breakouts          = result['breakouts']
+            self.data.shock_breakout_times_ns  = np.array(
+                [b['time_ns'] for b in result['breakouts']], dtype=float
+            )
+
+            n_tr = len(result['trajectories'])
+            n_bo = len(result['breakouts'])
+            n_co = len(result['coalescence_events'])
+            if n_bo > 0:
+                bo_times = ", ".join(
+                    f"{b['time_ns']:.3f}" for b in result['breakouts']
+                )
+                logger.info(
+                    f"Shock train: {n_tr} trajectories, "
+                    f"{n_co} coalescence events, "
+                    f"{n_bo} gas/ice breakouts at t=[{bo_times}] ns"
+                )
+            else:
+                logger.info(
+                    f"Shock train: {n_tr} trajectories, "
+                    f"{n_co} coalescence events, no gas/ice breakouts detected"
+                )
+
+        except Exception as e:
+            logger.warning(f"Could not compute shock train: {e}")
 
     def _track_ablation_front(self):
         """

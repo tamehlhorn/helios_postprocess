@@ -210,6 +210,12 @@ class ICFRunData:
         self.shock_velocities: list = []
         self.first_shock: Optional[Dict] = None  # populated by ICFAnalyzer._analyze_first_shock
 
+        # Multi-shock train (populated by ICFAnalyzer._compute_shock_train)
+        self.shock_trajectories: list = []
+        self.shock_coalescence_events: list = []
+        self.shock_breakouts: list = []
+        self.shock_breakout_times_ns: np.ndarray = np.array([], dtype=float)
+
         # ------------------------------------------------------------------
         # 4. Metadata
         # ------------------------------------------------------------------

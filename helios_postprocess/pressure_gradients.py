@@ -862,3 +862,248 @@ def analyze_first_shock(
         'breakout_pressure_Gbar': breakout_pressure_Gbar,
         'breakout_mach':         breakout_mach,
     }
+
+
+def track_shock_trajectories(
+    pressure: np.ndarray,
+    zone_boundaries: np.ndarray,
+    time: np.ndarray,
+    interface_radius: np.ndarray,
+    search_inner_zone: int = 0,
+    search_outer_zone: Optional[int] = None,
+    dP_dr_threshold: float = 1e9,
+    smoothing_sigma: float = 1.5,
+    min_P_ratio: float = 1.5,
+    max_shock_velocity: float = 0.05,
+    min_separation: float = 5e-4,
+    min_time_ns: Optional[float] = None,
+    lookback_steps: int = 5,
+) -> Dict:
+    """
+    Multi-shock tracker: link per-snapshot identify_shocks() detections into
+    trajectories via greedy nearest-radius matching with inward-only motion
+    and a velocity bound.
+
+    Parameters
+    ----------
+    pressure : np.ndarray
+        Total pressure [J/cm³], shape (n_times, n_zones).
+    zone_boundaries : np.ndarray
+        Zone boundary radii [cm], shape (n_times, n_zones+1).
+    time : np.ndarray
+        Time array [ns], shape (n_times,).
+    interface_radius : np.ndarray
+        Gas/ice interface radius [cm], shape (n_times,). Used for breakout
+        detection (e.g. zone_boundaries[t, ri[t, 0]] for capsules).
+    search_inner_zone, search_outer_zone : int
+        Inclusive zone-index window in which identify_shocks is run.
+        Default outer zone is n_zones - 1.
+    dP_dr_threshold, smoothing_sigma, min_separation : floats
+        Passed through to identify_shocks. min_separation is also the
+        coalescence-detection threshold.
+    min_P_ratio : float, default 1.5
+        Minimum compression ratio (max(pr, 1/pr)) for a detection to seed or
+        extend a trajectory.
+    max_shock_velocity : float, default 0.05
+        Magnitude bound on inward shock motion [cm/ns] (~500 km/s).
+    min_time_ns : float or None
+        Earliest time to start tracking. Default = time[0] + 1e-3 (skips IC).
+    lookback_steps : int, default 5
+        Window over which a trajectory must have shown P_ratio >= min_P_ratio
+        for a radius crossing to count as breakout.
+
+    Returns
+    -------
+    dict with keys
+        'trajectories'        : list of per-trajectory dicts with arrays
+                                (indices, radius, time_ns, P_ratio,
+                                P_post_Gbar) plus scalars (started, ended,
+                                reason_ended).
+        'coalescence_events'  : list of {t_idx, time_ns, radius,
+                                trajectory_pair} where two active
+                                trajectories converged within
+                                min_separation.
+        'breakouts'           : list of per-trajectory breakout records
+                                (trajectory_id, t_idx, time_ns, radius,
+                                P_post_Gbar, P_ratio), sorted by time.
+        'time', 'interface_radius' : inputs echoed for plotting convenience.
+
+    Notes
+    -----
+    identify_shocks reports P_ratio = P[peak+1]/P[peak-1], which is < 1 for
+    inward shocks (compressed side is inner). The tracker flips this to a
+    compression ratio via max(pr, 1/pr) before applying min_P_ratio.
+
+    Greedy matching: each active trajectory (iterated in deterministic order)
+    claims the closest unmatched candidate at smaller radius whose implied
+    velocity is within the bound. Unmatched trajectories deactivate;
+    unmatched candidates seed new trajectories.
+
+    Coalescence is post-hoc -- a pair of trajectories alive at the same
+    timestep whose radii are within min_separation triggers one event;
+    the younger trajectory is tagged 'coalesced_into:<id>'.
+    """
+    n_times = len(time)
+    n_zones = pressure.shape[1]
+    if search_outer_zone is None:
+        search_outer_zone = n_zones - 1
+
+    t_floor = min_time_ns if min_time_ns is not None else (time[0] + 1e-3)
+
+    # ---- 1. Per-timestep shock detection (above min_P_ratio compression) ----
+    detections: List[List[Dict]] = [[] for _ in range(n_times)]
+    for i in range(n_times):
+        if time[i] < t_floor:
+            continue
+        p_slice  = pressure[i, search_inner_zone:search_outer_zone + 1]
+        zb_slice = zone_boundaries[i, search_inner_zone:search_outer_zone + 2]
+        if p_slice.size < 5:
+            continue
+        shocks = identify_shocks(
+            p_slice, zb_slice,
+            dP_dr_threshold=dP_dr_threshold,
+            smoothing_sigma=smoothing_sigma,
+            min_separation=min_separation,
+        )
+        if not shocks:
+            continue
+        zc = 0.5 * (zb_slice[:-1] + zb_slice[1:])
+        for sh in shocks:
+            pr_raw = sh['P_ratio']
+            if pr_raw <= 0 or not np.isfinite(pr_raw):
+                continue
+            strength = pr_raw if pr_raw >= 1.0 else 1.0 / pr_raw
+            if strength < min_P_ratio:
+                continue
+            nearest = int(np.argmin(np.abs(zc - sh['radius'])))
+            P_post_Gbar = pressure[i, search_inner_zone + nearest] * 1e-8
+            detections[i].append({
+                'radius':      float(sh['radius']),
+                'P_ratio':     float(strength),
+                'P_post_Gbar': float(P_post_Gbar),
+            })
+
+    # ---- 2. Greedy linking into trajectories ----
+    trajectories: List[Dict] = []
+
+    def _seed(i: int, det: Dict) -> Dict:
+        return {
+            'indices':     [i],
+            'radius':      [det['radius']],
+            'time_ns':     [time[i]],
+            'P_ratio':     [det['P_ratio']],
+            'P_post_Gbar': [det['P_post_Gbar']],
+            'started':     i,
+            'ended':       i,
+            'reason_ended': 'active',
+            '_active':     True,
+        }
+
+    for i in range(n_times):
+        dets = detections[i]
+        # Iterate active trajectories in deterministic order (innermost first)
+        active = sorted(
+            [tr for tr in trajectories if tr['_active']],
+            key=lambda tr: tr['radius'][-1],
+        )
+        unmatched = list(range(len(dets)))
+        for tr in active:
+            r_last = tr['radius'][-1]
+            i_last = tr['indices'][-1]
+            dt = time[i] - time[i_last]
+            if dt <= 0.0:
+                continue
+            best_j = -1
+            best_dr = np.inf
+            for j in unmatched:
+                r_j = dets[j]['radius']
+                if r_j > r_last:
+                    continue
+                v = (r_last - r_j) / dt
+                if v > max_shock_velocity:
+                    continue
+                dr = r_last - r_j
+                if dr < best_dr:
+                    best_dr = dr
+                    best_j = j
+            if best_j >= 0:
+                d = dets[best_j]
+                tr['indices'].append(i)
+                tr['radius'].append(d['radius'])
+                tr['time_ns'].append(time[i])
+                tr['P_ratio'].append(d['P_ratio'])
+                tr['P_post_Gbar'].append(d['P_post_Gbar'])
+                tr['ended'] = i
+                unmatched.remove(best_j)
+            else:
+                tr['_active'] = False
+                tr['reason_ended'] = 'no_match'
+
+        for j in unmatched:
+            trajectories.append(_seed(i, dets[j]))
+
+    for tr in trajectories:
+        if tr['_active']:
+            tr['reason_ended'] = 'end_of_sim'
+        del tr['_active']
+        tr['indices']     = np.asarray(tr['indices'], dtype=int)
+        tr['radius']      = np.asarray(tr['radius'])
+        tr['time_ns']     = np.asarray(tr['time_ns'])
+        tr['P_ratio']     = np.asarray(tr['P_ratio'])
+        tr['P_post_Gbar'] = np.asarray(tr['P_post_Gbar'])
+
+    # ---- 3. Coalescence: post-hoc pairwise convergence scan ----
+    coalescence_events: List[Dict] = []
+    n_tr = len(trajectories)
+    for a in range(n_tr):
+        ta = trajectories[a]
+        ia_map = {int(idx): k for k, idx in enumerate(ta['indices'])}
+        for b in range(a + 1, n_tr):
+            tb = trajectories[b]
+            common = sorted(set(ia_map.keys()) & {int(idx) for idx in tb['indices']})
+            for i_t in common:
+                ka = ia_map[i_t]
+                kb = int(np.where(tb['indices'] == i_t)[0][0])
+                ra = float(ta['radius'][ka])
+                rb = float(tb['radius'][kb])
+                if abs(ra - rb) < min_separation:
+                    coalescence_events.append({
+                        't_idx':            int(i_t),
+                        'time_ns':          float(time[i_t]),
+                        'radius':           0.5 * (ra + rb),
+                        'trajectory_pair':  (a, b),
+                    })
+                    older   = a if ta['started'] <= tb['started'] else b
+                    younger = b if older == a else a
+                    if not trajectories[younger]['reason_ended'].startswith('coalesced_into'):
+                        trajectories[younger]['reason_ended'] = f'coalesced_into:{older}'
+                    break  # one event per pair (earliest convergence)
+
+    # ---- 4. Breakout records: first crossing of interface_radius ----
+    breakouts: List[Dict] = []
+    for tr_id, tr in enumerate(trajectories):
+        for k, i_t in enumerate(tr['indices']):
+            if tr['radius'][k] > interface_radius[i_t]:
+                continue
+            lo = max(0, k - lookback_steps)
+            pr_window = tr['P_ratio'][lo:k + 1]
+            if pr_window.size == 0 or float(np.max(pr_window)) < min_P_ratio:
+                continue
+            breakouts.append({
+                'trajectory_id': tr_id,
+                't_idx':         int(i_t),
+                'time_ns':       float(time[i_t]),
+                'radius':        float(tr['radius'][k]),
+                'P_post_Gbar':   float(tr['P_post_Gbar'][k]),
+                'P_ratio':       float(tr['P_ratio'][k]),
+            })
+            break
+    breakouts.sort(key=lambda b: b['time_ns'])
+
+    return {
+        'trajectories':       trajectories,
+        'coalescence_events': coalescence_events,
+        'breakouts':          breakouts,
+        'time':               time,
+        'interface_radius':   interface_radius,
+    }
