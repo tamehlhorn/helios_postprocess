@@ -922,8 +922,13 @@ class ICFAnalyzer:
 
             # Search window: inside the ablator outer boundary
             # (capsule_outer_idx) and outside the gas cavity (ri[0, 0]).
+            # Helios stores ri as Python-slice end indices (one past the last
+            # zone in each region) so the outer-boundary value can equal
+            # n_zones; clamp to the last valid node index.
             cap_idx = self.data.capsule_outer_idx
-            outer_zone = max(0, int(ri[0, cap_idx]) - 1)
+            n_nodes = self.data.zone_boundaries.shape[1]
+            outer_node = min(int(ri[0, cap_idx]), n_nodes - 1)
+            outer_zone = max(0, outer_node - 1)
             inner_zone = max(0, int(ri[0, 0]))
             if outer_zone <= inner_zone + 4:
                 logger.info(
@@ -937,6 +942,10 @@ class ICFAnalyzer:
                 float(t_ns[0]) + 1e-3
             )
 
+            # dP_dr_threshold tuned for weak-foot designs (α ≲ 1.5). Foot
+            # gradients in PDD_20-class runs sit near 5e7 J/cm⁴; 1e9 — the
+            # default used by analyze_first_shock in the ICE-only slice — is
+            # too restrictive once the search window includes the full shell.
             result = track_shock_trajectories(
                 pressure=total_P,
                 zone_boundaries=self.data.zone_boundaries,
@@ -944,13 +953,38 @@ class ICFAnalyzer:
                 interface_radius=interface_radius,
                 search_inner_zone=inner_zone,
                 search_outer_zone=outer_zone,
-                dP_dr_threshold=1e9,
+                dP_dr_threshold=self.config.get('shock_train_dP_dr_threshold', 1e8),
                 smoothing_sigma=1.5,
                 min_P_ratio=1.5,
                 max_shock_velocity=0.05,    # cm/ns (~500 km/s)
                 min_separation=5e-4,        # cm (5 µm)
                 min_time_ns=t_floor,
             )
+
+            # Diagnostic: per-snapshot detection count (helps tune threshold)
+            try:
+                from helios_postprocess.pressure_gradients import identify_shocks
+                counts = []
+                for ti in range(0, len(t_ns), max(1, len(t_ns) // 20)):
+                    if t_ns[ti] < t_floor:
+                        counts.append(0)
+                        continue
+                    p_sl = total_P[ti, inner_zone:outer_zone + 1]
+                    zb_sl = self.data.zone_boundaries[ti, inner_zone:outer_zone + 2]
+                    sh = identify_shocks(
+                        p_sl, zb_sl,
+                        dP_dr_threshold=self.config.get(
+                            'shock_train_dP_dr_threshold', 1e8),
+                        smoothing_sigma=1.5,
+                        min_separation=5e-4,
+                    )
+                    counts.append(len(sh))
+                logger.info(
+                    f"Shock train detections per snapshot (every "
+                    f"{max(1, len(t_ns) // 20)} steps): {counts}"
+                )
+            except Exception:
+                pass
 
             self.data.shock_trajectories       = result['trajectories']
             self.data.shock_coalescence_events = result['coalescence_events']

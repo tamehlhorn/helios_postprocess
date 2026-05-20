@@ -61,10 +61,14 @@ def main(base):
         ])  # um
         ax.plot(t_ns, r_gas_ice, color="k", lw=1.2, ls="--",
                 label="gas/ice interface")
-        # outer ablator boundary
+        # outer ablator boundary -- clamp because Helios stores ri as
+        # slice-end indices (one past the last zone), which can equal n_zones
+        # while zone_boundaries has only n_zones+1 elements indexed 0..n_zones.
         cap_idx = data.capsule_outer_idx
+        n_nodes = data.zone_boundaries.shape[1]
         r_outer = np.array([
-            data.zone_boundaries[t, int(ri[t, cap_idx])] * 1e4 for t in range(len(t_ns))
+            data.zone_boundaries[t, min(int(ri[t, cap_idx]), n_nodes - 1)] * 1e4
+            for t in range(len(t_ns))
         ])
         ax.plot(t_ns, r_outer, color="0.5", lw=1.0, ls=":",
                 label="ablator outer boundary")
