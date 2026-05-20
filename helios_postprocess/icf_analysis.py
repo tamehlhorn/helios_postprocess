@@ -1010,8 +1010,9 @@ class ICFAnalyzer:
             min_traj_span = self.config.get('shock_train_min_traj_span', 5e-3)  # cm (50 µm)
             kept_indices = [
                 k for k, tr in enumerate(result['trajectories'])
-                if tr['indices'].size >= min_traj_len
-                and (float(tr['radius'].max()) - float(tr['radius'].min())) >= min_traj_span
+                if tr['reason_ended'] == 'breakout'
+                or (tr['indices'].size >= min_traj_len
+                    and (float(tr['radius'].max()) - float(tr['radius'].min())) >= min_traj_span)
             ]
             idx_map = {old: new for new, old in enumerate(kept_indices)}
             result['trajectories'] = [

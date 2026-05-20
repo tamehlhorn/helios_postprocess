@@ -1050,6 +1050,22 @@ def track_shock_trajectories(
                 tr['ended'] = i
                 tr['_misses'] = 0
                 unmatched.remove(best_j)
+                # Terminate trajectory at the first gas/ice breakout so
+                # subsequent shocks have to seed new trajectories rather
+                # than chaining onto the post-breakout Lagrangian
+                # interface continuation. Matches LILAC R-T convention.
+                if d['radius'] <= interface_radius[i] + breakout_tolerance:
+                    recent_pr = tr['P_ratio'][-(lookback_steps + 1):]
+                    if recent_pr and max(recent_pr) >= min_P_ratio:
+                        tr['_breakout_record'] = {
+                            't_idx':       i,
+                            'time_ns':     float(time[i]),
+                            'radius':      float(d['radius']),
+                            'P_post_Gbar': float(d['P_post_Gbar']),
+                            'P_ratio':     float(d['P_ratio']),
+                        }
+                        tr['_active'] = False
+                        tr['reason_ended'] = 'breakout'
             else:
                 tr['_misses'] += 1
                 if tr['_misses'] > max_gap_steps:
@@ -1097,29 +1113,16 @@ def track_shock_trajectories(
                         trajectories[younger]['reason_ended'] = f'coalesced_into:{older}'
                     break  # one event per pair (earliest convergence)
 
-    # ---- 4. Breakout records: first crossing of interface_radius ----
-    # A shock detected in the innermost cold-fuel zone has zone-center
-    # radius slightly larger than r_interface (= zb[ri[:,0]]). Use
-    # breakout_tolerance (default 0; pass a fraction of a zone width when
-    # the search window doesn't extend into the gas cavity).
+    # ---- 4. Breakout records: collected during linking ----
+    # Trajectories self-record their breakout at the first interface
+    # crossing in step 2 (then terminate). Harvest those records here.
     breakouts: List[Dict] = []
     for tr_id, tr in enumerate(trajectories):
-        for k, i_t in enumerate(tr['indices']):
-            if tr['radius'][k] > interface_radius[i_t] + breakout_tolerance:
-                continue
-            lo = max(0, k - lookback_steps)
-            pr_window = tr['P_ratio'][lo:k + 1]
-            if pr_window.size == 0 or float(np.max(pr_window)) < min_P_ratio:
-                continue
-            breakouts.append({
-                'trajectory_id': tr_id,
-                't_idx':         int(i_t),
-                'time_ns':       float(time[i_t]),
-                'radius':        float(tr['radius'][k]),
-                'P_post_Gbar':   float(tr['P_post_Gbar'][k]),
-                'P_ratio':       float(tr['P_ratio'][k]),
-            })
-            break
+        rec = tr.pop('_breakout_record', None)
+        if rec is not None:
+            rec = dict(rec)
+            rec['trajectory_id'] = tr_id
+            breakouts.append(rec)
     breakouts.sort(key=lambda b: b['time_ns'])
 
     return {
