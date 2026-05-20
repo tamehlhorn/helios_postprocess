@@ -925,14 +925,18 @@ class ICFAnalyzer:
                 for t in range(len(t_ns))
             ])
 
-            # Search window: inside the ablator outer boundary
-            # (capsule_outer_idx) and outside the gas cavity (ri[0, 0]).
+            # Search window: cold + ablated fuel only (gas/ice interface to
+            # fuel/ablator boundary). Including the ablator floods detections
+            # with the ablation front and post-shock fronts in the corona-
+            # heated CH skin, which is not what the LILAC R-T plot shows --
+            # those plots focus on the cold shell where the foot/ramp/peak
+            # shocks propagate toward the gas/ice interface.
             # Helios stores ri as Python-slice end indices (one past the last
             # zone in each region) so the outer-boundary value can equal
             # n_zones; clamp to the last valid node index.
-            cap_idx = self.data.capsule_outer_idx
+            fa_idx = self.data.fuel_ablator_idx
             n_nodes = self.data.zone_boundaries.shape[1]
-            outer_node = min(int(ri[0, cap_idx]), n_nodes - 1)
+            outer_node = min(int(ri[0, fa_idx]), n_nodes - 1)
             outer_zone = max(0, outer_node - 1)
             inner_zone = max(0, int(ri[0, 0]))
             if outer_zone <= inner_zone + 4:
@@ -942,29 +946,74 @@ class ICFAnalyzer:
                 )
                 return
 
-            # Foot start floor: avoid IC discontinuity counting as a shock
-            t_floor = getattr(self.data, "laser_foot_start_ns", None) or (
-                float(t_ns[0]) + 1e-3
+            # t_floor: at least 1 ns to skip IC + grid relaxation transients;
+            # use laser_foot_start_ns if it is larger (deferred-foot designs).
+            t_floor = max(
+                1.0,
+                float(getattr(self.data, "laser_foot_start_ns", 0.0) or 0.0),
             )
+
+            # Stop tracking at bang time -- post-bang disassembly creates
+            # 50+ spurious detections per snapshot.
+            bang_ns = float(getattr(self.data, "bang_time", 0.0) or 0.0)
+            if bang_ns > 0.0 and bang_ns < 1.0:
+                bang_ns *= 1e9     # was stored in seconds
+            t_ceiling = bang_ns + 0.1 if bang_ns > 0.0 else float(t_ns[-1])
+
+            # Restrict tracker input to [t_floor, t_ceiling]. The tracker
+            # itself only respects min_time_ns, so cap the upper end by
+            # slicing inputs before passing them in.
+            keep = (t_ns <= t_ceiling)
+            t_track  = t_ns[keep]
+            P_track  = total_P[keep]
+            zb_track = self.data.zone_boundaries[keep]
+            ir_track = interface_radius[keep]
 
             # dP_dr_threshold tuned for weak-foot designs (α ≲ 1.5). Foot
             # gradients in PDD_20-class runs sit near 5e7 J/cm⁴; 1e9 — the
             # default used by analyze_first_shock in the ICE-only slice — is
             # too restrictive once the search window includes the full shell.
             result = track_shock_trajectories(
-                pressure=total_P,
-                zone_boundaries=self.data.zone_boundaries,
-                time=t_ns,
-                interface_radius=interface_radius,
+                pressure=P_track,
+                zone_boundaries=zb_track,
+                time=t_track,
+                interface_radius=ir_track,
                 search_inner_zone=inner_zone,
                 search_outer_zone=outer_zone,
-                dP_dr_threshold=self.config.get('shock_train_dP_dr_threshold', 1e8),
+                dP_dr_threshold=self.config.get('shock_train_dP_dr_threshold', 5e8),
                 smoothing_sigma=1.5,
-                min_P_ratio=1.5,
+                min_P_ratio=self.config.get('shock_train_min_P_ratio', 2.0),
                 max_shock_velocity=0.05,    # cm/ns (~500 km/s)
                 min_separation=5e-4,        # cm (5 µm)
                 min_time_ns=t_floor,
             )
+
+            # Filter short trajectories (noise): keep only those that
+            # persisted at least 3 timesteps. Coalescence events that
+            # reference dropped trajectories are also pruned.
+            min_traj_len = self.config.get('shock_train_min_traj_len', 3)
+            kept_indices = [
+                k for k, tr in enumerate(result['trajectories'])
+                if tr['indices'].size >= min_traj_len
+            ]
+            idx_map = {old: new for new, old in enumerate(kept_indices)}
+            result['trajectories'] = [
+                result['trajectories'][k] for k in kept_indices
+            ]
+            result['coalescence_events'] = [
+                {**ev, 'trajectory_pair': (
+                    idx_map[ev['trajectory_pair'][0]],
+                    idx_map[ev['trajectory_pair'][1]],
+                )}
+                for ev in result['coalescence_events']
+                if ev['trajectory_pair'][0] in idx_map
+                and ev['trajectory_pair'][1] in idx_map
+            ]
+            result['breakouts'] = [
+                {**b, 'trajectory_id': idx_map[b['trajectory_id']]}
+                for b in result['breakouts']
+                if b['trajectory_id'] in idx_map
+            ]
 
             # Diagnostic: per-snapshot detection count + raw |dP/dr| scale.
             # Printed (not logged) so the tuning signal survives any log
@@ -977,9 +1026,11 @@ class ICFAnalyzer:
                 print(
                     f"[shock_train] window=zones[{inner_zone},{outer_zone}], "
                     f"n_zones={outer_zone - inner_zone + 1}, "
-                    f"t_floor={t_floor:.3f} ns, "
+                    f"t=[{t_floor:.3f},{t_ceiling:.3f}] ns, "
                     f"dP_dr_threshold="
-                    f"{self.config.get('shock_train_dP_dr_threshold', 1e8):.1e}"
+                    f"{self.config.get('shock_train_dP_dr_threshold', 5e8):.1e}, "
+                    f"min_P_ratio="
+                    f"{self.config.get('shock_train_min_P_ratio', 2.0):.1f}"
                 )
                 print(f"[shock_train] {'t_ns':>7s} {'max|dP/dr|':>12s} "
                       f"{'n_shocks':>8s}")
@@ -988,13 +1039,13 @@ class ICFAnalyzer:
                     zb_sl = self.data.zone_boundaries[ti, inner_zone:outer_zone + 2]
                     dpdr, _ = calculate_pressure_gradient(p_sl, zb_sl, 1.5)
                     max_grad = float(np.max(np.abs(dpdr))) if dpdr.size else 0.0
-                    if t_ns[ti] < t_floor:
+                    if t_ns[ti] < t_floor or t_ns[ti] > t_ceiling:
                         n_sh = 0
                     else:
                         sh = identify_shocks(
                             p_sl, zb_sl,
                             dP_dr_threshold=self.config.get(
-                                'shock_train_dP_dr_threshold', 1e8),
+                                'shock_train_dP_dr_threshold', 5e8),
                             smoothing_sigma=1.5,
                             min_separation=5e-4,
                         )
