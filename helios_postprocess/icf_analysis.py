@@ -961,30 +961,43 @@ class ICFAnalyzer:
                 min_time_ns=t_floor,
             )
 
-            # Diagnostic: per-snapshot detection count (helps tune threshold)
+            # Diagnostic: per-snapshot detection count + raw |dP/dr| scale.
+            # Printed (not logged) so the tuning signal survives any log
+            # config. Output deliberately compact.
             try:
-                from helios_postprocess.pressure_gradients import identify_shocks
-                counts = []
-                for ti in range(0, len(t_ns), max(1, len(t_ns) // 20)):
-                    if t_ns[ti] < t_floor:
-                        counts.append(0)
-                        continue
+                from helios_postprocess.pressure_gradients import (
+                    identify_shocks, calculate_pressure_gradient,
+                )
+                stride = max(1, len(t_ns) // 12)
+                print(
+                    f"[shock_train] window=zones[{inner_zone},{outer_zone}], "
+                    f"n_zones={outer_zone - inner_zone + 1}, "
+                    f"t_floor={t_floor:.3f} ns, "
+                    f"dP_dr_threshold="
+                    f"{self.config.get('shock_train_dP_dr_threshold', 1e8):.1e}"
+                )
+                print(f"[shock_train] {'t_ns':>7s} {'max|dP/dr|':>12s} "
+                      f"{'n_shocks':>8s}")
+                for ti in range(0, len(t_ns), stride):
                     p_sl = total_P[ti, inner_zone:outer_zone + 1]
                     zb_sl = self.data.zone_boundaries[ti, inner_zone:outer_zone + 2]
-                    sh = identify_shocks(
-                        p_sl, zb_sl,
-                        dP_dr_threshold=self.config.get(
-                            'shock_train_dP_dr_threshold', 1e8),
-                        smoothing_sigma=1.5,
-                        min_separation=5e-4,
-                    )
-                    counts.append(len(sh))
-                logger.info(
-                    f"Shock train detections per snapshot (every "
-                    f"{max(1, len(t_ns) // 20)} steps): {counts}"
-                )
-            except Exception:
-                pass
+                    dpdr, _ = calculate_pressure_gradient(p_sl, zb_sl, 1.5)
+                    max_grad = float(np.max(np.abs(dpdr))) if dpdr.size else 0.0
+                    if t_ns[ti] < t_floor:
+                        n_sh = 0
+                    else:
+                        sh = identify_shocks(
+                            p_sl, zb_sl,
+                            dP_dr_threshold=self.config.get(
+                                'shock_train_dP_dr_threshold', 1e8),
+                            smoothing_sigma=1.5,
+                            min_separation=5e-4,
+                        )
+                        n_sh = len(sh)
+                    print(f"[shock_train] {t_ns[ti]:7.3f} {max_grad:12.3e} "
+                          f"{n_sh:8d}")
+            except Exception as _e:
+                print(f"[shock_train] diagnostic failed: {_e}")
 
             self.data.shock_trajectories       = result['trajectories']
             self.data.shock_coalescence_events = result['coalescence_events']
