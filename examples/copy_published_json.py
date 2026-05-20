@@ -42,9 +42,18 @@ def main(argv=None):
                     help='Root directory to walk recursively for *.exo files.')
     ap.add_argument('--force', action='store_true',
                     help='Overwrite existing _published.json files at targets.')
+    ap.add_argument('--merge', action='store_true',
+                    help='Add missing keys from source into existing target '
+                         'JSON files (preserves existing values; only fills '
+                         'gaps). Mutually exclusive with --force.')
     ap.add_argument('--dry-run', action='store_true',
                     help='Report the plan without writing anything.')
     args = ap.parse_args(argv)
+
+    if args.force and args.merge:
+        print("ERROR: --force and --merge are mutually exclusive.",
+              file=sys.stderr)
+        return 1
 
     # Validate source is a real JSON file we can parse (fail fast).
     if not args.source.is_file():
@@ -52,9 +61,13 @@ def main(argv=None):
         return 1
     try:
         with open(args.source) as f:
-            json.load(f)
+            source_obj = json.load(f)
     except json.JSONDecodeError as e:
         print(f"ERROR: source is not valid JSON: {args.source}\n  {e}",
+              file=sys.stderr)
+        return 1
+    if args.merge and not isinstance(source_obj, dict):
+        print("ERROR: --merge requires the source JSON to be a top-level object.",
               file=sys.stderr)
         return 1
 
@@ -68,36 +81,76 @@ def main(argv=None):
         print(f"No *.exo files under {args.root}", file=sys.stderr)
         return 1
 
-    plan = []   # (action, target_path)
+    plan = []   # (action, target_path, added_keys_or_None)
     for exo in exos:
         base   = exo.stem                              # filename without .exo
         target = exo.parent / f"{base}_published.json"
         if target.resolve() == source_resolved:
-            plan.append(('skip_same', target)); continue
-        if target.exists() and not args.force:
-            plan.append(('skip_exists', target)); continue
-        plan.append(('copy', target))
+            plan.append(('skip_same', target, None)); continue
+        if not target.exists():
+            plan.append(('copy', target, None)); continue
+        # Target exists
+        if args.force:
+            plan.append(('copy', target, None)); continue
+        if args.merge:
+            try:
+                with open(target) as f:
+                    existing = json.load(f)
+            except json.JSONDecodeError as e:
+                plan.append(('skip_bad', target, str(e))); continue
+            if not isinstance(existing, dict):
+                plan.append(('skip_bad', target, 'top-level not a JSON object'))
+                continue
+            missing = [k for k in source_obj if k not in existing]
+            if missing:
+                plan.append(('merge', target, missing))
+            else:
+                plan.append(('skip_complete', target, None))
+            continue
+        plan.append(('skip_exists', target, None))
 
     # Execute
-    n_copy = n_exists = n_same = 0
-    for action, target in plan:
+    n_copy = n_exists = n_same = n_merge = n_complete = n_bad = 0
+    for action, target, info in plan:
         if action == 'copy':
             verb = "WOULD COPY" if args.dry_run else "COPY"
             print(f"{verb}: -> {target}")
             if not args.dry_run:
                 shutil.copy2(args.source, target)
             n_copy += 1
+        elif action == 'merge':
+            verb = "WOULD MERGE" if args.dry_run else "MERGE"
+            print(f"{verb}: {target}  (add: {', '.join(info)})")
+            if not args.dry_run:
+                with open(target) as f:
+                    existing = json.load(f)
+                for k in info:
+                    existing[k] = source_obj[k]
+                with open(target, 'w') as f:
+                    json.dump(existing, f, indent=4)
+            n_merge += 1
+        elif action == 'skip_complete':
+            n_complete += 1
         elif action == 'skip_exists':
             n_exists += 1
         elif action == 'skip_same':
             n_same += 1
+        elif action == 'skip_bad':
+            print(f"SKIP (bad target): {target}  -- {info}")
+            n_bad += 1
 
     print()
     print(f"Source: {args.source}")
     print(f"Found .exo files:    {len(exos)}")
     print(f"  Copied:            {n_copy}{'  (dry-run)' if args.dry_run else ''}")
-    print(f"  Skipped (exists):  {n_exists}  (use --force to overwrite)")
+    if args.merge:
+        print(f"  Merged (new keys): {n_merge}{'  (dry-run)' if args.dry_run else ''}")
+        print(f"  Already complete:  {n_complete}")
+    print(f"  Skipped (exists):  {n_exists}  "
+          f"(use --force to overwrite or --merge to fill gaps)")
     print(f"  Skipped (source):  {n_same}")
+    if n_bad:
+        print(f"  Skipped (bad):     {n_bad}")
     return 0
 
 
