@@ -1001,13 +1001,17 @@ class ICFAnalyzer:
                 min_time_ns=t_floor,
             )
 
-            # Filter short trajectories (noise): keep only those that
-            # persisted at least 3 timesteps. Coalescence events that
-            # reference dropped trajectories are also pruned.
-            min_traj_len = self.config.get('shock_train_min_traj_len', 3)
+            # Filter trajectories by length AND radial span. The radial span
+            # filter drops stationary "trajectories" -- compression fronts in
+            # the converging shell that look like a shock to identify_shocks
+            # but never actually propagate (e.g., a layer interface heating
+            # in place during stagnation).
+            min_traj_len  = self.config.get('shock_train_min_traj_len', 5)
+            min_traj_span = self.config.get('shock_train_min_traj_span', 5e-3)  # cm (50 µm)
             kept_indices = [
                 k for k, tr in enumerate(result['trajectories'])
                 if tr['indices'].size >= min_traj_len
+                and (float(tr['radius'].max()) - float(tr['radius'].min())) >= min_traj_span
             ]
             idx_map = {old: new for new, old in enumerate(kept_indices)}
             result['trajectories'] = [
