@@ -1040,7 +1040,20 @@ class ICFAnalyzer:
                 from helios_postprocess.pressure_gradients import (
                     identify_shocks, calculate_pressure_gradient,
                 )
-                stride = max(1, len(t_ns) // 12)
+                # Sample uniformly in TIME, not in timestep index. EXODUS
+                # clusters timesteps near burn, so index-uniform sampling
+                # misses the entire drive phase on igniting runs.
+                t_samples = np.linspace(
+                    max(float(t_ns[0]), t_floor),
+                    min(float(t_ns[-1]), t_ceiling),
+                    12,
+                )
+                sample_indices = sorted({
+                    int(np.argmin(np.abs(t_ns - ts))) for ts in t_samples
+                })
+                # Always include t=0 for IC reference
+                if 0 not in sample_indices:
+                    sample_indices = [0] + sample_indices
                 print(
                     f"[shock_train] window=zones[{inner_zone},{outer_zone}], "
                     f"n_zones={outer_zone - inner_zone + 1}, "
@@ -1052,7 +1065,7 @@ class ICFAnalyzer:
                 )
                 print(f"[shock_train] {'t_ns':>7s} {'r_int_um':>9s} "
                       f"{'max|dP/dr|':>12s} {'n_shocks':>8s}")
-                for ti in range(0, len(t_ns), stride):
+                for ti in sample_indices:
                     p_sl = total_P[ti, inner_zone:outer_zone + 1]
                     zb_sl = self.data.zone_boundaries[ti, inner_zone:outer_zone + 2]
                     dpdr, _ = calculate_pressure_gradient(p_sl, zb_sl, 1.5)
