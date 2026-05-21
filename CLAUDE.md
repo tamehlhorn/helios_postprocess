@@ -203,20 +203,64 @@ Each entry is `[value, uncertainty]`. Entries with `[0.0, 0.0]` are skipped.
     spike from being incorrectly identified as the peak implosion velocity.
     Fixed April 2026.
 
-16. **Flux-limiter convention (May 2026)**: Prism's Helios reports the flux
-    limiter `f` as a value that is **4× smaller than the ICF-community
-    standard convention** (Spitzer–Harm cap). To convert:
+16. **Flux-limiter convention + regime (May 2026)**:
 
-        f_standard  =  4 × f_prism
+    a) **Per-region read**: Helios reads the thermal-conductivity flux
+       limiter `f` from the .rhw file **per region** (not a single global
+       default). The values are parsed into
+       `data.flux_limiter_per_region` and reported uniformly or per-
+       region in the summary `Flux limiter (f)` block.
 
-    So `f_prism = 0.015` in the RHW file is equivalent to `f_standard = 0.060`
-    (the simulation default for ICF). A run reported as "fab02" / f = 0.020
-    is actually at f_standard = 0.080.
+    b) **Convention factor**: Prism's Helios reports `f` as a value that
+       is **4× smaller than the ICF-community standard convention**
+       (Spitzer–Harm cap). To convert:
 
-    The factor is the Prism team's working hypothesis as of May 2026 — pending
-    formal confirmation. `examples/scan_summary.py` exposes both columns
-    (`flux_limiter_prism`, `flux_limiter_standard`) so cross-run comparison
-    against published f values is unambiguous.
+            f_standard  =  4 × f_prism
+
+       So `f_prism = 0.015` is equivalent to `f_standard = 0.060` (the
+       simulation default for ICF). A run reported as `fab02` /
+       `f = 0.020` is actually at `f_standard = 0.080`. **This is the
+       Prism team's working hypothesis as of May 2026 — pending formal
+       confirmation. NOT directly verified from EXODUS diagnostics
+       because the FL doesn't engage in the calibration-range runs
+       (see (c) below).**
+
+    c) **Regime sensitivity (institutional knowledge, May 2026)**: the
+       flux-limiter knob has **two distinct regimes** in Helios behavior:
+
+       - **Small-f regime (FL-dominated)**: heat conduction strongly
+         capped, T_corona spikes, ablation pressure and implosion
+         velocity drop sharply with `f`. The simulation is sensitive
+         to `f` here.
+       - **Large-f regime (geometry-dominated)**: the cap is loose
+         enough that q_actual rarely hits f·q_FS in the conduction
+         zone; the simulation behavior is set by beam geometry
+         (cone, spot, focus), absorption physics, and adiabat — not
+         by `f`. Changing `f` between, say, 0.015 and 0.06 (Prism)
+         produces minimal change in V, T_crit, or HS ρR.
+
+       The current Olson_PDD_20 calibration runs span `f_prism ∈
+       [0.015, 0.06]` which is **all in the large-f regime** — the FL
+       knob does not engage there. `examples/check_flux_limiter.py`
+       confirmed this empirically: T_crit ≈ 2.4–2.8 keV regardless of
+       `f_file`, with `q_SH/q_FS` saturation-indicator implying the
+       limiter *should* engage but the observed temperature ratio
+       doesn't show the expected `f^(-2/3)` scaling.
+
+       To verify the convention factor and locate the FL-dominated
+       regime, run a slab/sphere problem at `f_prism = 0.003`
+       (`f_standard = 0.012` under ×4) — if FL is real and the ×4
+       hypothesis holds, this should produce a sharp T_corona rise
+       (~25 keV) and a substantially slower implosion. If it doesn't,
+       either (i) the FL value isn't being plumbed end-to-end through
+       Helios's electron conductivity, or (ii) the convention factor
+       is even larger than ×4. Either result is calibration-relevant.
+
+    `examples/scan_summary.py` exposes both columns (`flux_limiter_prism`,
+    `flux_limiter_standard`) so cross-run comparison against published
+    `f` values is unambiguous; `check_flux_limiter.py` plots
+    `q_SH/q_FS` saturation indicator and prints `T_crit` for inferred
+    regime classification.
 
 17. **Alpha-deposition mode (May 2026)**: `data.alpha_deposition_local` and
     `data.alpha_deposition_nonlocal` flags from the RHW parser determine the
