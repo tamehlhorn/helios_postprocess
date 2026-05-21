@@ -47,6 +47,10 @@ class RHWConfiguration:
     drive_temperature: Optional[np.ndarray] = None
     drive_location: str = ""                  # "Rmin" or "Rmax"; empty if no radiation drive
     drive_flux_multiplier: float = 1.0        # scales effective sigma*T^4 (Helios convention)
+    # Individual rad-source flags (May 2026 -- previously discarded after the
+    # Rmin/Rmax winner was chosen). Used by data.n_active_idd_sources.
+    rad_source_rmin_on: bool = False
+    rad_source_rmax_on: bool = False
     source_file: Optional[str] = None
     
     @property
@@ -98,7 +102,11 @@ class RHWParser:
         # Extract drive temperature data (radiation source from [Rad Source Data] block)
         drive_time, drive_temp, drive_location, drive_flux_mult = \
             self._parse_drive_temperature(lines)
-        
+
+        # Per-position rad-source flags (preserved separately so downstream
+        # code can count active IDD sources without re-parsing).
+        rmin_on, rmax_on = self._parse_rad_source_flags(lines)
+
         config = RHWConfiguration(
             is_direct_drive=is_direct_drive,
             burn_enabled=burn_enabled,
@@ -126,6 +134,8 @@ class RHWParser:
             flux_limiter=flux_value,
             flux_limiter_enabled=flux_enabled,
             flux_limiter_per_region=flux_per_region if flux_per_region else None,
+            rad_source_rmin_on=rmin_on,
+            rad_source_rmax_on=rmax_on,
         )
         
         logger.info(f"Configuration: {config.drive_type}, "
@@ -516,6 +526,25 @@ class RHWParser:
         logger.warning("Could not find 'Fusion reactions' flag, assuming burn disabled")
         return False
     
+    def _parse_rad_source_flags(self, lines: list) -> Tuple[bool, bool]:
+        """Return (rmin_on, rmax_on) booleans from the [Rad Source Data] block.
+
+        Separate from `_parse_drive_temperature` so callers can count
+        active IDD sources without depending on the drive-temperature
+        table being parseable.
+        """
+        rad_start = self._find_first_line(lines, "[Rad Source Data]")
+        if rad_start is None:
+            return False, False
+        rad_end = self._find_first_line(lines, "[End Rad Source Data]",
+                                        start=rad_start) or len(lines)
+        block = lines[rad_start:rad_end]
+        rmin = bool(self._extract_keyed_int(
+            block, "Rad source model at Rmin is on", default=0))
+        rmax = bool(self._extract_keyed_int(
+            block, "Rad source model at Rmax is on", default=0))
+        return rmin, rmax
+
     def _parse_drive_temperature(self, lines: list) -> Tuple[Optional[np.ndarray],
                                                               Optional[np.ndarray],
                                                               str, float]:

@@ -105,6 +105,14 @@ class ICFRunData:
         self.flux_limiter: float = 0.0              # from .rhw (first-region value, legacy)
         self.flux_limiter_enabled: bool = False     # from .rhw (any region enabled)
         self.flux_limiter_per_region: Optional[list] = None  # [{region, enabled, value}, ...]
+        # Active-source counts (May 2026). RHW reports max-array dims for
+        # beams/IDD even when only one is driven; these scalars expose what's
+        # *actually* on. Set by build_run_data + rhw_config propagation.
+        self.n_total_beams:   int = 0
+        self.n_active_beams:  int = 0
+        self.rad_source_rmin_on: bool = False
+        self.rad_source_rmax_on: bool = False
+        self.n_active_idd_sources: int = 0
         self.alpha_deposition_local: bool = False
         self.alpha_deposition_nonlocal: bool = False
         self.eos_models: list = None                              # [{region, type, file}]
@@ -445,6 +453,11 @@ def build_run_data(
         data.eos_models                = rhw_config.eos_models
         data.alpha_deposition_local    = rhw_config.alpha_deposition_local
         data.alpha_deposition_nonlocal = rhw_config.alpha_deposition_nonlocal
+        # IDD source flags (rad-source-at-Rmin / Rmax). RHW reports both
+        # booleans even when neither is on; we expose the active count.
+        data.rad_source_rmin_on    = bool(getattr(rhw_config, 'rad_source_rmin_on', False))
+        data.rad_source_rmax_on    = bool(getattr(rhw_config, 'rad_source_rmax_on', False))
+        data.n_active_idd_sources  = int(data.rad_source_rmin_on) + int(data.rad_source_rmax_on)
         
     data.drive_time = drive_time
     data.drive_temperature = drive_temperature
@@ -534,6 +547,31 @@ def build_run_data(
         _collapse_beam_axis(data.laser_power_delivered, "laser_power_delivered")
     data.laser_power_on_target, data.laser_power_on_target_per_beam = \
         _collapse_beam_axis(data.laser_power_on_target, "laser_power_on_target")
+
+    # Count beams that actually carry power. Helios's RHW format always
+    # reports the max array dim (typically 3 beams) even when PDD targets
+    # only drive beam 1. Threshold = 1 W on peak delivered power, well
+    # above any numerical noise; sub-MW beams aren't doing physics.
+    BEAM_POWER_THRESHOLD_W = 1.0
+    pb = data.laser_power_delivered_per_beam
+    if pb is not None and pb.ndim == 2:
+        peak_per_beam = np.max(pb, axis=0)             # (n_beam,)
+        active_mask   = peak_per_beam > BEAM_POWER_THRESHOLD_W
+        data.n_total_beams  = int(pb.shape[1])
+        data.n_active_beams = int(active_mask.sum())
+        if verbose and data.n_total_beams != data.n_active_beams:
+            inactive_idx = np.where(~active_mask)[0]
+            logger.info(
+                f"  ✓ Active beams: {data.n_active_beams}/{data.n_total_beams}  "
+                f"(inactive beam idx: {list(inactive_idx)}, peak <= "
+                f"{BEAM_POWER_THRESHOLD_W:.0e} W)"
+            )
+    elif data.laser_power_delivered is not None:
+        data.n_total_beams  = 1
+        data.n_active_beams = 1
+    else:
+        data.n_total_beams  = 0
+        data.n_active_beams = 0
 
     # ------------------------------------------------------------------
     # rad_pressure: non-ion pressure component

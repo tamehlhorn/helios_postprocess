@@ -659,6 +659,34 @@ def compare_with_published(sim_metrics: Dict,
             pv += f"±{format(pub_unc, fmt)}"
         lines.append(f"{label:<30} {sv:>15} {pv:>15} {delta:>9.1f}")
 
+    # ── Target-mass mismatch warning (May 2026) ──
+    # If sim_imploded_DT_mass differs from the published reference by more
+    # than 20%, the run is comparing two physically different capsules.
+    # HS rhoR / yield gaps that big can't be closed by Helios calibration
+    # because they reflect a target-design difference, not a code-tuning
+    # issue. This warning surfaces the structural mismatch before the user
+    # spends another cycle chasing it.
+    _sim_dt   = float(sim_metrics.get('imploded_DT_mass_mg', 0.0))
+    _pub_dt_e = published_metrics.get('imploded_DT_mass_mg', None)
+    if _sim_dt > 0 and _pub_dt_e is not None:
+        _pub_dt, _pub_dt_unc = _to_tuple(_pub_dt_e)
+        if _pub_dt > 0 and abs(_sim_dt - _pub_dt) / _pub_dt > 0.20:
+            lines.append("")
+            lines.append("-" * 80)
+            lines.append(
+                f"WARNING: TARGET-MASS MISMATCH "
+                f"({_sim_dt:.2f} mg sim vs {_pub_dt:.2f} mg published).")
+            lines.append(
+                "  HS rhoR / yield comparisons assume identical capsule design.")
+            lines.append(
+                "  A >20% imploded-mass difference is a target-design difference,")
+            lines.append(
+                "  not a calibration deficit. The Helios capsule may have less")
+            lines.append(
+                "  cold-fuel mass than the published reference target, in which")
+            lines.append(
+                "  case burn cannot fully propagate even with perfect kinematics.")
+
     lines.append("=" * 80)
     return "\n".join(lines)
 

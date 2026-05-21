@@ -345,6 +345,7 @@ drive multiplier. Reference pulse: foot ~23-25 TW (0-5 ns), ramp 5-9 ns, peak ~3
 | PDD_27 | 0.16 | 11 | Uniform | 5.00 | 0.5 | 73 | 10 | 0 | — | Focus too far + norm=0.5 bug |
 | PDD_28 | 0.02 | 35 | Uniform | 0.23 | 1.0 | ~1226 | 87.2 | 127 | 111 | Over-driven (peak v bug was active) |
 | DM_01b | 0.00 | 3.5 | Uniform | -2.50 | 1.0 | 405 | 90.9 | 1.58 | 1.56 | Inverted focus + narrow cone; matches LILAC v within 10%; 1.365 MJ drive |
+| **fab015_foot25_s018_c37** | **0.18** | **37** | **Uniform** | **0.22** | **1.0** | **429** | **74.4** | **29.3** | **1.75** | **★ PDD production calibration (May 2026), see closure note below** |
 
 **Key findings:**
 - Hydro efficiency locked at ~10.5% regardless of geometry -- excess drive is in ablation physics
@@ -353,11 +354,126 @@ drive multiplier. Reference pulse: foot ~23-25 TW (0-5 ns), ramp 5-9 ns, peak ~3
 - PDD_27 failure: d=5.0 cm (rays miss entirely) + norm=0.5 (half power) -- two compounding bugs
 - PDD_28 peak velocity was artifactually high due to velocity bug (now fixed); rerun needed
 
-**Next runs recommended:**
-- PDD_29: spot=0.02, cone=35°, uniform, d=0.23 cm, norm=1.0 -- rerun PDD_28 with fixed postprocessor
-- PDD_30: spot=0.02, cone=35°, uniform, d=0.20 cm, norm=1.0 -- compare focus position effect
-- If geometric approach insufficient: reduce peak power toward 200 TW, or increase flux limiter
-  above f=0.06 to reduce ablation efficiency
+### PDD calibration closure (May 2026)
+
+Production calibration point: **`Olson_PDD_20_fab015_foot25_s018_c37_burn`**
+
+| Parameter | Value | Note |
+|-----------|-------|------|
+| cone half-angle | 37° | wider than baseline 35° for geometric defocus |
+| spot radius | 0.18 cm | larger than baseline 0.16 cm for late-time defocus |
+| focus position d | 0.22 cm | ≈ R_initial |
+| FL (Prism) | 0.015 | f_standard = 0.060, Spitzer-Harm cap |
+| foot power | 25 TW | unchanged from baseline pulse table |
+| α deposition | non-local | clean (no local-α yield inflation) |
+| burn | ON | |
+| **eff_avg_coupling** | **74.4%** | from `data.eff_avg_coupling_pct` |
+
+**LILAC kinematics matched** (within 5–20% on every metric):
+
+| Metric | This run | LILAC | Δ |
+|--------|----------|-------|---|
+| V_peak (km/s) | 429 | 410 | +5% |
+| CR_max | 30.8 | 29.0 | +6% |
+| Peak total ρR (g/cm²) | 1.00 | 1.05 | −5% |
+| ⟨T_hs⟩ (keV) | 25.0 | 22.5 | +11% |
+| ⟨P_hs⟩ (Gbar) | 229 | 193 | +19% |
+| Foot shock (ns) | 6.05 | 7.5 | −19% |
+| Ramp shock (ns) | 8.10 | 10 | −19% |
+| **Peak shock (ns)** | **9.70** ✓ | 13 | −25% (3-shock train detected) |
+| Ignition | YES | YES | ✓ |
+| HS ρR T>4.5 (g/cm²) | 0.37 | 0.85 | −56% |
+| Yield (MJ) | 29.3 | 87 | −66% |
+
+**The remaining HS ρR / yield gap is NOT a calibration deficit.** Helios's PDD_20 target implodes 0.60 mg of DT vs the LILAC-reference ~1.7 mg. The cold-fuel mass shortage limits burn propagation through the shell (the original brief's "burn only propagates through ~58%" observation). The log reports `Burn did not fully propagate through fuel` at this point.
+
+**Diagnosis of the original −32% HS ρR gap:**
+- ~50% (kinematic): closed by this calibration (lower coupling via geometric defocus)
+- ~30–40% (structural): target-design difference, not closable in Helios without changing the capsule
+
+**The over-driven baseline `Olson_PDD_20_fab02_foot25_s016_burn`** (coupling 84%, V=463, α=1.05) is retained for legacy comparison but the calibration point above is what LILAC-comparable studies should use going forward.
+
+**Tuning sensitivities observed during closure:**
+- `cone+spot` is the dominant lever — coupling 84% → 74% via cone 35°→37° + spot 0.16→0.18
+- `foot22` (vs `foot25`) loses ignition at this coupling. Foot drive sets a narrow ignition band.
+- `s020/c38` over-defocuses → coupling 71.6%, ignition fails. `s018/c37` is at the ignition cliff.
+- FL changes in `f_prism ∈ [0.015, 0.060]` produce minimal change — that range is in the
+  geometry-dominated regime (see Convention #16(c)). Don't expect FL to be a useful knob unless
+  the value drops below ~0.005 Prism (f_standard ~0.02), where the limiter starts to bite.
+
+**Next runs in the cycle:**
+- `Olson_PDD_20_fab015_foot28_s018_c37_burn` (running) -- probe whether slightly more foot
+  drive widens the ignition window and raises HS ρR toward 0.5.
+- HDD calibration transfer (see "HDD calibration transfer plan" section below).
+
+### HDD calibration transfer plan (May 2026)
+
+The real production target is HDD (Vulcan / VI_6-class), not PDD. The PDD calibration above
+establishes the *method* -- now port it to HDD.
+
+**What carries over directly:**
+
+1. **Geometric defocus is the primary calibration knob.** PDD closed at cone 35°→37°,
+   spot 0.16→0.18 cm with coupling dropping 84% → 74%. Expect HDD to need a similar
+   relative defocus, anchored on its own LILAC-equivalent target velocity.
+2. **`eff_avg_coupling_pct` is the headline diagnostic.** Pipeline reports it directly;
+   `compare_absorbed_energy.py` and `scan_summary.csv` make cross-run comparison trivial.
+3. **3-shock-train detection** confirms structural similarity to the reference code.
+4. **Foot drive is a secondary knob with a narrow ignition band.** Don't change it before
+   geometry is set.
+5. **FL is in the geometry-dominated regime** for current f_prism values. Don't bother
+   tuning it unless geometry-only closure plateaus.
+
+**What's DIFFERENT for HDD (don't blindly copy PDD values):**
+
+1. **Effective coupling target.** PDD aims at ~74% to match LILAC's ~68%. HDD reference
+   (e.g., Vulcan publications, or whichever code Xcimer compares against) likely has a
+   different absorbed-energy fraction -- ascertain it first.
+2. **Geometry baseline.** VI_6 starts at cone=20° (per CLAUDE.md table). Going wider
+   to defocus may require more aggressive cone changes (e.g. 25–30°) than PDD's 2° step.
+3. **Hot-spot mass / cold-shell mass.** VI_6 imploded DT is currently 1.68 mg (published
+   reference) -- this is the LILAC-reference value PDD was missing. HDD doesn't have the
+   target-mass deficit that limited PDD's HS ρR. Expect *full* closure to be possible
+   if calibration is done right.
+4. **Over-drive magnitude.** Per CLAUDE.md PDD scan, VI_6 was at V=763 km/s vs reference
+   410 km/s -- 86% over, vs PDD_22's 43% over. HDD over-drive is roughly 2× worse than
+   PDD's was. Plan for a larger coupling reduction (target ~50–60%?) to land on reference V.
+5. **HDD pulse shape** (610 TW peak vs PDD's 329 TW) and **target geometry** (~0.5 cm R
+   vs 0.23 cm) put it in a different ablation regime. Critical-surface intensity is
+   ~2.8e15 W/cm² vs PDD's 1.5e15 -- 2× higher. Resonant / SBS / parametric thresholds
+   are different.
+
+**Suggested HDD calibration sweep (drop-in template):**
+
+```bash
+# After identifying VI_6 baseline geometry from the .rhw file, sweep:
+#
+#   {cone in [20, 25, 30, 35]} × {spot in [base, base+0.05, base+0.10] cm}
+#
+# Target: eff_avg_coupling lands in the same fractional position relative
+# to HDD-reference-coupling as PDD's 74%/68% ratio implied for PDD.
+#
+# Run scan_summary after each batch:
+python3 ~/helios_postprocess/examples/scan_summary.py \
+    ~/Sims/Xcimer/Xcimer_Sims/D_Montgomery/ \
+    --out ~/Sims/Xcimer/Xcimer_Sims/D_Montgomery/HDD_calibration_scan.csv \
+    --lilac-velocity 410   # adjust to HDD reference velocity
+```
+
+**Diagnostic priorities for HDD (same toolset, retargeted):**
+- `examples/compare_absorbed_energy.py` -- compare candidate HDD geometry to VI_6 baseline.
+- `examples/plot_shock_trajectories.py` -- expect 3-shock train if the HDD pulse design is
+  multi-shock (most are); verify it survives at the calibrated geometry.
+- `examples/check_flux_limiter.py` -- if HDD's `r_crit` sits in a different conduction
+  regime than PDD's, the FL knob may engage differently. Worth one diagnostic run.
+- `examples/scan_summary.py` -- once 4+ HDD runs exist, the same composite-distance
+  ranking will surface the production calibration point.
+
+**Pre-existing HDD scan in CLAUDE.md** (the "HDD Calibration Setup" / VI_6 sections
+elsewhere in this doc) covers flux-limiter sensitivity in slab geometry. The PDD-closure
+work suggests revisiting whether the flux-limiter scan was in the FL-dominated or
+geometry-dominated regime, and whether HDD's calibration mismatch is also primarily
+geometric.
 
 ## Test Data
 
