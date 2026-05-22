@@ -64,6 +64,10 @@ def load_rhor(path: Path) -> Tuple[np.ndarray, np.ndarray, str]:
             row = [c.strip() for c in row if c.strip()]
             if not row:
                 continue
+            # Skip comment lines so they don't get captured as the "header"
+            # and defeat the unit auto-detect.
+            if row[0].lstrip().startswith('#'):
+                continue
             try:
                 vals = [float(x) for x in row]
                 rows.append(vals)

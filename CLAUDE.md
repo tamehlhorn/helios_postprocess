@@ -385,7 +385,16 @@ Production calibration point: **`Olson_PDD_20_fab015_foot25_s018_c37_burn`**
 | HS ρR T>4.5 (g/cm²) | 0.37 | 0.85 | −56% |
 | Yield (MJ) | 29.3 | 87 | −66% |
 
-**The remaining HS ρR / yield gap is NOT a calibration deficit.** Helios's PDD_20 target implodes 0.60 mg of DT vs the LILAC-reference ~1.7 mg. The cold-fuel mass shortage limits burn propagation through the shell (the original brief's "burn only propagates through ~58%" observation). The log reports `Burn did not fully propagate through fuel` at this point.
+**The remaining HS ρR / yield gap is NOT a calibration deficit.** Helios's PDD_20 target implodes 0.60 mg vs the reference codes' ~1.5–1.6 mg, derived by integrating M = 4π∫ρ(r) r² dr on the digitized Olson 2021 Fig 7 ρ(r) profiles (see `references/Olson2021_digitizations/`):
+
+| Code | M (mg), r ≤ 160 µm | Helios / Ref |
+|------|---------------------|--------------|
+| LILAC | 1.62 | 0.37× |
+| xRAGE | 1.63 | 0.37× |
+| HYDRA | 1.49 | 0.40× |
+| Helios PDD_20 | **0.60** | — |
+
+The 0.39 mass ratio predicts HS ρR ratio ~ 0.54 (since ρR ∝ M^(2/3) at fixed compression). Helios's calibrated HS ρR T>4.5 = 0.37 / LILAC 0.85 = 0.44 — agreement within 20%, **consistent with the residual gap being mass-deficit driven**. The cold-fuel mass shortage limits burn propagation through the shell (the original brief's "burn only propagates through ~58%" observation). The log reports `Burn did not fully propagate through fuel` at this point.
 
 **Diagnosis of the original −32% HS ρR gap:**
 - ~50% (kinematic): closed by this calibration (lower coupling via geometric defocus)
@@ -431,10 +440,13 @@ establishes the *method* -- now port it to HDD.
    different absorbed-energy fraction -- ascertain it first.
 2. **Geometry baseline.** VI_6 starts at cone=20° (per CLAUDE.md table). Going wider
    to defocus may require more aggressive cone changes (e.g. 25–30°) than PDD's 2° step.
-3. **Hot-spot mass / cold-shell mass.** VI_6 imploded DT is currently 1.68 mg (published
-   reference) -- this is the LILAC-reference value PDD was missing. HDD doesn't have the
-   target-mass deficit that limited PDD's HS ρR. Expect *full* closure to be possible
-   if calibration is done right.
+3. **Hot-spot mass / cold-shell mass.** VI_6 reported imploded DT mass is currently
+   the order ~1.6 mg per CLAUDE.md notes (verify against the digitized HDD reference
+   when added to `Aux_Standalone_files/`). HDD likely does NOT have the target-mass
+   deficit that limited PDD's HS ρR (which we now know was ~37% of the
+   Olson-2021-Fig-7-integrated 1.5–1.6 mg reference). If VI_6's Helios imploded mass
+   matches its reference within 20%, full HS ρR closure should be possible. If
+   not, the same structural-deficit ceiling applies.
 4. **Over-drive magnitude.** Per CLAUDE.md PDD scan, VI_6 was at V=763 km/s vs reference
    410 km/s -- 86% over, vs PDD_22's 43% over. HDD over-drive is roughly 2× worse than
    PDD's was. Plan for a larger coupling reduction (target ~50–60%?) to land on reference V.
