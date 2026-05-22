@@ -214,10 +214,10 @@ class ICFOutputGenerator:
             # ACTIVE beams (peak power > 1 W) from TOTAL array dim, since
             # Helios RHW reports the max array dim (typically 3) even when
             # only one beam is driven.
+            per_beam = getattr(d, 'laser_power_on_target_per_beam', None)
             n_active = int(getattr(d, 'n_active_beams', 0))
             n_total  = int(getattr(d, 'n_total_beams', 0))
             if n_total == 0:                  # fallback when active-count wasn't computed
-                per_beam = getattr(d, 'laser_power_on_target_per_beam', None)
                 n_total  = per_beam.shape[1] if (per_beam is not None
                                                   and per_beam.ndim == 2) else 1
                 n_active = n_total
