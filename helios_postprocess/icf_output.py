@@ -72,11 +72,13 @@ class ICFOutputGenerator:
                 base = base[:-len(ext)]
                 break
 
-        summary_path = base + '_summary.txt'
-        history_path = base + '_history.csv'
+        summary_path  = base + '_summary.txt'
+        history_path  = base + '_history.csv'
+        radial_path   = base + '_radial_at_ignition.csv'
 
         self.write_summary(summary_path)
         self.write_time_histories(history_path)
+        self.write_radial_at_ignition(radial_path)
 
     # ------------------------------------------------------------------
     # Summary text file
@@ -590,6 +592,61 @@ class ICFOutputGenerator:
 
         logger.info(f"Time histories written: {path}  "
                     f"({n_times} rows × {len(header)} columns)")
+
+    # ------------------------------------------------------------------
+    # Radial profile at ignition (apples-to-apples vs Olson 2021 Fig 7)
+    # ------------------------------------------------------------------
+
+    def write_radial_at_ignition(self, path: str) -> None:
+        """Dump zone-by-zone (r, T_ion, T_e, ρ, P) at the ignition timestep.
+
+        The ignition timestep is the moment ρR_hs first crosses 0.3 g/cm²
+        (the burn-propagation analyzer sets `data.ignition_index` to its
+        time index). Output matches the format of the digitized Olson
+        2021 Fig 7 line-outs in `references/Olson2021_digitizations/` so
+        Helios profiles can be overlaid directly against LILAC / xRAGE /
+        HYDRA.
+
+        Skips silently if ignition wasn't detected (ignition_index = -1).
+        """
+        d = self.data
+        i_ign = int(getattr(d, 'ignition_index', -1))
+        if i_ign < 0 or d.zone_boundaries is None or d.ion_temperature is None:
+            logger.info("Radial-at-ignition CSV: no ignition detected, skipping")
+            return
+
+        zb       = d.zone_boundaries[i_ign]
+        zone_c   = 0.5 * (zb[:-1] + zb[1:])              # zone centers, cm
+        T_ion_kV = d.ion_temperature[i_ign]  / 1000.0
+        T_e_kV   = (d.elec_temperature[i_ign] / 1000.0
+                    if d.elec_temperature is not None else np.full_like(T_ion_kV, np.nan))
+        rho_gcc  = d.mass_density[i_ign]
+        P_total  = (d.ion_pressure[i_ign]
+                    + (d.rad_pressure[i_ign] if d.rad_pressure is not None else 0.0))
+        P_Gbar   = P_total * 1e-8
+
+        # Region-interface NODE indices at this timestep, for annotation
+        ri = d.region_interfaces_indices
+        ri_now = ri[i_ign] if ri is not None else None
+
+        logger.info(f"Writing radial profile at ignition: {path}")
+        with open(path, 'w') as f:
+            f.write(f"# Helios radial profile at ignition (ρR_hs first crosses 0.3)\n")
+            f.write(f"# t_ignition_ns = {d.ignition_time:.4f}\n")
+            f.write(f"# ignition_index = {i_ign}\n")
+            f.write(f"# T_ion_onaxis_keV = {d.ignition_T_ion_onaxis_keV:.3f}\n")
+            f.write(f"# hs_radius_um = {d.ignition_hs_radius * 1e4:.2f}\n")
+            f.write(f"# hs_pressure_Gbar = {d.ignition_hs_pressure:.2f}\n")
+            if ri_now is not None:
+                f.write(f"# region_interface_node_indices = "
+                        f"{list(int(x) for x in ri_now)}\n")
+                f.write(f"# region_interface_radii_um = "
+                        f"{[round(float(zb[int(i)] * 1e4), 2) for i in ri_now]}\n")
+            f.write("zone_idx,r_um,T_ion_keV,T_e_keV,rho_gcc,P_total_Gbar\n")
+            for k in range(len(zone_c)):
+                f.write(f"{k},{zone_c[k]*1e4:.4f},{T_ion_kV[k]:.4f},"
+                        f"{T_e_kV[k]:.4f},{rho_gcc[k]:.4f},{P_Gbar[k]:.4f}\n")
+        logger.info(f"Radial profile written: {path}  ({len(zone_c)} zones)")
 
     # ------------------------------------------------------------------
     # Helpers for time-history computation

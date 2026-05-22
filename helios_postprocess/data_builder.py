@@ -178,6 +178,8 @@ class ICFRunData:
         self.ignition_T_ion_onaxis_keV: float = 0.0  # T_ion at r=0 at ignition;
                                                      # apples-to-apples with
                                                      # published-figure central T
+        self.ignition_index: int = -1                # timestep index for the
+                                                     # radial-profile CSV writer
         self.burn_propagation_time: float = 0.0    # ns  (when HS ρR = total ρR)
 
         # Neutron-averaged quantities
