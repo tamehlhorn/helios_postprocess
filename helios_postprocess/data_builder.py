@@ -175,6 +175,9 @@ class ICFRunData:
         self.ignition_time: float = 0.0            # ns  (when HS ρR crosses 0.3 g/cm²)
         self.ignition_hs_radius: float = 0.0       # cm  (at ignition time)
         self.ignition_hs_pressure: float = 0.0     # Gbar (at ignition time)
+        self.ignition_T_ion_onaxis_keV: float = 0.0  # T_ion at r=0 at ignition;
+                                                     # apples-to-apples with
+                                                     # published-figure central T
         self.burn_propagation_time: float = 0.0    # ns  (when HS ρR = total ρR)
 
         # Neutron-averaged quantities

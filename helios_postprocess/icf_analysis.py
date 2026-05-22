@@ -1955,6 +1955,17 @@ class ICFAnalyzer:
                         np.sum(p_total[hot_mask] * mass[hot_mask]) / total_hs_mass)
                     logger.info(f"Hot-spot pressure at ignition: "
                                 f"{self.data.ignition_hs_pressure:.1f} Gbar")
+
+                # On-axis T_ion at ignition: the apples-to-apples
+                # equivalent of the central-r=0 value reported in published
+                # radial line-out figures (e.g., Olson 2021 Fig 7). LILAC /
+                # xRAGE / HYDRA all show ~12-15 keV here; Helios's previous
+                # "peak T over time" reported 28 keV but that's a different
+                # quantity (post-α-runaway maximum).
+                self.data.ignition_T_ion_onaxis_keV = float(
+                    self.data.ion_temperature[ign_idx, 0]) / 1000.0
+                logger.info(f"On-axis T_ion at ignition: "
+                            f"{self.data.ignition_T_ion_onaxis_keV:.2f} keV")
         else:
             logger.info("No ignition detected (ρR_hs never reached 0.3 g/cm²)")
 

@@ -443,6 +443,8 @@ class ICFOutputGenerator:
                          d.ignition_hs_radius * 1e4 if d.ignition_hs_radius > 0 else 0.0,
                          'μm', fmt='.0f'))
         _a(self._metric('HS pressure at ignition',      d.ignition_hs_pressure,   'Gbar', fmt='.1f'))
+        _a(self._metric('On-axis T_ion at ignition',     getattr(d, 'ignition_T_ion_onaxis_keV', 0.0),
+                                                         'keV',  fmt='.2f'))
         _a(self._metric('Complete propagation time',     d.burn_propagation_time,  'ns',   fmt='.3f'))
         # Peak ρR scalars (Olson 2021 ρR-vs-time anchors)
         _a(self._metric('Peak total ρR',                 getattr(d, 'peak_total_rhoR', 0.0),         'g/cm²', fmt='.3f'))

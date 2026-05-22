@@ -110,7 +110,8 @@ Place a `<name>_published.json` file next to the `.exo` file. Format:
     "inflight_KE_kJ":       [0.0, 0.0],
     "fraction_absorbed_pct":[97.0, 0.0],
     "P_hs_ignition_Gbar":   [75.0, 0.0],
-    "hs_radius_ignition_um":[120.0, 0.0]
+    "hs_radius_ignition_um":[120.0, 0.0],
+    "T_ion_onaxis_ignition_keV":[15.0, 3.0]
 }
 ```
 
