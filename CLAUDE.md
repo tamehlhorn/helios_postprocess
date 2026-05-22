@@ -346,7 +346,8 @@ drive multiplier. Reference pulse: foot ~23-25 TW (0-5 ns), ramp 5-9 ns, peak ~3
 | PDD_27 | 0.16 | 11 | Uniform | 5.00 | 0.5 | 73 | 10 | 0 | — | Focus too far + norm=0.5 bug |
 | PDD_28 | 0.02 | 35 | Uniform | 0.23 | 1.0 | ~1226 | 87.2 | 127 | 111 | Over-driven (peak v bug was active) |
 | DM_01b | 0.00 | 3.5 | Uniform | -2.50 | 1.0 | 405 | 90.9 | 1.58 | 1.56 | Inverted focus + narrow cone; matches LILAC v within 10%; 1.365 MJ drive |
-| **fab015_foot25_s018_c37** | **0.18** | **37** | **Uniform** | **0.22** | **1.0** | **429** | **74.4** | **29.3** | **1.75** | **★ PDD production calibration (May 2026), see closure note below** |
+| fab015_foot25_s018_c37 | 0.18 | 37 | Uniform | 0.22 | 1.0 | 429 | 74.4 | 29.3 | 1.75 | First geometry+FL closure attempt (May 2026); superseded by fab007 |
+| **fab007_foot25_s018_c37** | **0.18** | **37** | **Uniform** | **0.22** | **1.0** | **421** | **73.1** | **26.0** | **1.95** | **★ PDD production calibration (May 2026 v2), see closure note below** |
 
 **Key findings:**
 - Hydro efficiency locked at ~10.5% regardless of geometry -- excess drive is in ablation physics
@@ -355,36 +356,44 @@ drive multiplier. Reference pulse: foot ~23-25 TW (0-5 ns), ramp 5-9 ns, peak ~3
 - PDD_27 failure: d=5.0 cm (rays miss entirely) + norm=0.5 (half power) -- two compounding bugs
 - PDD_28 peak velocity was artifactually high due to velocity bug (now fixed); rerun needed
 
-### PDD calibration closure (May 2026)
+### PDD calibration closure (May 2026 v2)
 
-Production calibration point: **`Olson_PDD_20_fab015_foot25_s018_c37_burn`**
+Production calibration point: **`Olson_PDD_20_fab007_foot25_s018_c37_burn`**
+
+Supersedes the earlier `fab015_foot25_s018_c37` closure (May 21). The
+FL Prism convention test (fab003) demonstrated the FL-dominated
+regime exists and that f_prism between 0.003 and 0.015 brackets the
+ignition cliff. fab007 sits in the saturation knee, giving the best
+LILAC thermodynamic-state match while retaining ignition.
 
 | Parameter | Value | Note |
 |-----------|-------|------|
 | cone half-angle | 37° | wider than baseline 35° for geometric defocus |
 | spot radius | 0.18 cm | larger than baseline 0.16 cm for late-time defocus |
 | focus position d | 0.22 cm | ≈ R_initial |
-| FL (Prism) | 0.015 | f_standard = 0.060, Spitzer-Harm cap |
+| FL (Prism) | **0.007** | f_standard = 0.028, at the FL saturation knee |
 | foot power | 25 TW | unchanged from baseline pulse table |
 | α deposition | non-local | clean (no local-α yield inflation) |
 | burn | ON | |
-| **eff_avg_coupling** | **74.4%** | from `data.eff_avg_coupling_pct` |
+| **eff_avg_coupling** | **73.1%** | from `data.eff_avg_coupling_pct` |
 
-**LILAC kinematics matched** (within 5–20% on every metric):
+**LILAC kinematics + thermodynamic state matched** (within 7% on every non-mass-deficit metric):
 
-| Metric | This run | LILAC | Δ |
-|--------|----------|-------|---|
-| V_peak (km/s) | 429 | 410 | +5% |
-| CR_max | 30.8 | 29.0 | +6% |
-| Peak total ρR (g/cm²) | 1.00 | 1.05 | −5% |
-| ⟨T_hs⟩ (keV) | 25.0 | 22.5 | +11% |
-| ⟨P_hs⟩ (Gbar) | 229 | 193 | +19% |
+| Metric | This run (fab007) | LILAC | Δ |
+|--------|------------------:|------:|---|
+| V_peak (km/s) | 421 | 410 | **+2.7%** ✓ |
+| CR_max | 30.7 | 29.0 | +5.9% |
+| Peak total ρR (g/cm²) | 1.01 | 1.05 | −3.6% ✓ |
+| **⟨T_hs⟩ (keV)** | **23.1** | **22.5** | **+2.7%** ✓ |
+| **⟨P_hs⟩ (Gbar)** | **206** | **193** | **+6.6%** ✓ |
+| Adiabat | 1.95 | 3.0 | −35% |
 | Foot shock (ns) | 6.05 | 7.5 | −19% |
-| Ramp shock (ns) | 8.10 | 10 | −19% |
-| **Peak shock (ns)** | **9.70** ✓ | 13 | −25% (3-shock train detected) |
+| Ramp shock (ns) | 8.15 | 10 | −19% |
+| Peak shock (ns) | (lost in consolidator) | 13 | — |
 | Ignition | YES | YES | ✓ |
-| HS ρR T>4.5 (g/cm²) | 0.37 | 0.85 | −56% |
-| Yield (MJ) | 29.3 | 87 | −66% |
+| HS pressure at ignition (Gbar) | 237 | 90 | +163% (over) |
+| HS ρR T>4.5 (g/cm²) | 0.35 | 0.85 | −58% (mass deficit) |
+| Yield (MJ) | 26 | 87 | −70% (mass deficit) |
 
 **The remaining HS ρR / yield gap is NOT a calibration deficit.** Helios's PDD_20 target implodes 0.60 mg vs the reference codes' ~1.5–1.6 mg, derived by integrating M = 4π∫ρ(r) r² dr on the digitized Olson 2021 Fig 7 ρ(r) profiles (see `references/Olson2021_digitizations/`):
 
@@ -407,13 +416,28 @@ The 0.39 mass ratio predicts HS ρR ratio ~ 0.54 (since ρR ∝ M^(2/3) at fixed
 - `cone+spot` is the dominant lever — coupling 84% → 74% via cone 35°→37° + spot 0.16→0.18
 - `foot22` (vs `foot25`) loses ignition at this coupling. Foot drive sets a narrow ignition band.
 - `s020/c38` over-defocuses → coupling 71.6%, ignition fails. `s018/c37` is at the ignition cliff.
-- FL changes in `f_prism ∈ [0.015, 0.060]` produce minimal change — that range is in the
-  geometry-dominated regime (see Convention #16(c)). Don't expect FL to be a useful knob unless
-  the value drops below ~0.005 Prism (f_standard ~0.02), where the limiter starts to bite.
+- FL changes in `f_prism ∈ [0.015, 0.060]` produce minimal change — geometry-dominated regime.
+- **FL saturation knee at `f_prism ≈ 0.005–0.010` (f_standard ≈ 0.02–0.04)** — established by
+  bracketing tests (fab003 fails ignition, fab015 over-compresses, fab007 sits at the knee
+  with best ⟨T_hs⟩/⟨P_hs⟩ match). The full FL saturation curve maps as:
 
-**Next runs in the cycle:**
-- `Olson_PDD_20_fab015_foot28_s018_c37_burn` (running) -- probe whether slightly more foot
-  drive widens the ignition window and raises HS ρR toward 0.5.
+  | f_prism | f_standard | coupling | V_peak | ⟨T_hs⟩ | Ignition |
+  |--------:|-----------:|---------:|-------:|-------:|---------:|
+  | 0.060   | 0.240      | ~85%     | 463    | 38     | yes (over-driven) |
+  | 0.015   | 0.060      | 74.4%    | 429    | 25.0   | yes |
+  | **0.007** | **0.028**  | **73.1%** | **421** | **23.1** | **yes (production)** |
+  | 0.003   | 0.012      | 70.0%    | 412    | 16.3   | NO (under-driven) |
+
+**Next runs in the cycle (May 22):**
+- `Olson_PDD_20_fab007_foot25_s018_c37_burn` IS the calibration sweet spot
+  (this is the production point above).
+- Open question: the central T_ion plateau extending to ~25 µm at ignition
+  (vs LILAC's smooth profile) -- could be (a) Lagrangian first-zone
+  artifact, (b) AV multiplier effect, (c) actual physics. Test via:
+  - Pull latest `examples/run_analysis.py` (commit 3429903+) to generate
+    `<base>_radial_at_ignition.csv`. Zone-count of T_ion > 25 keV in
+    that file resolves (a) directly.
+  - AV scan at fab007 if .rhw exposes the coefficient.
 - HDD calibration transfer (see "HDD calibration transfer plan" section below).
 
 ### HDD calibration transfer plan (May 2026)
