@@ -638,10 +638,15 @@ class ICFOutputGenerator:
             f.write(f"# hs_radius_um = {d.ignition_hs_radius * 1e4:.2f}\n")
             f.write(f"# hs_pressure_Gbar = {d.ignition_hs_pressure:.2f}\n")
             if ri_now is not None:
+                # Helios stores ri as Python slice-end indices, so the
+                # outermost value can equal n_zones (one past the last
+                # valid zone_boundaries index). Clamp before lookup.
+                n_nodes = len(zb)
+                _clip = lambda i: int(min(int(i), n_nodes - 1))
                 f.write(f"# region_interface_node_indices = "
                         f"{list(int(x) for x in ri_now)}\n")
                 f.write(f"# region_interface_radii_um = "
-                        f"{[round(float(zb[int(i)] * 1e4), 2) for i in ri_now]}\n")
+                        f"{[round(float(zb[_clip(i)] * 1e4), 2) for i in ri_now]}\n")
             f.write("zone_idx,r_um,T_ion_keV,T_e_keV,rho_gcc,P_total_Gbar\n")
             for k in range(len(zone_c)):
                 f.write(f"{k},{zone_c[k]*1e4:.4f},{T_ion_kV[k]:.4f},"
