@@ -586,10 +586,11 @@ def main() -> int:
 
     print(f"Wrote {out_rhw}")
     print()
-    print("To run Helios on the split-pulse rhw:")
+    print("To run Helios on the split-pulse rhw (paste directly into zsh/bash;")
+    print("the -d argument defaults to the rhw's parent directory, override as needed):")
     print(f"  ~/Codes/Prism/Helios_11.0.0/Helios.app/Contents/MacOS/Helios \\")
     print(f"      -b -i {out_rhw} \\")
-    print(f"      -d <results_root> -o {out_rhw.stem} -x")
+    print(f"      -d {out_rhw.parent} -o {out_rhw.stem} -x")
     print()
     return 0
 
