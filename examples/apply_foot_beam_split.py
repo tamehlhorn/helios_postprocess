@@ -402,6 +402,8 @@ def main() -> int:
 
     active = [(bid, s, e) for (bid, s, e) in beam_blocks
               if is_pulse_active(lines, s, e)]
+    inactive = [(bid, s, e) for (bid, s, e) in beam_blocks
+                if not is_pulse_active(lines, s, e)]
 
     if len(active) == 0:
         print("ERROR: input rhw has no beam with a non-zero pulse table.",
@@ -416,15 +418,26 @@ def main() -> int:
         return 1
 
     active_id, b1_start, b1_end = active[0]
-    new_beam_id = max(bid for bid, _, _ in beam_blocks) + 1
 
-    if n_beams > 1:
-        n_inactive = n_beams - 1
-        print(f"Input has {n_beams} declared beams; beam {active_id} is the "
-              f"only active one (the other {n_inactive} are zero-pulse "
-              f"placeholders).  Splitting beam {active_id}; new ramp+peak "
-              f"beam will be added as beam {new_beam_id}.")
-        print()
+    # Helios is dimensioned for at most 3 beams, so we can't add a new
+    # beam; we have to RECYCLE one of the placeholder beams.  PDD declares
+    # 3 beams (beam 1 active, beams 2 and 3 zero-pulse placeholders);
+    # we turn the FIRST inactive beam into the ramp+peak driver.
+    if len(inactive) == 0:
+        print("ERROR: input rhw has no inactive placeholder beam to "
+              "recycle for the ramp+peak. Helios supports at most 3 beams, "
+              "so this script needs at least one zero-pulse placeholder "
+              "beam in the input to convert into the ramp+peak driver.",
+              file=sys.stderr)
+        return 1
+
+    new_beam_id, ib_start, ib_end = inactive[0]
+
+    print(f"Input has {n_beams} declared beams; beam {active_id} is the "
+          f"only active one.  Splitting beam {active_id} (foot only) and "
+          f"recycling placeholder beam {new_beam_id} as the ramp+peak "
+          f"driver.  `Number of laser beams` stays at {n_beams}.")
+    print()
 
     # ── Locate pulse table within beam 1
     rows_idx, time_idx, power_idx, times_s, powers_TW = locate_pulse_table(
@@ -531,21 +544,16 @@ def main() -> int:
     b2_block[b2_time_rel]  = format_data_row(t_grid,  lines[time_idx])
     b2_block[b2_power_rel] = format_data_row(P_beam2, lines[power_idx])
 
-    # ── Update "Number of laser beams = N" → "= N+1"
-    new_n_beams = n_beams + 1
-    new_lines[n_beams_idx] = re.sub(
-        r'(Number of laser beams\s*=\s*)\d+',
-        f'\\g<1>{new_n_beams}', new_lines[n_beams_idx], count=1,
-        flags=re.IGNORECASE)
-    if not new_lines[n_beams_idx].endswith('\n'):
-        new_lines[n_beams_idx] += '\n'
+    # ── `Number of laser beams` stays unchanged — we RECYCLE a placeholder
+    # rather than adding a new beam (Helios is dimensioned for 3 beams max).
 
-    # ── Splice the new beam block in just BEFORE [End Laser Source Data].
-    # Inserting at the end (rather than directly after the active beam)
-    # avoids renumbering any existing placeholder beams.
-    output_lines = (new_lines[:laser_end_idx]
+    # ── Splice: REPLACE the recycled placeholder beam's original block
+    # with the new ramp+peak block.  Since b1_end <= ib_start always
+    # (placeholder beams come after the active beam in the rhw layout),
+    # the in-place beam-1 edits above remain valid through the splice.
+    output_lines = (new_lines[:ib_start]
                     + b2_block
-                    + new_lines[laser_end_idx:])
+                    + new_lines[ib_end:])
 
     if args.verbose:
         print(f"Active beam {active_id} block: lines {b1_start+1}–{b1_end} "
@@ -553,12 +561,11 @@ def main() -> int:
         print(f"Pulse table:  rows-meta line {rows_idx+1}, "
               f"times line {time_idx+1}, powers line {power_idx+1}")
         print(f"Number-of-beams line: {n_beams_idx+1} "
-              f"({lines[n_beams_idx].rstrip()!r} → "
-              f"{new_lines[n_beams_idx].rstrip()!r})")
-        print(f"New ramp+peak beam: ID = {new_beam_id}, "
-              f"{len(b2_block)} lines, inserted at line "
-              f"{laser_end_idx+1} of the output (just before "
-              f"[End Laser Source Data])")
+              f"(unchanged at {n_beams} — recycling a placeholder)")
+        print(f"Recycling placeholder beam {new_beam_id}: original block "
+              f"at lines {ib_start+1}–{ib_end} ({ib_end - ib_start} lines)"
+              f" replaced with cloned active-beam template "
+              f"({len(b2_block)} lines, ramp+peak pulse).")
         if args.foot_cone is not None:
             print(f"Foot cone:    overridden to {args.foot_cone}°")
         if args.foot_spot is not None:
