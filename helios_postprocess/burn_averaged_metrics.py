@@ -663,33 +663,82 @@ def compare_with_published(sim_metrics: Dict,
             pv += f"±{format(pub_unc, fmt)}"
         lines.append(f"{label:<30} {sv:>15} {pv:>15} {delta:>9.1f}")
 
-    # ── Target-mass mismatch warning (May 2026) ──
-    # If sim_imploded_DT_mass differs from the published reference by more
-    # than 20%, the run is comparing two physically different capsules.
-    # HS rhoR / yield gaps that big can't be closed by Helios calibration
-    # because they reflect a target-design difference, not a code-tuning
-    # issue. This warning surfaces the structural mismatch before the user
-    # spends another cycle chasing it.
-    _sim_dt   = float(sim_metrics.get('imploded_DT_mass_mg', 0.0))
-    _pub_dt_e = published_metrics.get('imploded_DT_mass_mg', None)
-    if _sim_dt > 0 and _pub_dt_e is not None:
-        _pub_dt, _pub_dt_unc = _to_tuple(_pub_dt_e)
-        if _pub_dt > 0 and abs(_sim_dt - _pub_dt) / _pub_dt > 0.20:
-            lines.append("")
-            lines.append("-" * 80)
+    # ── Early-shock / oversized hot-spot diagnostic (May 22 2026) ──
+    # Supersedes the May 2026 "target-mass mismatch" warning, which was
+    # based on a misreading of Helios's "cold fuel" tally. The radial-at-
+    # ignition CSV showed Helios's hot spot (r_hs ~ 148 µm) extends nearly
+    # to the ice/foam boundary (r ~ 154 µm) — the DT ice is already inside
+    # the hot region. No mass is missing; it's just hot.
+    #
+    # The correct picture: early first/second shocks (Helios foot/ramp
+    # arrive ~1.8 ns ahead of LILAC) converge on the central gas before
+    # the shell has compressed onto its design adiabat, dumping extra PdV
+    # work on a softer target → on-axis T_ion ~28-30 keV (vs ~14 keV) →
+    # hot-spot pressure-balance boundary expands outward → larger r_hs at
+    # ignition → shorter confinement (τ ~ R/c_s) → incomplete burn
+    # propagation. Single-knob story: shock timing.
+    _T_axis     = float(sim_metrics.get('T_ion_onaxis_ignition_keV', 0.0))
+    _R_hs_ign   = float(sim_metrics.get('hs_radius_ignition_um', 0.0))
+    _pub_T_e    = published_metrics.get('T_ion_onaxis_ignition_keV', None)
+    _pub_R_e    = published_metrics.get('hs_radius_ignition_um', None)
+    _pub_foot_e = published_metrics.get('t_foot_shock_breakout_ns', None)
+    _pub_ramp_e = published_metrics.get('t_ramp_shock_breakout_ns', None)
+    _sim_foot   = float(sim_metrics.get('t_foot_shock_breakout_ns', float('nan')))
+    _sim_ramp   = float(sim_metrics.get('t_ramp_shock_breakout_ns', float('nan')))
+
+    _T_hot = False
+    _R_big = False
+    if _pub_T_e is not None and _T_axis > 0:
+        _pub_T, _ = _to_tuple(_pub_T_e)
+        if _pub_T > 0 and _T_axis > 1.5 * _pub_T:
+            _T_hot = True
+    if _pub_R_e is not None and _R_hs_ign > 0:
+        _pub_R, _ = _to_tuple(_pub_R_e)
+        if _pub_R > 0 and _R_hs_ign > 1.2 * _pub_R:
+            _R_big = True
+
+    if _T_hot and _R_big:
+        lines.append("")
+        lines.append("-" * 80)
+        lines.append(
+            "WARNING: HOT SPOT OVER-HEATED AND OVERSIZED AT IGNITION.")
+        if _pub_T_e is not None:
+            _pub_T, _ = _to_tuple(_pub_T_e)
             lines.append(
-                f"WARNING: TARGET-MASS MISMATCH "
-                f"({_sim_dt:.2f} mg sim vs {_pub_dt:.2f} mg published).")
+                f"  On-axis T_ion = {_T_axis:.1f} keV vs ref {_pub_T:.1f} keV "
+                f"({_T_axis/_pub_T:.1f}x).")
+        if _pub_R_e is not None:
+            _pub_R, _ = _to_tuple(_pub_R_e)
             lines.append(
-                "  HS rhoR / yield comparisons assume identical capsule design.")
-            lines.append(
-                "  A >20% imploded-mass difference is a target-design difference,")
-            lines.append(
-                "  not a calibration deficit. The Helios capsule may have less")
-            lines.append(
-                "  cold-fuel mass than the published reference target, in which")
-            lines.append(
-                "  case burn cannot fully propagate even with perfect kinematics.")
+                f"  Hot-spot radius = {_R_hs_ign:.1f} um vs ref {_pub_R:.1f} um "
+                f"({_R_hs_ign/_pub_R:.2f}x).")
+        # Shock-timing context (if available)
+        if _pub_foot_e is not None and np.isfinite(_sim_foot):
+            _pub_foot, _ = _to_tuple(_pub_foot_e)
+            if _pub_foot > 0:
+                lines.append(
+                    f"  Foot shock arrival: sim {_sim_foot:.2f} ns vs ref "
+                    f"{_pub_foot:.2f} ns ({_sim_foot - _pub_foot:+.2f} ns).")
+        if _pub_ramp_e is not None and np.isfinite(_sim_ramp):
+            _pub_ramp, _ = _to_tuple(_pub_ramp_e)
+            if _pub_ramp > 0:
+                lines.append(
+                    f"  Ramp shock arrival: sim {_sim_ramp:.2f} ns vs ref "
+                    f"{_pub_ramp:.2f} ns ({_sim_ramp - _pub_ramp:+.2f} ns).")
+        lines.append(
+            "  Likely cause: first/second shocks converging before the shell")
+        lines.append(
+            "  has pre-compressed onto its design adiabat. Extra PdV work on")
+        lines.append(
+            "  a softer central gas drives T_axis high, hot-spot pressure-")
+        lines.append(
+            "  balance boundary moves outward (larger r_hs), and confinement")
+        lines.append(
+            "  time tau ~ R/c_s shrinks despite the larger radius. Burn fails")
+        lines.append(
+            "  to propagate. Calibration lever: delay foot/ramp launch to push")
+        lines.append(
+            "  shock convergence later, allowing the shell to stiffen first.")
 
     lines.append("=" * 80)
     return "\n".join(lines)
