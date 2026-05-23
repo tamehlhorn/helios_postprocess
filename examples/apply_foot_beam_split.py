@@ -160,6 +160,54 @@ def find_beam_block(lines: List[str], beam_id: int) -> Tuple[Optional[int], Opti
     return None, None
 
 
+def find_all_beam_blocks(lines: List[str]
+                         ) -> Tuple[List[Tuple[int, int, int]], Optional[int]]:
+    """Enumerate every beam block within [Laser Source Data].
+
+    Returns (blocks, laser_end_idx) where blocks is a list of
+    (beam_id, start_idx, end_idx) tuples and laser_end_idx is the index
+    of the `[End Laser Source Data]` line (None if not found).
+    """
+    blocks: List[Tuple[int, int, int]] = []
+    in_laser = False
+    cur_id = None
+    cur_start = None
+    laser_end = None
+    for i, line in enumerate(lines):
+        if LASER_START_RE.search(line):
+            in_laser = True
+            continue
+        if LASER_END_RE.search(line):
+            if cur_id is not None:
+                blocks.append((cur_id, cur_start, i))
+                cur_id = None
+            laser_end = i
+            break
+        if not in_laser:
+            continue
+        m = BEAM_HEADER_RE.search(line)
+        if m:
+            if cur_id is not None:
+                blocks.append((cur_id, cur_start, i))
+            cur_id = int(m.group(1))
+            cur_start = i
+    return blocks, laser_end
+
+
+def is_pulse_active(lines: List[str], start: int, end: int) -> bool:
+    """True if the beam block has a pulse table with any non-zero power
+    entry.  Helios's NIF PDD convention uses 3 beams with beams 2 and 3
+    as placeholders (all-zero pulse tables) and `Laser power model is on
+    = 0`; only beam 1 is physically driving.  This helper distinguishes
+    a real-active beam from a placeholder.
+    """
+    rows_idx, time_idx, power_idx, times_s, powers_TW = locate_pulse_table(
+        lines, start, end)
+    if powers_TW is None:
+        return False
+    return bool(np.any(powers_TW > 0))
+
+
 def locate_pulse_table(lines: List[str], start: int, end: int
                        ) -> Tuple[Optional[int], Optional[int], Optional[int],
                                   Optional[np.ndarray], Optional[np.ndarray]]:
@@ -330,25 +378,53 @@ def main() -> int:
     with open(in_rhw) as fh:
         lines = fh.readlines()
 
-    # ── Verify single-beam input
+    # ── Locate `Number of laser beams = N`
     n_beams_idx, n_beams = find_n_beams_line(lines)
     if n_beams_idx is None:
         print("ERROR: could not locate `Number of laser beams = N` line "
               "inside [Laser Source Data].", file=sys.stderr)
         return 1
-    if n_beams != 1:
-        print(f"ERROR: input rhw has {n_beams} beams; this script requires "
-              f"a single-beam input.  (Splitting a 2+-beam rhw is ambiguous "
-              f"— which beam carries the foot?  Re-run on the unmodified "
-              f"single-beam calibration rhw instead.)", file=sys.stderr)
+
+    # ── Enumerate beam blocks and identify the ACTIVE beam
+    # PDD targets typically declare 3 beams (NIF PDD convention) with
+    # beams 2 and 3 as zero-pulse placeholders.  We split the single
+    # active beam, leave the placeholders alone, and append the new
+    # ramp+peak beam at the end of the laser data block.
+    beam_blocks, laser_end_idx = find_all_beam_blocks(lines)
+    if not beam_blocks:
+        print("ERROR: no beam blocks found inside [Laser Source Data].",
+              file=sys.stderr)
+        return 1
+    if laser_end_idx is None:
+        print("ERROR: could not locate [End Laser Source Data] marker.",
+              file=sys.stderr)
         return 1
 
-    # ── Locate beam 1 block
-    b1_start, b1_end = find_beam_block(lines, beam_id=1)
-    if b1_start is None:
-        print("ERROR: could not locate beam 1 block within "
-              "[Laser Source Data].", file=sys.stderr)
+    active = [(bid, s, e) for (bid, s, e) in beam_blocks
+              if is_pulse_active(lines, s, e)]
+
+    if len(active) == 0:
+        print("ERROR: input rhw has no beam with a non-zero pulse table.",
+              file=sys.stderr)
         return 1
+    if len(active) > 1:
+        active_ids = ', '.join(str(bid) for bid, _, _ in active)
+        print(f"ERROR: input rhw has multiple active beams (IDs {active_ids}). "
+              f"This script splits a SINGLE active beam into foot + ramp+peak. "
+              f"Re-run on a single-active-beam calibration rhw.",
+              file=sys.stderr)
+        return 1
+
+    active_id, b1_start, b1_end = active[0]
+    new_beam_id = max(bid for bid, _, _ in beam_blocks) + 1
+
+    if n_beams > 1:
+        n_inactive = n_beams - 1
+        print(f"Input has {n_beams} declared beams; beam {active_id} is the "
+              f"only active one (the other {n_inactive} are zero-pulse "
+              f"placeholders).  Splitting beam {active_id}; new ramp+peak "
+              f"beam will be added as beam {new_beam_id}.")
+        print()
 
     # ── Locate pulse table within beam 1
     rows_idx, time_idx, power_idx, times_s, powers_TW = locate_pulse_table(
@@ -423,28 +499,31 @@ def main() -> int:
     new_lines[time_idx]  = format_data_row(t_grid,  lines[time_idx])
     new_lines[power_idx] = format_data_row(P_beam1, lines[power_idx])
 
-    # ── Build beam-2 block (clone of ORIGINAL beam-1 block, then override)
+    # ── Build the new ramp+peak beam (clone of the ORIGINAL active-beam
+    # block, then override header ID + pulse table).  Geometry is preserved
+    # from the original active beam since beam N+1 inherits the calibrated
+    # (e.g. fab007) ramp+peak geometry.
     b2_block = list(lines[b1_start:b1_end])
 
-    # Header line "Parameters for beam = 1" → "= 2"
+    # Header line: "Parameters for beam = <active_id>" → "= <new_beam_id>"
     header_replaced = False
     for j, line in enumerate(b2_block):
         if BEAM_HEADER_RE.search(line):
             b2_block[j] = re.sub(
                 r'(Parameters for beam\s*:?\s*=\s*)\d+',
-                r'\g<1>2', line, count=1, flags=re.IGNORECASE)
+                f'\\g<1>{new_beam_id}', line, count=1, flags=re.IGNORECASE)
             if not b2_block[j].endswith('\n'):
                 b2_block[j] += '\n'
             header_replaced = True
             break
     if not header_replaced:
-        print("ERROR: could not locate beam header in cloned beam-2 block.",
-              file=sys.stderr)
+        print("ERROR: could not locate beam header in the cloned new-beam "
+              "block.", file=sys.stderr)
         return 1
 
-    # Beam 2 pulse table → ramp+peak (uses ORIGINAL template lines for
-    # indent/formatting; this is intentional since the template was
-    # cloned from the unmodified beam-1 block).
+    # New beam pulse table → ramp+peak (uses ORIGINAL template lines for
+    # indent/formatting, intentionally — the template was cloned from the
+    # unmodified active-beam block).
     b2_rows_rel  = rows_idx  - b1_start
     b2_time_rel  = time_idx  - b1_start
     b2_power_rel = power_idx - b1_start
@@ -452,26 +531,34 @@ def main() -> int:
     b2_block[b2_time_rel]  = format_data_row(t_grid,  lines[time_idx])
     b2_block[b2_power_rel] = format_data_row(P_beam2, lines[power_idx])
 
-    # ── Update "Number of laser beams = 1" → "= 2"
+    # ── Update "Number of laser beams = N" → "= N+1"
+    new_n_beams = n_beams + 1
     new_lines[n_beams_idx] = re.sub(
         r'(Number of laser beams\s*=\s*)\d+',
-        r'\g<1>2', new_lines[n_beams_idx], count=1, flags=re.IGNORECASE)
+        f'\\g<1>{new_n_beams}', new_lines[n_beams_idx], count=1,
+        flags=re.IGNORECASE)
     if not new_lines[n_beams_idx].endswith('\n'):
         new_lines[n_beams_idx] += '\n'
 
-    # ── Splice beam-2 block in immediately after beam-1 block
-    output_lines = new_lines[:b1_end] + b2_block + new_lines[b1_end:]
+    # ── Splice the new beam block in just BEFORE [End Laser Source Data].
+    # Inserting at the end (rather than directly after the active beam)
+    # avoids renumbering any existing placeholder beams.
+    output_lines = (new_lines[:laser_end_idx]
+                    + b2_block
+                    + new_lines[laser_end_idx:])
 
     if args.verbose:
-        print(f"Beam 1 block: lines {b1_start+1}–{b1_end} "
+        print(f"Active beam {active_id} block: lines {b1_start+1}–{b1_end} "
               f"({b1_end - b1_start} lines)")
         print(f"Pulse table:  rows-meta line {rows_idx+1}, "
               f"times line {time_idx+1}, powers line {power_idx+1}")
         print(f"Number-of-beams line: {n_beams_idx+1} "
               f"({lines[n_beams_idx].rstrip()!r} → "
               f"{new_lines[n_beams_idx].rstrip()!r})")
-        print(f"Beam-2 block: {len(b2_block)} lines, inserted at line "
-              f"{b1_end+1} of the output")
+        print(f"New ramp+peak beam: ID = {new_beam_id}, "
+              f"{len(b2_block)} lines, inserted at line "
+              f"{laser_end_idx+1} of the output (just before "
+              f"[End Laser Source Data])")
         if args.foot_cone is not None:
             print(f"Foot cone:    overridden to {args.foot_cone}°")
         if args.foot_spot is not None:
