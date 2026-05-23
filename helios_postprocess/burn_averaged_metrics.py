@@ -663,20 +663,22 @@ def compare_with_published(sim_metrics: Dict,
             pv += f"±{format(pub_unc, fmt)}"
         lines.append(f"{label:<30} {sv:>15} {pv:>15} {delta:>9.1f}")
 
-    # ── Early-shock / oversized hot-spot diagnostic (May 22 2026) ──
-    # Supersedes the May 2026 "target-mass mismatch" warning, which was
-    # based on a misreading of Helios's "cold fuel" tally. The radial-at-
-    # ignition CSV showed Helios's hot spot (r_hs ~ 148 µm) extends nearly
-    # to the ice/foam boundary (r ~ 154 µm) — the DT ice is already inside
-    # the hot region. No mass is missing; it's just hot.
+    # ── Over-amplified / oversized hot-spot diagnostic (May 23 2026) ──
+    # Two prior framings of this residual were wrong: the "target-mass
+    # mismatch" of May 2026 (Helios's cold-fuel tag was misread; the DT
+    # ice is actually inside the hot spot), and the "early-shock heating"
+    # of May 22 2026 (the high on-axis T at ignition is alpha self-
+    # heating, not shock convergence — confirmed by running fab007 with
+    # burn OFF: identical hydro, ⟨T_hs⟩ drops from 23 to 5 keV).
     #
-    # The correct picture: early first/second shocks (Helios foot/ramp
-    # arrive ~1.8 ns ahead of LILAC) converge on the central gas before
-    # the shell has compressed onto its design adiabat, dumping extra PdV
-    # work on a softer target → on-axis T_ion ~28-30 keV (vs ~14 keV) →
-    # hot-spot pressure-balance boundary expands outward → larger r_hs at
-    # ignition → shorter confinement (τ ~ R/c_s) → incomplete burn
-    # propagation. Single-knob story: shock timing.
+    # The corrected picture: when the alpha bootstrap catches, it
+    # amplifies T_hs from the ~5 keV hydrodynamic floor up to ignition-
+    # range values AND spreads the T>4.5 keV mask outward into less-
+    # dense ice. The result is an oversized, over-heated hot spot at
+    # ignition with a confinement deficit (Helios HS ρR T>4.5 = 0.35 vs
+    # LILAC's 0.85). This is downstream of the calibrated drive — not a
+    # drive-phase knob. The warning surfaces the symptom; the cause is
+    # alpha-amplification-driven hot-spot bloat at the ignition cliff.
     _T_axis     = float(sim_metrics.get('T_ion_onaxis_ignition_keV', 0.0))
     _R_hs_ign   = float(sim_metrics.get('hs_radius_ignition_um', 0.0))
     _pub_T_e    = published_metrics.get('T_ion_onaxis_ignition_keV', None)
@@ -726,19 +728,19 @@ def compare_with_published(sim_metrics: Dict,
                     f"  Ramp shock arrival: sim {_sim_ramp:.2f} ns vs ref "
                     f"{_pub_ramp:.2f} ns ({_sim_ramp - _pub_ramp:+.2f} ns).")
         lines.append(
-            "  Likely cause: first/second shocks converging before the shell")
+            "  Likely cause: alpha self-heating amplifying the central hot")
         lines.append(
-            "  has pre-compressed onto its design adiabat. Extra PdV work on")
+            "  region beyond LILAC's confined state. In 1D Helios the alpha-")
         lines.append(
-            "  a softer central gas drives T_axis high, hot-spot pressure-")
+            "  amplified T>4.5 keV mask spreads outward into less-dense ice,")
         lines.append(
-            "  balance boundary moves outward (larger r_hs), and confinement")
+            "  producing an oversized & under-confined hot spot relative to")
         lines.append(
-            "  time tau ~ R/c_s shrinks despite the larger radius. Burn fails")
+            "  the reference codes. This is downstream of the drive — not a")
         lines.append(
-            "  to propagate. Calibration lever: delay foot/ramp launch to push")
+            "  drive-phase calibration knob. Run a burn-OFF equivalent to see")
         lines.append(
-            "  shock convergence later, allowing the shell to stiffen first.")
+            "  the hydrodynamic floor (~5 keV for fab007-class PDD configs).")
 
     lines.append("=" * 80)
     return "\n".join(lines)

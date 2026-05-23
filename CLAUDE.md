@@ -395,106 +395,50 @@ LILAC thermodynamic-state match while retaining ignition.
 | HS ρR T>4.5 (g/cm²) | 0.35 | 0.85 | −58% (mass deficit) |
 | Yield (MJ) | 26 | 87 | −70% (mass deficit) |
 
-**Corrected diagnosis (May 22 2026): the remaining HS ρR / yield gap is an early-shock / over-heated-gas problem, NOT a target-mass deficit.**
+**Corrected diagnosis (May 23 2026, supersedes May 22): the remaining HS ρR / yield gap is alpha-amplification of an under-confined hot spot at the ignition cliff. Not a target-mass deficit, and not early-shock heating.**
 
-The earlier "0.60 mg vs 1.5–1.6 mg cold-fuel mass deficit" framing was based on misreading what Helios labels "cold fuel" at ignition. The radial-at-ignition CSV diagnostic (`<base>_radial_at_ignition.csv`, added via `write_radial_at_ignition` in `icf_output.py`) showed:
+Two earlier framings of the residual were wrong:
 
-| Quantity | Value |
-|----------|-------|
-| Hot spot radius at ignition | 148.0 µm |
-| Ice/foam interface (r₂) | 153.8 µm |
-| Zones with T_ion > 25 keV | 37 (spanning 0–45 µm) |
-| Central plateau T_ion | ~29 keV |
-| Region interfaces at ignition | [68.6, 153.8, 9847.6, 20749.8] µm |
+1. **Target-mass deficit (April 2026, retired May 22):** the 0.60 mg "imploded DT" tag was misread. The radial-at-ignition CSV showed Helios's hot spot (r_hs = 148 µm) extends to within 6 µm of the ice/foam boundary (r₂ = 153.8 µm) — nearly the entire DT ice layer is *inside* the hot region. The "cold fuel" tag was capturing DT-CH foam, not missing DT mass. The DT ice is conserved.
 
-The hot spot (r_hs = 148 µm) **extends to within 6 µm of the ice/foam boundary** — nearly the entire DT ice layer is inside the hot region at ignition. What Helios reports as "cold fuel" at this snapshot is mostly DT-CH foam ablator, not missing DT mass. The 0.60 mg figure was the cold-fuel-tagged mass, not the imploded DT mass. The DT ice is conserved; it's just been swept into the hot spot.
+2. **Early-shock heating (May 22, retired May 23):** the ~29 keV on-axis T_ion at ignition was *not* coming from shock convergence heating of the central gas. It's alpha self-heating. Confirmed by running fab007 with burn flag OFF (same geometry, same pulse, just no alpha deposition) — the hydrodynamic state is essentially identical to fab007 burn-on (V_peak 421, peak ρ 165 g/cc, peak total ρR 1.25, foot shock 6.05 ns, ramp shock 8.15 ns) but ⟨T_hs⟩ falls to 5 keV. The 23 keV in burn-on fab007 is the alpha-amplified version of the 5 keV hydrodynamic floor.
 
-**The actual physical picture — single-knob early-shock chain:**
+**The correct picture:**
 
-1. Foot shock arrives at gas/ice at **6.05 ns** (Helios) vs **7.5 ns** (LILAC) — 1.45 ns early
-2. Ramp shock arrives at **8.15 ns** vs **10.0 ns** — 1.85 ns early
-3. Both shocks converge on a softer, less-compressed central gas → more PdV work per shock → stronger central heating
-4. On-axis T_ion at ignition runs **~28–30 keV** (Helios) vs **~14 keV** (Olson Fig 7 mean of LILAC/xRAGE/HYDRA) — factor of ~2
-5. Hot-spot/cold-fuel pressure-balance boundary (isobaric, P_hs ~ ρT) expands outward → **r_hs = 148 µm vs LILAC's ~120 µm**
-6. Confinement time τ ~ R_hs / c_s_hs. R_hs grew, but c_s ∝ √T grew faster → **net shorter confinement** despite larger hot spot
-7. (HS ρR)(α heating) × τ < losses → burn fails to propagate → HS ρR T>4.5 plateaus at 0.35 vs LILAC 0.85
+1. Helios's pre-alpha hydrodynamic state for the calibrated geometry sits at **⟨T_hs⟩ ≈ 5 keV, HS ρR T>4.5 ≈ 0.15 g/cm²**. This is universal across the calibrated geometry (fab007) and reasonable foot-power / foot-geometry perturbations (verified across foot=15/18/20/25 TW and cone=37–45° / spot=0.18–0.25 cm).
+2. Whether the alpha bootstrap catches and amplifies this depends on subtle dwell-time / threshold-margin physics. **fab007 catches it; perturbations don't.** fab007 sits *exactly* on the alpha-ignition cliff.
+3. When the bootstrap catches, alpha heating amplifies T_hs from 5 → 23 keV (matching LILAC's 22.5 keV) and spreads the T > 4.5 keV mask outward — growing HS ρR T>4.5 from 0.15 to 0.35. But that's still 2.4× below LILAC's 0.85.
+4. The residual yield gap (26 vs 87 MJ ≈ 3.4×) lives in the **amplified hot-spot confinement**. Helios's hot spot ends up oversized (r_hs = 148 µm vs LILAC's 120 µm) and under-confined. The alpha amplification spreads outward into less-dense ice rather than confining burn in denser DT.
 
-Everything downstream (oversized hot spot, low HS ρR, no burn propagation, the DT ice already absorbed into the hot region) is consistent with **shock timing being the root cause**. FL is secondary — lowering FL slows the heat front into the gas and partially masks the early-shock symptom, which is why the FL knee gave only thermodynamic-state improvement, not HS ρR closure.
+**Why is Helios's hot spot oversized at alpha-amplification time?** Open question. Candidate explanations:
+- 1D alpha transport doesn't reproduce LILAC's mean-free-path / energy-deposition profile correctly
+- Helios's hot-spot/cold-shell pressure-balance interface is too soft (low ρ at the boundary) so any P spike pushes it outward
+- The geometric beam-miss compensation (cone 37° defocus) gives the right time-averaged coupling but the wrong *instantaneous* peak-phase coupling, which sets hot-spot radius
 
-**Revised closure ladder for the original −32% HS ρR gap:**
-- ~50% (kinematic): closed by geometry defocus (cone/spot calibration; FL knee)
-- ~30–40% (compression / burn propagation): **early-shock-driven hot-spot bloat**. Closable by retiming foot/ramp shocks to arrive ~1.5–1.9 ns later, allowing the shell to pre-compress before convergence. See "Foot-shock-retiming program" below.
+**Revised closure ladder for the original −70% yield gap:**
+- ~50% kinematic / coupling: closed by geometry defocus (cone/spot/focus calibration; FL knee at f_prism=0.007). V_peak, CR, peak total ρR match LILAC within 10%.
+- ~3.4× residual: alpha-amplified hot-spot confinement deficit. **Not closable by drive-phase calibration in 1D Helios** — the hot-spot expansion at alpha onset is the binding constraint, and it's downstream of any drive-phase knob.
+
+**Diagnostic to confirm this picture:** run the energy-ledger comparison between fab007 burn-ON and fab007 burn-OFF (same hydro, only alpha differs). See "Open priorities" below.
 
 **The over-driven baseline `Olson_PDD_20_fab02_foot25_s016_burn`** (coupling 84%, V=463, α=1.05) is retained for legacy comparison but the calibration point above is what LILAC-comparable studies should use going forward.
 
-### Foot-shock-retiming program (May 22 2026, no-burn study)
+### May 22-23 2026 perturbation study (retired)
 
-The early-shock diagnosis above is testable **without** alpha-deposition coupling. No-burn simulations preserve the entire shock-train physics through stagnation; ignition just doesn't fire. The diagnostic that closes the loop is the SHOCK TRAIN block in `<base>_summary.txt` — specifically the foot/ramp arrival times at the gas/ice interface compared to LILAC's 7.5 / 10.0 ns benchmarks. **No alpha-burn means runs land in ~30 min and we can sweep aggressively.**
+A series of perturbations to fab007 was run to test the (then-current) early-shock-heating hypothesis: foot-power reduction (foot=15/18/20 TW, single-beam, burn ON) and foot-geometry defocus (cone 39/42/45° + spot 0.20/0.22/0.25 cm via `apply_foot_beam_split.py`, 2-beam recycling a placeholder beam, burn OFF). Results in three lines:
 
-**Target shifts:**
+- **Foot-power scan (burn ON):** foot shock arrival slipped monotonically toward LILAC's 7.5 ns target (6.05 → 6.75 → 7.30 → 7.35 ns at foot=25 → 20 → 18 → 15). foot=18 nailed the timing target. **But all three perturbed runs failed to ignite** — yields collapsed to 0.25–0.30 MJ. Below the alpha-ignition cliff.
 
-| Shock | Helios fab007 | LILAC | Target Δt |
-|-------|---------------|-------|-----------|
-| Foot  | 6.05 ns       | 7.5 ns  | +1.45 ns |
-| Ramp  | 8.15 ns       | 10.0 ns | +1.85 ns |
+- **Foot-geometry defocus (burn OFF):** foot shock slipped 6.05 → 6.30 → 6.50 → 6.70 ns at cone=37 → 39 → 42 → 45°. Ramp shock moved the *wrong* way (8.15 → 7.95 → 7.80 → 7.60 ns) — weaker foot → less ice pre-compression → faster ramp shock. Foot-ramp gap shrank from 2.10 to 0.90 ns vs LILAC's 2.50 ns.
 
-We need both shocks to arrive ~1.5–1.9 ns later. The four candidate foot/ramp knobs, in order of expected leverage:
+- **fab007 burn-OFF reference:** identical hydro state to burn-ON fab007 (V_peak 421, peak ρ 166, peak ρR 1.25, foot 6.05 ns, ramp 8.15 ns) but ⟨T_hs⟩ falls from 23 to 5 keV. **This is what closed the early-shock hypothesis** — the 23 keV in burn-on fab007 is alpha amplification of a 5 keV hydrodynamic floor, not shock convergence heating.
 
-**Knob 1 — Foot launch delay (highest leverage, recommended first).**
-Push the foot's leading edge from the current `t_foot_start ≈ 0 ns` (or whatever the deck shows) to **~1.4 ns later**, keeping foot/ramp/peak shape and duration unchanged. This is a pure time translation of the foot block in the rhw `[Laser Source Data]` pulse table.
+**Lessons:**
+1. Foot intensity (geometric or power) IS a real lever for foot-shock arrival, ~+0.7 ns slip per 25-percent foot-intensity reduction. Useful telemetry, not a calibration knob.
+2. Ramp arrival is anti-correlated with foot intensity (weaker foot → less ice pre-compression → faster ramp). Foot defocus alone *can't* land both shocks at LILAC values; would need an independent ramp-defocus knob, which we didn't pursue.
+3. fab007 sits exactly on the alpha-ignition cliff. **Every** perturbation we tried failed to ignite. Don't perturb the production calibration speculatively — pre-test with a no-burn equivalent first.
 
-  - Naming: `Olson_PDD_20_fab007_foot25d14_s018_c37_nb` (d14 = delay 1.4 ns)
-  - Expected outcome: foot shock arrival at gas/ice should slip by ≈ Δt_launch (the shock travels at roughly constant ablation-driven velocity through the ice, so launch-time shifts translate ~1:1 to arrival-time shifts at the gas/ice interface).
-  - Bracket: try `d10`, `d14`, `d18` (1.0, 1.4, 1.8 ns delays) — three runs.
-  - Diagnostic gate: foot arrival within ±0.2 ns of 7.5 ns at one of the three points.
-
-**Knob 2 — Foot intensity reduction.**
-Drop foot power from 25 TW to 20 TW or 18 TW, keeping the foot/ramp/peak timing unchanged. A weaker foot launches a slower shock → later arrival at gas/ice. Less precise than delay (couples to adiabat and to ablation-driven shell trajectory), but doesn't require resampling the pulse table.
-
-  - Naming: `Olson_PDD_20_fab007_foot20_s018_c37_nb`, `..._foot18_..._nb`
-  - Risk: large foot reductions can lose ignition entirely at burn-on. Foot=22 already failed ignition (per CLAUDE.md May 21 closure note); foot=18 or 20 is below that threshold.
-  - No-burn deflects the ignition-failure concern — we're only checking shock arrival timing.
-
-**Knob 3 — Longer foot duration with same total foot energy (foot stretch).**
-Extend foot from current ~0–5 ns to 0–7 ns at lower power (e.g. 25 → 18 TW with end at 7 ns). Foot shock launches later (rising-edge moves with the pulse shape) and is weaker, both pushing arrival later.
-
-  - Naming: `Olson_PDD_20_fab007_foot25t7_s018_c37_nb`
-  - Couples foot delay AND intensity → useful for understanding the combined sensitivity but less clean for attribution.
-
-**Knob 4 — Ramp launch delay (independent of foot).**
-If foot retiming alone closes foot arrival to LILAC's 7.5 ns but ramp is still early, separately delay the ramp's leading edge from ~5 ns to ~6.5 ns. Tests whether foot and ramp share a common upstream cause (ablation-front formation timing) or are independently set by their own launch times.
-
-  - Naming: `Olson_PDD_20_fab007_foot25d14_ramp65_s018_c37_nb`
-
-**Recommended initial sweep (3 no-burn runs):**
-
-```
-Olson_PDD_20_fab007_foot25d10_s018_c37_nb   # foot delay +1.0 ns
-Olson_PDD_20_fab007_foot25d14_s018_c37_nb   # foot delay +1.4 ns  (target)
-Olson_PDD_20_fab007_foot25d18_s018_c37_nb   # foot delay +1.8 ns  (overshoot bracket)
-```
-
-Each ~30 min on Mac Studio. After grepping SHOCK TRAIN from each summary:
-
-```bash
-for run in foot25d10 foot25d14 foot25d18; do
-  echo "=== $run ==="
-  grep -A 8 "SHOCK TRAIN" \
-    ~/Sims/Xcimer/Olson_PDD/Olson_PDD_20_fab007_${run}_s018_c37_nb/Olson_PDD_20_fab007_${run}_s018_c37_nb_summary.txt
-done
-```
-
-**Decision gate**: if foot arrival reaches 7.5 ± 0.2 ns AND ramp arrival reaches 10.0 ± 0.3 ns at one of the three points (or with the addition of a ramp-delay run if needed), **submit the corresponding burn run** and check:
-1. On-axis T_ion at ignition drops toward 14 keV (current 28 keV)
-2. r_hs at ignition drops toward 120 µm (current 148 µm)
-3. HS ρR T>4.5 rises toward 0.85 (current 0.35)
-4. Yield rises toward 87 MJ (current 26 MJ)
-
-If (1) and (2) move correctly but (3) and (4) don't follow, the early-shock hypothesis is partially correct but a second residual exists. If (1)–(4) all move toward LILAC, the shock-timing diagnosis is confirmed and `Olson_PDD_20_fab007_foot25d14_s018_c37_burn` becomes the new production calibration.
-
-**Why no-burn for this study:** the shock-train tracker (`pressure_gradients.track_shock_trajectories`) operates on `(P, ρ, v)` gradient histories with no alpha-coupling dependence. Foot/ramp arrival at gas/ice happens well before ignition (~7–10 ns vs ignition at ~13 ns), so burn physics doesn't affect the diagnostic. Each no-burn run is ~3× faster than burn-on, and we don't risk a series of ignition-failure runs (foot=18/20 might not light) — we just measure shock arrival.
-
-**Auxiliary diagnostic:** also pull `t_peak_velocity_ns` from each summary. If foot retiming pushes shocks later but doesn't change peak-velocity timing significantly, the kinematic channel is preserved (good — we don't want to lose the V=421 km/s LILAC match). If t_peak_velocity slips by ~1 ns, we may be retiming the entire implosion rather than just the early shocks.
+These perturbation runs (`foot25_s018_c37_nb`, `foot{20,18,15}_s018_c37_burn`, `footgeo_c{39s20,42s22,45s25}_nb`) are retained for diagnostic value but are not candidate calibration points. **fab007 (`Olson_PDD_20_fab007_foot25_s018_c37_burn`) is the production PDD calibration.**
 
 **Tuning sensitivities observed during closure:**
 - `cone+spot` is the dominant lever — coupling 84% → 74% via cone 35°→37° + spot 0.16→0.18
@@ -2620,9 +2564,35 @@ chosen anchor but would not close the compression residuals.
 Full memo with derivation, four-options analysis, validation
 criteria, and disposition: `docs/Helios_1D_Coupling_Correction_Memo.docx`.
 
-## Open items / Next priorities (post-May 2026 geomcorr closeout)
+## Open items / Next priorities (post-May 23 2026 PDD closeout)
 
 In order of expected information yield:
+
+0. **Energy-ledger comparison: fab007 burn-ON vs fab007 burn-OFF.** This is the
+   diagnostic that would confirm the corrected May 23 picture (alpha
+   amplification of an under-confined hot spot, not shock-timing). The two
+   runs have identical hydrodynamic state through stagnation; the ledger
+   shows exactly where the alpha-deposited energy goes. Specifically: the
+   burn-ON run should show plasma thermal at stagnation 2–3× larger than
+   burn-OFF, with rad-boundary escape similar, and the alpha-deposited
+   channel populated only in burn-ON. If the ledger doesn't close cleanly
+   between the two runs at peak-velocity (before alpha onset), there's an
+   untracked channel worth understanding before HDD calibration.
+
+   Command:
+   ```bash
+   python3 ~/helios_postprocess/examples/energy_balance_diagnostic.py \
+       ~/Sims/Xcimer/Olson_PDD/Olson_PDD_20_fab007_foot25_s018_c37_burn/Olson_PDD_20_fab007_foot25_s018_c37_burn \
+       ~/Sims/Xcimer/Olson_PDD/Olson_PDD_20_fab007_foot25_s018_c37_nb/Olson_PDD_20_fab007_foot25_s018_c37_nb
+   ```
+   Output: `<base1>_vs_<base2>_energy_balance.pdf` in cwd + console table with
+   snapshots at peak-velocity, stagnation, end-of-run.
+
+   Expected at peak velocity (before alpha): KE_inward, U_plasma, rad-boundary
+   identical between the two runs (within ~1%). Expected at stagnation:
+   burn-ON shows large U_plasma jump from alpha deposition; burn-OFF stays at
+   hydrodynamic floor. The size of the U_plasma jump quantifies the alpha
+   amplification headroom.
 
 1. **HDD lrm4 with 150 eV prepulse** (Tr 130 → 150 eV at lrm4
    geometry, no-burn).  The cleanest isolated adiabat-lever test we
