@@ -395,31 +395,47 @@ LILAC thermodynamic-state match while retaining ignition.
 | HS ρR T>4.5 (g/cm²) | 0.35 | 0.85 | −58% (mass deficit) |
 | Yield (MJ) | 26 | 87 | −70% (mass deficit) |
 
-**Corrected diagnosis (May 23 2026, supersedes May 22): the remaining HS ρR / yield gap is alpha-amplification of an under-confined hot spot at the ignition cliff. Not a target-mass deficit, and not early-shock heating.**
+**Corrected diagnosis (May 23 2026 final, supersedes May 22 and the earlier May 23 alpha-confinement framing): the remaining HS ρR / yield gap is failure of burn to propagate across the ice/foam interface. Not a target-mass deficit, not early-shock heating, not generic alpha-amplified hot-spot expansion.**
 
-Two earlier framings of the residual were wrong:
+Three earlier framings of the residual were wrong:
 
 1. **Target-mass deficit (April 2026, retired May 22):** the 0.60 mg "imploded DT" tag was misread. The radial-at-ignition CSV showed Helios's hot spot (r_hs = 148 µm) extends to within 6 µm of the ice/foam boundary (r₂ = 153.8 µm) — nearly the entire DT ice layer is *inside* the hot region. The "cold fuel" tag was capturing DT-CH foam, not missing DT mass. The DT ice is conserved.
 
-2. **Early-shock heating (May 22, retired May 23):** the ~29 keV on-axis T_ion at ignition was *not* coming from shock convergence heating of the central gas. It's alpha self-heating. Confirmed by running fab007 with burn flag OFF (same geometry, same pulse, just no alpha deposition) — the hydrodynamic state is essentially identical to fab007 burn-on (V_peak 421, peak ρ 165 g/cc, peak total ρR 1.25, foot shock 6.05 ns, ramp shock 8.15 ns) but ⟨T_hs⟩ falls to 5 keV. The 23 keV in burn-on fab007 is the alpha-amplified version of the 5 keV hydrodynamic floor.
+2. **Early-shock heating (May 22, retired May 23 first revision):** the ~29 keV on-axis T_ion at ignition was *not* coming from shock convergence heating of the central gas. It's alpha self-heating. Confirmed by running fab007 with burn flag OFF (same geometry, same pulse, no alpha deposition) — the hydrodynamic state is essentially identical to fab007 burn-on (V_peak 421, peak ρ 165 g/cc, peak total ρR 1.25, foot shock 6.05 ns, ramp shock 8.15 ns) but ⟨T_hs⟩ falls to 5 keV. Energy-ledger comparison (`energy_balance_diagnostic.py`) confirms the pre-alpha hydrodynamic state is identical between burn-ON and burn-OFF runs to <0.1% on every tracked channel at peak velocity.
 
-**The correct picture:**
+3. **Generic "alpha-amplified hot-spot expansion" (May 23 first revision, retired May 23 final):** too vague. Bumped to a sharper diagnosis below.
 
-1. Helios's pre-alpha hydrodynamic state for the calibrated geometry sits at **⟨T_hs⟩ ≈ 5 keV, HS ρR T>4.5 ≈ 0.15 g/cm²**. This is universal across the calibrated geometry (fab007) and reasonable foot-power / foot-geometry perturbations (verified across foot=15/18/20/25 TW and cone=37–45° / spot=0.18–0.25 cm).
-2. Whether the alpha bootstrap catches and amplifies this depends on subtle dwell-time / threshold-margin physics. **fab007 catches it; perturbations don't.** fab007 sits *exactly* on the alpha-ignition cliff.
-3. When the bootstrap catches, alpha heating amplifies T_hs from 5 → 23 keV (matching LILAC's 22.5 keV) and spreads the T > 4.5 keV mask outward — growing HS ρR T>4.5 from 0.15 to 0.35. But that's still 2.4× below LILAC's 0.85.
-4. The residual yield gap (26 vs 87 MJ ≈ 3.4×) lives in the **amplified hot-spot confinement**. Helios's hot spot ends up oversized (r_hs = 148 µm vs LILAC's 120 µm) and under-confined. The alpha amplification spreads outward into less-dense ice rather than confining burn in denser DT.
+**The correct picture: burn-propagation arrest at the DT-ice / DT-CH-foam interface.**
 
-**Why is Helios's hot spot oversized at alpha-amplification time?** Open question. Candidate explanations:
-- 1D alpha transport doesn't reproduce LILAC's mean-free-path / energy-deposition profile correctly
-- Helios's hot-spot/cold-shell pressure-balance interface is too soft (low ρ at the boundary) so any P spike pushes it outward
-- The geometric beam-miss compensation (cone 37° defocus) gives the right time-averaged coupling but the wrong *instantaneous* peak-phase coupling, which sets hot-spot radius
+The numbers force it. At ignition:
+- LILAC: r_hs ≈ 120 µm, HS ρR T>4.5 = 0.85 g/cm² → ρ_avg over the hot region ≈ 71 g/cc
+- Helios fab007: r_hs ≈ 148 µm, HS ρR T>4.5 = 0.35 g/cm² → ρ_avg over the hot region ≈ 24 g/cc
 
-**Revised closure ladder for the original −70% yield gap:**
-- ~50% kinematic / coupling: closed by geometry defocus (cone/spot/focus calibration; FL knee at f_prism=0.007). V_peak, CR, peak total ρR match LILAC within 10%.
-- ~3.4× residual: alpha-amplified hot-spot confinement deficit. **Not closable by drive-phase calibration in 1D Helios** — the hot-spot expansion at alpha onset is the binding constraint, and it's downstream of any drive-phase knob.
+LILAC's hot region is **smaller in radius but 3× denser** than Helios's. The pure DT ice layer alone (40 zones, ρ₀ = 0.222 g/cc, ~25 µm initial thickness) doesn't carry enough mass at any compression to give ρ_avg = 71 g/cc over a 120 µm radius. **LILAC must be including compressed inner DT-CH foam inside its hot region.** Helios at fab007 isn't — its hot region encompasses compressed DT ice but the foam beyond stays below the 4.5 keV mask.
 
-**Diagnostic to confirm this picture:** run the energy-ledger comparison between fab007 burn-ON and fab007 burn-OFF (same hydro, only alpha differs). See "Open priorities" below.
+**Confirming experiment (May 23 2026): replacing pure DT ice (region 2) with wetted foam (same material as region 3) collapses burn entirely.** No bootstrap catches at all. This tells us:
+- The DT ice layer is necessary AND sufficient to start the alpha bootstrap in Helios
+- The bootstrap, once started, does NOT propagate beyond the ice into the foam region
+- Helios's burn substrate is the pure-DT ice layer ONLY; everything beyond is the dense pusher, not burning fuel
+- LILAC / xRAGE / HYDRA propagate burn into the foam — Helios doesn't
+
+**Restated calibration residual:** Helios and LILAC compress the target identically (V_peak, CR, peak total ρR all within ~5%) and both ignite the DT ice layer. **LILAC's burn front then crosses into the CH-doped DT foam and consumes it; Helios's burn front stalls at the ice/foam material interface.** The yield gap (26 vs 87 MJ ≈ 3.4×) is the foam-DT mass LILAC burns that Helios doesn't.
+
+**Why does Helios stall at the interface?** Open question. Candidates ranked by hypothesis quality:
+
+1. **Bremsstrahlung losses across the Z̄ discontinuity.** Foam has carbon (Z=6), so radiative losses jump at the boundary. Helios's 3T radiation transport may treat this as a sharper sink than the multigroup transport in LILAC/xRAGE/HYDRA.
+
+2. **Non-local alpha transport mean-free-path scaling.** Helios's non-local alpha model may underestimate alpha penetration into Z̄ ~ 3 mixed material, starving the foam side of the interface of alpha-deposited energy.
+
+3. **PROPACEOS foam EOS / opacity vs SESAME-equivalent.** The Helios PROPACEOS foam table may give different compressibility / heat capacity than LILAC's foam EOS, changing how fast the foam responds to alpha-deposited energy.
+
+4. **1D Lagrangian mix model at the interface.** In 3D codes the ice/foam interface develops RM/RT-driven mix during acceleration that effectively widens the burn substrate by diffusing pure DT into the foam side. Helios's sharp Lagrangian boundary doesn't allow this.
+
+Hypothesis (1) is the most universal and the easiest to diagnose — pull T_e and T_rad profiles across the ice/foam boundary near bang time and compare radiative loss rates to a pure-DT baseline.
+
+**Implications:**
+- The PDD calibration (fab007) is the best Helios can produce *given this constraint*. The drive-phase calibration is correct; the burn-propagation failure is downstream.
+- **HDD calibration is at much higher risk from this same effect.** HDD's halfraum target has wetted foam as the cold fuel with no pure DT ice layer (per the HDD halfraum architecture section). If Helios can't propagate burn into foam, HDD yield will be fundamentally underpredicted — the 90% HDD yield gap (lrm4: 0.057 vs 0.6 MJ) may be entirely this effect, not adiabat or coupling. **The HDD calibration plan needs to investigate burn-propagation-across-the-interface before further drive-phase tuning.**
 
 **The over-driven baseline `Olson_PDD_20_fab02_foot25_s016_burn`** (coupling 84%, V=463, α=1.05) is retained for legacy comparison but the calibration point above is what LILAC-comparable studies should use going forward.
 
@@ -468,10 +484,23 @@ These perturbation runs (`foot25_s018_c37_nb`, `foot{20,18,15}_s018_c37_burn`, `
   - AV scan at fab007 if .rhw exposes the coefficient.
 - HDD calibration transfer (see "HDD calibration transfer plan" section below).
 
-### HDD calibration transfer plan (May 2026)
+### HDD calibration transfer plan (May 2026, revised May 23)
 
 The real production target is HDD (Vulcan / VI_6-class), not PDD. The PDD calibration above
 establishes the *method* -- now port it to HDD.
+
+**⚠️ CRITICAL FLAG (May 23 2026): the PDD closeout identified that Helios's burn front stalls at
+the DT-ice / DT-CH-foam material interface. This is the binding 1D-Helios limitation on yield, and
+HDD targets have wetted foam as their COLD FUEL with no pure DT ice layer at all. If the
+ice→foam-swap experiment from PDD (which collapsed burn entirely) is representative, HDD's burn
+calibration in Helios may be fundamentally limited regardless of drive tuning. The HDD work
+should investigate burn-propagation-across-the-Z̄-discontinuity (or equivalently, into wetted
+foam from any hot substrate) BEFORE further drive-phase calibration. See the "Corrected
+diagnosis" PDD section above for the experimental evidence and candidate mechanisms.
+
+If burn propagation into foam can be fixed (or quantified as an offset), the rest of the
+HDD calibration transfer below applies. If it cannot, HDD calibration in 1D Helios will
+plateau at sub-LILAC yield even with perfect kinematic matching.**
 
 **What carries over directly:**
 
@@ -2568,31 +2597,46 @@ criteria, and disposition: `docs/Helios_1D_Coupling_Correction_Memo.docx`.
 
 In order of expected information yield:
 
-0. **Energy-ledger comparison: fab007 burn-ON vs fab007 burn-OFF.** This is the
-   diagnostic that would confirm the corrected May 23 picture (alpha
-   amplification of an under-confined hot spot, not shock-timing). The two
-   runs have identical hydrodynamic state through stagnation; the ledger
-   shows exactly where the alpha-deposited energy goes. Specifically: the
-   burn-ON run should show plasma thermal at stagnation 2–3× larger than
-   burn-OFF, with rad-boundary escape similar, and the alpha-deposited
-   channel populated only in burn-ON. If the ledger doesn't close cleanly
-   between the two runs at peak-velocity (before alpha onset), there's an
-   untracked channel worth understanding before HDD calibration.
+0. **DONE (May 23): Energy-ledger comparison fab007 burn-ON vs fab007 burn-OFF.**
+   Confirmed pre-alpha hydro state is identical at peak velocity to <0.1%. Alpha
+   bootstrap when it catches deposits 5.2 MJ (3.4× the absorbed laser); when it
+   doesn't, deposits 50 kJ (3% of absorbed). 86% of alpha-deposited energy goes
+   to outward blowoff KE, only 5% sustained as plasma thermal at stagnation.
+   Closure 0.4% at peak v, 0.5% at stagnation. Validates the diagnostic
+   toolset for HDD work. PDF and console table at:
+   `~/helios_postprocess/Olson_PDD_20_fab007_foot25_s018_c37_burn_vs_Olson_PDD_20_fab007_foot25_s018_c37_nb_energy_balance.pdf`
 
-   Command:
-   ```bash
-   python3 ~/helios_postprocess/examples/energy_balance_diagnostic.py \
-       ~/Sims/Xcimer/Olson_PDD/Olson_PDD_20_fab007_foot25_s018_c37_burn/Olson_PDD_20_fab007_foot25_s018_c37_burn \
-       ~/Sims/Xcimer/Olson_PDD/Olson_PDD_20_fab007_foot25_s018_c37_nb/Olson_PDD_20_fab007_foot25_s018_c37_nb
-   ```
-   Output: `<base1>_vs_<base2>_energy_balance.pdf` in cwd + console table with
-   snapshots at peak-velocity, stagnation, end-of-run.
+0a. **NEW PRIORITY (May 23): investigate burn-propagation across the
+    ice/foam material interface.** This is the highest-leverage PDD residual
+    AND the most likely root cause of the HDD yield gap. Diagnostic
+    approach:
 
-   Expected at peak velocity (before alpha): KE_inward, U_plasma, rad-boundary
-   identical between the two runs (within ~1%). Expected at stagnation:
-   burn-ON shows large U_plasma jump from alpha deposition; burn-OFF stays at
-   hydrodynamic floor. The size of the U_plasma jump quantifies the alpha
-   amplification headroom.
+    **(i)** Pull electron temperature, radiation temperature, and alpha-deposition
+    rate radial profiles across the ice/foam boundary at peak burn time in
+    fab007. The ice/foam initial boundary is at zone 190/191 (r ≈ 215 µm
+    initial). At peak compression this boundary sits inside the hot region
+    radius (r_hs ≈ 148 µm). Look for a sharp T_e discontinuity at the
+    interface — if T_e drops by 2-5× across the boundary, brems is the
+    likely culprit. If T_e is continuous but alpha deposition rate falls
+    off sharply, transport is the culprit.
+
+    **(ii)** Run a test target with the foam region replaced by pure DT (same
+    density). If burn propagates through the now-pure-DT region and yield
+    rises substantially, brems/transport at the Z̄ discontinuity IS the
+    binding constraint. If yield doesn't rise, propagation is limited by
+    something else (EOS / compressibility / timing).
+
+    **(iii)** Cross-check the ice→foam swap experiment that motivated this
+    finding: confirm via the radial-at-ignition CSV that with foam in the
+    ice slot, the alpha bootstrap doesn't catch at all. This validates
+    that the DT ice layer is the necessary substrate for ignition in
+    Helios's current physics model.
+
+    Once the mechanism is identified, the question for HDD becomes whether
+    it's tunable (alpha transport parameter, opacity table override, mix
+    model) or fundamental to Helios's 1D physics. This determines whether
+    HDD is calibratable in Helios or whether HDD work needs to live in
+    cross-code comparison only.
 
 1. **HDD lrm4 with 150 eV prepulse** (Tr 130 → 150 eV at lrm4
    geometry, no-burn).  The cleanest isolated adiabat-lever test we
