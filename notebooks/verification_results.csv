@@ -1,0 +1,5 @@
+timestamp,label,run_path,composition,T_keV,rho_gcc,metric,helios,analytic,ratio,verdict,source
+2026-05-26T00:00:00,DT_static_3keV,manual_entry,pure-DT,3.0,0.04176,R_fus #/g/s,1.11819e+27,1.1177e+27,1.0004,EXACT (<2%),FusionRate_DT_nHe4
+2026-05-26T00:00:00,DT_static_3keV,manual_entry,pure-DT,3.0,0.04176,P_brem TW/g,2364.64,2215.0,1.0676,within 10% (convention/physics),manual_entry
+2026-05-26T00:00:00,foam_static_3keV,manual_entry,1.7C-CH,3.0,0.04176,R_fus #/g/s,9.39775e+26,9.45e+26,0.9944,EXACT (<2%),FusionRate_DT_nHe4
+2026-05-26T00:00:00,foam_static_3keV,manual_entry,1.7C-CH,3.0,0.04176,P_brem TW/g,4202.76,3403.0,1.2350,within 30% (extra physics),manual_entry
