@@ -172,28 +172,45 @@ def helios_rates(base_path: Path, target_ns: Optional[float] = None,
         rho_spread   = (rho_minmax[1] - rho_minmax[0]) / rho_avg  if rho_avg > 0  else float('nan')
         T_spread     = (T_eV_minmax[1] - T_eV_minmax[0]) / T_eV_avg if T_eV_avg>0 else float('nan')
 
-        # Total fusion rate per gram
-        R_fus_total  = float(np.sum(Rfus_z))
-        R_fus_pgs    = R_fus_total / M_total if M_total > 0 else float('nan')
+        # Fusion rate: Helios's FusionRate_DT_nHe4 is in reactions/s/g
+        # (mass-specific rate per zone), NOT reactions/s/zone. Confirmed
+        # by the diagnostic on a 3 keV / n_DT=1e22 static test where each
+        # zone reports ~1.09e+27 = per-gram analytic, regardless of n_zones
+        # or zone volume. Take the mass-weighted average across zones
+        # for the bulk rate.
+        R_fus_pgs = float(np.average(Rfus_z, weights=mass_z))
 
-        # Brems via electron-to-radiation cumulative exchange
+        # Brems via cumulative-rad differentiation. Use central difference
+        # when possible, fall back to forward/backward at endpoints (n_t=2
+        # static tests have only the t=0 -> t=t_end pair).
         brems_pg_TW  = None
         brems_source = 'unavailable'
-        for var, label in (('EnExchEleToRadTimeIntg', 'EnExchEleToRadTimeIntg/dt'),
-                           ('TimeIntRadiationLossAtBds', 'TimeIntRadiationLossAtBds/dt')):
+        for var, label in (('EnExchEleToRadTimeIntg',     'EnExchEleToRadTimeIntg/dt'),
+                           ('TimeIntRadiationLossAtBds',  'TimeIntRadiationLossAtBds/dt')):
             try:
                 E_cum = np.asarray(run.get_variable(var))
             except KeyError:
                 continue
-            if t_idx <= 0 or t_idx >= n_t - 1:
+            if n_t < 2:
                 continue
-            dE = E_cum[t_idx+1] - E_cum[t_idx-1]
-            dt = (time_ns[t_idx+1] - time_ns[t_idx-1]) * 1e-9
+            if 0 < t_idx < n_t - 1:
+                dE = E_cum[t_idx + 1] - E_cum[t_idx - 1]
+                dt = (time_ns[t_idx + 1] - time_ns[t_idx - 1]) * 1e-9
+                scheme = 'central'
+            elif t_idx == 0:
+                dE = E_cum[1] - E_cum[0]
+                dt = (time_ns[1] - time_ns[0]) * 1e-9
+                scheme = 'forward'
+            else:                                # t_idx == n_t - 1
+                dE = E_cum[-1] - E_cum[-2]
+                dt = (time_ns[-1] - time_ns[-2]) * 1e-9
+                scheme = 'backward'
             if dt <= 0:
                 continue
             P_brem_W = dE / dt
-            brems_pg_TW = float((P_brem_W / M_total) * 1e-12) if M_total > 0 else None
-            brems_source = label
+            if M_total > 0:
+                brems_pg_TW  = float((P_brem_W / M_total) * 1e-12)
+                brems_source = f'{label} ({scheme})'
             break
     finally:
         run.close()
