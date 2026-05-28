@@ -32,7 +32,12 @@ set -o pipefail
 
 # ── Paths -- override via env if needed ──
 HELIOS_DIR="${HELIOS_DIR:-$HOME/Codes/Prism/Helios_11.0.0}"
-HELIOS_BIN="${HELIOS_BIN:-$HELIOS_DIR/Helios}"
+# Helios on macOS ships as a .app bundle -- the actual executable is nested
+# under Helios.app/Contents/MacOS/. Override HELIOS_BIN if your install differs.
+HELIOS_BIN="${HELIOS_BIN:-$HELIOS_DIR/Helios.app/Contents/MacOS/Helios}"
+# Optional architecture prefix (per Prism README: M-series Macs run faster
+# under explicit x86_64). Set HELIOS_ARCH_PREFIX="arch -x86_64" to enable.
+HELIOS_ARCH_PREFIX="${HELIOS_ARCH_PREFIX:-}"
 SIM_DIR="${SIM_DIR:-$HOME/Sims/Xcimer/Olson_PDD/Fraley_burn}"
 REPO_DIR="${REPO_DIR:-$HOME/helios_postprocess}"
 
@@ -121,9 +126,9 @@ run_one () {
         if [ -f "$exo" ]; then
             echo "  Helios: .exo already exists -- skipping run"
         else
-            echo "  Helios: running ($HELIOS_BIN -b -i $rhw -d $outdir -o $stem -x)"
+            echo "  Helios: running ($HELIOS_ARCH_PREFIX $HELIOS_BIN -b -i $rhw -d $outdir -o $stem -x)"
             mkdir -p "$outdir"
-            ( cd "$HELIOS_DIR" && "./$(basename "$HELIOS_BIN")" -b -i "$rhw" -d "$outdir" -o "$stem" -x )
+            ( cd "$HELIOS_DIR" && $HELIOS_ARCH_PREFIX "$HELIOS_BIN" -b -i "$rhw" -d "$outdir" -o "$stem" -x )
             local rc=$?
             if [ $rc -ne 0 ]; then
                 echo "  Helios FAILED (rc=$rc) on $stem -- continuing to next"
