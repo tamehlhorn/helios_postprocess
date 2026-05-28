@@ -150,6 +150,39 @@ Each entry is `[value, uncertainty]`. Entries with `[0.0, 0.0]` are skipped.
 5. **Fusion yield**: Preferred method uses `TimeIntFusionProd_n_1406 x 17.6 MeV x 1.602e-19 MJ/MeV`.
    Fallback: time-integrate `FusionRate_DT_nHe4` (less precise).
 
+5b. **FusionRate_DT_nHe4 units (CORRECTED May 27 2026)**: Helios emits this
+   variable as **reactions/s per gram of plasma** in each zone (a
+   mass-specific intensive rate), NOT reactions/s/zone (volume-integrated
+   extensive rate). Earlier comments in this file and in
+   `icf_analysis.py` describing it as "reactions/s per zone,
+   volume-integrated" are wrong and need updating.
+
+   Confirmed by zero-D static verification (May 27 2026,
+   `examples/verify_zero_d.py`): uniform sphere at n_DT=1e22 cm⁻³,
+   T=2.982 keV, 100 zones, ρ=0.0418 g/cc. Each zone reports
+   FusionRate_DT_nHe4 = 1.090e+27, which equals the Bosch-Hale per-gram
+   analytic to 0.04%. Summing across zones and dividing by total mass
+   gave 4.5×10⁶× the correct value — a definitive disproof of the
+   per-zone-per-second interpretation.
+
+   **Correct usage patterns:**
+   - **Per-gram bulk rate (uniform conditions)**: any zone value gives it
+     directly; for non-uniform: `np.average(fusion_power[t], weights=zone_mass[t])`
+   - **Total reactions/s in the run**: `np.sum(fusion_power[t] * zone_mass[t])`
+   - **Cumulative reactions to time t**: time-integrate the total
+     reactions/s above (use `TimeIntFusionProd_n_1406` preferentially)
+   - **Bang time** (`np.argmax(np.sum(fusion_power, axis=1))`): works
+     either way since only the time of peak matters; the absolute value
+     is summed-mass-specific and not physically meaningful by itself
+
+   `icf_analysis.py` line ~2145 uses `np.sum(fusion_rate[t]) * dt` for
+   the neutron-yield fallback path — this is incorrect under the
+   corrected interpretation and should be `np.sum(fusion_rate[t] * zone_mass[t]) * dt`.
+   The preferred yield path (TimeIntFusionProd_n_1406) is unaffected.
+   Production runs validated against Olson_PDD_9 (yield 20.6 MJ) use
+   the preferred path, so this fallback-path bug is academic until a
+   run lacks the cumulative-product field.
+
 6. **Mass fractions**: Use zone-index method exclusively (no temperature mask).
    - `unablated_fuel_mass` = fuel zones (0..fuel_bnd) inside ablation front / initial_fuel_mass
    - `unablated_ablatar_mass` = ablator zones (fuel_bnd..) inside ablation front / initial_ablator_mass

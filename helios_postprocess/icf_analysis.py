@@ -12,7 +12,9 @@ Adapted for HeliosRun / data_builder pipeline.  Key changes from legacy version:
   - Temperatures stored/reported in keV (÷ 1000 from eV) per ICF convention
   - Neutron-averaged pressure: J/cm³ → Gbar  (× 1e-8)
   - Fusion yield: prefers TimeIntFusionProd_n_1406 when available
-  - FusionRate_DT_nHe4 treated as reaction rate (not power) for neutron weighting
+  - FusionRate_DT_nHe4 is a reaction rate in reactions/s/g (mass-specific
+    per zone) -- CORRECTED May 27 2026; not "per zone, volume-integrated"
+    as earlier docs claimed. See CLAUDE.md Physics Convention §5b.
   - rad_pressure is aliased from elec_pressure by data_builder
     (total pressure = ion + elec per CLAUDE.md conventions)
 
@@ -2117,16 +2119,18 @@ class ICFAnalyzer:
         reaction rate in each zone.  Gives the conditions "seen" by the
         average neutron produced during the implosion.
 
-        FusionRate_DT_nHe4 from Helios is already a reaction rate
-        (reactions/s per zone, volume-integrated), NOT power in Watts.
-        Do NOT divide by energy_per_reaction.
+        FusionRate_DT_nHe4 from Helios is a reaction rate in reactions/s/g
+        (mass-specific per zone) -- CORRECTED May 27 2026. NOT power in Watts.
+        For total reactions/s: weight by zone_mass before summing. See
+        CLAUDE.md Physics Convention §5b for the verification trail.
 
         Proper neutron-weighted average of quantity Q:
-            <Q>_n  =  Σ_t Σ_z  Q[t,z] · R[t,z] · Δt
-                      ─────────────────────────────────
-                       Σ_t Σ_z  R[t,z] · Δt
+            <Q>_n  =  Σ_t Σ_z  Q[t,z] · R[t,z] · m_zone[t,z] · Δt
+                      ──────────────────────────────────────────────
+                       Σ_t Σ_z  R[t,z] · m_zone[t,z] · Δt
 
-        where R[t,z] is the zone-level DT fusion rate.
+        where R[t,z] is the per-gram DT fusion rate (reactions/s/g) and
+        the weighting is by zone_mass to convert to extensive total rate.
         """
         logger.info("Computing neutron-averaged quantities...")
 
@@ -2134,10 +2138,17 @@ class ICFAnalyzer:
             logger.warning("No fusion rate data available for neutron averaging")
             return
 
-        # fusion_power is FusionRate_DT_nHe4 — already reactions/s per zone
-        fusion_rate = self.data.fusion_power                     # (n_times, n_zones)
-        time_seconds = self.data.time * 1e-9                     # ns → s
-        dt_array = np.diff(time_seconds)                         # (n_times - 1,)
+        # fusion_power is FusionRate_DT_nHe4 in reactions/s/g (per zone).
+        # Multiply by zone_mass to convert to extensive reactions/s per zone.
+        fusion_rate_per_g = self.data.fusion_power                # (n_times, n_zones) #/s/g
+        time_seconds = self.data.time * 1e-9                      # ns → s
+        dt_array = np.diff(time_seconds)                          # (n_times - 1,)
+        if self.data.zone_mass is None:
+            logger.warning("No zone_mass for fusion-rate mass weighting; using uniform mass = 1 g")
+            mass_weight = np.ones_like(fusion_rate_per_g)
+        else:
+            mass_weight = self.data.zone_mass                     # (n_times, n_zones) g
+        fusion_rate = fusion_rate_per_g * mass_weight             # reactions/s per zone
 
         # Total neutron yield  (double sum: zones × time)
         neutron_yield = 0.0

@@ -121,7 +121,7 @@ Populated when `BURN` is enabled in the input deck.
 
 | Pipeline attribute | EXODUS candidates | Shape | Unit | Description |
 |---|---|---|---|---|
-| `fusion_power` | `FusionRate_DT_nHe4`, `fusion_rate_DT`, `fusion_power`, `neutron_rate` | (n_t, n_z) | reactions/cm³/s OR W/cm³ (varies) | DT fusion reaction rate density. Name suggests "rate" but Helios output is often reaction rate density. Units to be confirmed per-run |
+| `fusion_power` | `FusionRate_DT_nHe4`, `fusion_rate_DT`, `fusion_power`, `neutron_rate` | (n_t, n_z) | **reactions/s/g** (mass-specific per zone) | DT fusion reaction rate, normalized per gram of plasma in each zone. CORRECTED May 27 2026 via zero-D verification (`examples/verify_zero_d.py`): a uniform-T uniform-ρ static sphere reports a per-zone value that matches the Bosch-Hale per-gram analytic to 0.04%, definitively NOT a per-zone-per-second or per-cm³-per-second quantity. To get total reactions/s: `np.sum(fusion_power[t] * zone_mass[t])`. For per-gram bulk rate: `np.average(fusion_power[t], weights=zone_mass[t])`. See CLAUDE.md Physics Convention §5b. |
 | `neutron_production_rate` | `neutron_production_rate`, `neutron_rate`, `FusionRate_DD_nHe3` | (n_t, n_z) | reactions/cm³/s | DD fusion reaction rate density |
 | `alpha_heating_power` | `alpha_heating_power`, `alpha_power`, `alpha_heating` | (n_t, n_z) | W/cm³ | Alpha-particle heating power density. NOT LOADED in PDD_26b_burn — pipeline falls back to `alpha_heating_ion + alpha_heating_ele` |
 | `alpha_heating_ion` | `pt_particle_heating_ion` | (n_t, n_z) | W/cm³ | Alpha-particle heating of ions |
