@@ -46,13 +46,13 @@ Environment: same as run_analysis.py — needs `helios_postprocess` on PYTHONPAT
 from __future__ import annotations
 
 import argparse
+import csv
 import sys
 from datetime import datetime
 from pathlib import Path
 from typing import Optional
 
 import numpy as np
-import pandas as pd
 
 # Ensure helios_postprocess is importable when run from anywhere
 REPO_ROOT = Path(__file__).resolve().parent.parent
@@ -253,18 +253,23 @@ def print_report(h: dict, a: dict, comp_label: str, base_name: str) -> dict:
     return {'r_fus': r_fus, 'r_brem': r_br}
 
 
+CSV_COLUMNS = ['timestamp', 'label', 'run_path', 'composition',
+               'T_keV', 'rho_gcc', 'metric', 'helios', 'analytic',
+               'ratio', 'verdict', 'source']
+
+
 def append_csv(csv_path: Path, h: dict, a: dict, ratios: dict,
                label: str, run_path: str, comp_label: str) -> int:
     """Append result rows to CSV.  Returns number of rows added."""
     csv_path.parent.mkdir(parents=True, exist_ok=True)
     rows = []
     common = dict(
-        timestamp = datetime.now().isoformat(timespec='seconds'),
-        label     = label,
-        run_path  = run_path,
+        timestamp   = datetime.now().isoformat(timespec='seconds'),
+        label       = label,
+        run_path    = run_path,
         composition = comp_label,
-        T_keV     = round(h['T_keV'], 5),
-        rho_gcc   = round(h['rho_gcc'], 8),
+        T_keV       = round(h['T_keV'], 5),
+        rho_gcc     = round(h['rho_gcc'], 8),
     )
     rows.append({
         **common,
@@ -285,11 +290,14 @@ def append_csv(csv_path: Path, h: dict, a: dict, ratios: dict,
             'verdict' : verdict(ratios['r_brem']),
             'source'  : h['brems_source'],
         })
-    new_df = pd.DataFrame(rows)
-    if csv_path.exists():
-        new_df.to_csv(csv_path, mode='a', header=False, index=False)
-    else:
-        new_df.to_csv(csv_path, mode='w', header=True, index=False)
+
+    file_exists = csv_path.exists()
+    with csv_path.open('a', newline='') as f:
+        writer = csv.DictWriter(f, fieldnames=CSV_COLUMNS)
+        if not file_exists:
+            writer.writeheader()
+        for row in rows:
+            writer.writerow(row)
     return len(rows)
 
 
