@@ -83,16 +83,25 @@ def _replace_field(text: str, field_prefix: str, new_value_str: str) -> str:
 
 
 def write_static_rhw(template_path: Path, out_path: Path,
-                     T_keV: float, rho_gcc: float) -> None:
-    """Read template, replace the three fields, write to out_path."""
+                     T_keV: float, rho_gcc: float,
+                     max_sim_time_s: float = 1.0e-9) -> None:
+    """Read template, replace the relevant fields, write to out_path.
+
+    Replaces:
+        Temperature, Electron Temperature, Density,
+        Max simulation time  (defaults to 1 ns for verification snapshots --
+        the template inherits 1e-4 s = 100 us, which can cause multi-minute
+        Helios runs at higher T even with hydro off).
+    """
     text = template_path.read_text()
     # Order matters: 'Electron Temperature' must be matched before 'Temperature'
-    # because the latter is a prefix of the former.  Our regex is anchored to
+    # because the latter is a prefix of the former. The regex is anchored to
     # the LINE START (with whitespace) so this is safe -- but to be defensive
     # we replace 'Electron Temperature' first, then 'Temperature'.
     text = _replace_field(text, 'Electron Temperature', f'{T_keV:g}')
     text = _replace_field(text, 'Temperature',          f'{T_keV:g}')
     text = _replace_field(text, 'Density',              f'{rho_gcc:g}')
+    text = _replace_field(text, 'Max simulation time',  f'{max_sim_time_s:.5e}')
     out_path.write_text(text)
 
 
@@ -114,6 +123,10 @@ def main():
                          '"DT_static_{T_int}keV_n{n_DT_label}"')
     ap.add_argument('--outdir', type=Path, default=Path('.'),
                     help='Output directory (default: current)')
+    ap.add_argument('--max-sim-time', type=float, default=1.0e-9,
+                    help='Helios "Max simulation time" in seconds (default: 1e-9 = 1 ns). '
+                         'The template default of 1e-4 s is far too long for zero-D rate '
+                         'extraction and can produce multi-minute runs at high T.')
     ap.add_argument('-n', '--dry-run', action='store_true',
                     help='Print what would be written, but do not write')
     args = ap.parse_args()
@@ -157,7 +170,8 @@ def main():
             out_path = args.outdir / f'{tag}.rhw'
             print(f'  {out_path.name}:  T = {T_keV:g} keV   rho = {rho_gcc:g} g/cc   n_DT = {n_DT:.3e} cm^-3')
             if not args.dry_run:
-                write_static_rhw(args.template, out_path, T_keV, rho_gcc)
+                write_static_rhw(args.template, out_path, T_keV, rho_gcc,
+                                 max_sim_time_s=args.max_sim_time)
 
     if args.dry_run:
         print('\n(dry-run: nothing written)')
