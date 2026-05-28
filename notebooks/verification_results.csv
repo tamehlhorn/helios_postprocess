@@ -1,5 +1,27 @@
 timestamp,label,run_path,composition,T_keV,rho_gcc,metric,helios,analytic,ratio,verdict,source
-2026-05-26T00:00:00,DT_static_3keV,manual_entry,pure-DT,3.0,0.04176,R_fus #/g/s,1.11819e+27,1.1177e+27,1.0004,EXACT (<2%),FusionRate_DT_nHe4
-2026-05-26T00:00:00,DT_static_3keV,manual_entry,pure-DT,3.0,0.04176,P_brem TW/g,2364.64,2215.0,1.0676,within 10% (convention/physics),manual_entry
-2026-05-26T00:00:00,foam_static_3keV,manual_entry,1.7C-CH,3.0,0.04176,R_fus #/g/s,9.39775e+26,9.45e+26,0.9944,EXACT (<2%),FusionRate_DT_nHe4
-2026-05-26T00:00:00,foam_static_3keV,manual_entry,1.7C-CH,3.0,0.04176,P_brem TW/g,4202.76,3403.0,1.2350,within 30% (extra physics),manual_entry
+2026-05-28T11:58:10,DT_static_3keV,DT_static_3keV,pure-DT,2.98198,0.0418,P_brem TW/g,2331.2257,2211.7752,1.054,within 10% (convention/physics),EnExchEleToRadTimeIntg/dt (backward)
+2026-05-28T11:58:10,DT_static_3keV,DT_static_3keV,pure-DT,2.98198,0.0418,R_fus #/g/s,1.08990e+27,1.09039e+27,0.9996,EXACT (<2%),FusionRate_DT_nHe4
+2026-05-28T11:58:10,DT_static_5keV,DT_static_5keV,pure-DT,4.99461,0.0418,P_brem TW/g,2988.4183,2862.4603,1.044,within 10% (convention/physics),EnExchEleToRadTimeIntg/dt (backward)
+2026-05-28T11:58:10,DT_static_5keV,DT_static_5keV,pure-DT,4.99461,0.0418,R_fus #/g/s,8.14715e+27,8.15185e+27,0.9994,EXACT (<2%),FusionRate_DT_nHe4
+2026-05-28T11:58:10,DT_static_7keV,DT_static_7keV,pure-DT,6.99617,0.0418,P_brem TW/g,3512.3397,3387.8104,1.0368,within 10% (convention/physics),EnExchEleToRadTimeIntg/dt (backward)
+2026-05-28T11:58:10,DT_static_7keV,DT_static_7keV,pure-DT,6.99617,0.0418,R_fus #/g/s,2.49767e+28,2.49982e+28,0.9991,EXACT (<2%),FusionRate_DT_nHe4
+2026-05-28T11:58:10,DT_static_10keV,DT_static_10keV,pure-DT,9.99771,0.0418,P_brem TW/g,4170.2213,4049.8522,1.0297,within 10% (convention/physics),EnExchEleToRadTimeIntg/dt (backward)
+2026-05-28T11:58:10,DT_static_10keV,DT_static_10keV,pure-DT,9.99771,0.0418,R_fus #/g/s,6.79274e+28,6.80353e+28,0.9984,EXACT (<2%),FusionRate_DT_nHe4
+2026-05-28T11:58:10,DT_static_10keV_n1e23,DT_static_10keV_n1e23,pure-DT,10.14581,0.41800007,P_brem TW/g,41632.8903,40797.3728,1.0205,within 10% (convention/physics),EnExchEleToRadTimeIntg/dt (backward)
+2026-05-28T11:58:10,DT_static_10keV_n1e23,DT_static_10keV_n1e23,pure-DT,10.14581,0.41800007,R_fus #/g/s,6.97432e+29,7.05860e+29,0.9881,EXACT (<2%),FusionRate_DT_nHe4
+2026-05-28T11:58:10,DT_static_15keV,DT_static_15keV,pure-DT,14.99939,0.0418,P_brem TW/g,5080.7061,4960.5010,1.0242,within 10% (convention/physics),EnExchEleToRadTimeIntg/dt (backward)
+2026-05-28T11:58:10,DT_static_15keV,DT_static_15keV,pure-DT,14.99939,0.0418,R_fus #/g/s,1.63629e+29,1.64153e+29,0.9968,EXACT (<2%),FusionRate_DT_nHe4
+2026-05-28T11:58:10,DT_static_10keV_n1e24,DT_static_10keV_n1e24,pure-DT,33.8875,4.18000092,P_brem TW/g,621739.3811,745604.7121,0.8339,within 30% (extra physics),EnExchEleToRadTimeIntg/dt (backward)
+2026-05-28T11:58:10,DT_static_10keV_n1e24,DT_static_10keV_n1e24,pure-DT,33.8875,4.18000092,R_fus #/g/s,3.05998e+31,4.37066e+31,0.7001,within 30% (extra physics),FusionRate_DT_nHe4
+2026-05-28T11:58:10,DT_static_10keV_n1e25,DT_static_10keV_n1e25,pure-DT,242.80901,41.89953802,P_brem TW/g,14571675.8623,20005719.1818,0.7284,within 30% (extra physics),EnExchEleToRadTimeIntg/dt (backward)
+2026-05-28T11:58:10,DT_static_10keV_n1e25,DT_static_10keV_n1e25,pure-DT,242.80901,41.89953802,R_fus #/g/s,2.07199e+31,3.40496e+32,0.0609,INVESTIGATE,FusionRate_DT_nHe4
+2026-05-28T11:58:10,foam_static_3keV,foam_static_3keV,1.7C-CH,2.97804,0.04176,P_brem TW/g,4130.0995,3390.8890,1.218,within 30% (extra physics),EnExchEleToRadTimeIntg/dt (central)
+2026-05-28T11:58:10,foam_static_3keV,foam_static_3keV,1.7C-CH,2.97804,0.04176,R_fus #/g/s,9.10900e+26,9.16537e+26,0.9938,EXACT (<2%),FusionRate_DT_nHe4
+2026-05-28T11:58:10,foam_static_5keV,foam_static_5keV,1.7C-CH,4.98946,0.04176,P_brem TW/g,5032.9657,4389.0989,1.1467,within 30% (extra physics),EnExchEleToRadTimeIntg/dt (backward)
+2026-05-28T11:58:10,foam_static_5keV,foam_static_5keV,1.7C-CH,4.98946,0.04176,R_fus #/g/s,6.82246e+27,6.86548e+27,0.9937,EXACT (<2%),FusionRate_DT_nHe4
+2026-05-28T11:58:10,foam_static_7keV,foam_static_7keV,1.7C-CH,6.9923,0.04176,P_brem TW/g,5786.4199,5195.8741,1.1137,within 30% (extra physics),EnExchEleToRadTimeIntg/dt (backward)
+2026-05-28T11:58:10,foam_static_7keV,foam_static_7keV,1.7C-CH,6.9923,0.04176,R_fus #/g/s,2.09570e+28,2.10948e+28,0.9935,EXACT (<2%),FusionRate_DT_nHe4
+2026-05-28T11:58:10,foam_static_10keV,foam_static_10keV,1.7C-CH,9.99494,0.04176,P_brem TW/g,6768.0633,6212.1032,1.0895,within 10% (convention/physics),EnExchEleToRadTimeIntg/dt (backward)
+2026-05-28T11:58:10,foam_static_10keV,foam_static_10keV,1.7C-CH,9.99494,0.04176,R_fus #/g/s,5.70564e+28,5.74696e+28,0.9928,EXACT (<2%),FusionRate_DT_nHe4
+2026-05-28T11:58:10,foam_static_15keV,foam_static_15keV,1.7C-CH,14.99758,0.04176,P_brem TW/g,8125.5207,7609.5536,1.0678,within 10% (convention/physics),EnExchEleToRadTimeIntg/dt (backward)
+2026-05-28T11:58:10,foam_static_15keV,foam_static_15keV,1.7C-CH,14.99758,0.04176,R_fus #/g/s,1.37526e+29,1.38727e+29,0.9913,EXACT (<2%),FusionRate_DT_nHe4
