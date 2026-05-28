@@ -2,6 +2,12 @@
 
 Complete Python package for analyzing Helios ICF simulations with burn-averaged metrics for comparison with published target designs.
 
+## 📋 Quick Reference
+
+**Need a command in a hurry?** See [`docs/CHEATSHEET.md`](docs/CHEATSHEET.md) — one-page reference covering Helios batch-mode CLI, postprocessing scripts (`run_analysis.py`, `compare_runs.py`, `energy_balance_diagnostic.py`), the zero-D verification workflow, standard paths on Studio vs MacBook, and the edit→push→pull→run loop.
+
+For deeper context: [`CLAUDE.md`](CLAUDE.md) (project guide + physics conventions), [`SETUP_GUIDE.md`](SETUP_GUIDE.md) (install), [`helios_exodus_variable_reference.md`](helios_exodus_variable_reference.md) (EXODUS variable dictionary).
+
 ## 📦 Package Structure
 
 ```
