@@ -1969,8 +1969,41 @@ class ICFAnalyzer:
                 # CSV writer can pull r, T_ion, rho, P at that instant
                 # without re-deriving it from ignition_time.
                 self.data.ignition_index = int(ign_idx)
+
+            # ---- Peak mass density at ignition (Olson 2021 Fig. 7 anchor) ----
+            # The headline no-burn hydro metric and a cross-code comparison
+            # scalar. For burning runs, take at ignition timestep.
+            self.data.peak_density_at_ignition = float(
+                np.max(self.data.mass_density[ign_idx, :])
+            )
+            self.data.peak_density_at_ignition_is_stagnation = False
+            logger.info(
+                f"Peak ρ at ignition: "
+                f"{self.data.peak_density_at_ignition:.1f} g/cm³"
+            )
         else:
             logger.info("No ignition detected (ρR_hs never reached 0.3 g/cm²)")
+            # ---- No-burn fallback: report peak ρ at STAGNATION instead ----
+            # For no-burn runs (or sub-ignition burns), the ignition crossing
+            # never happens. Fall back to peak density at the minimum-HS-radius
+            # stagnation timestep so the comparison row stays meaningful. The
+            # is_stagnation flag is used by the summary writer to label the
+            # row honestly.
+            stag_idx_fb = None
+            if getattr(self.data, 'stag_time', 0.0) > 0:
+                stag_idx_fb = int(np.argmin(np.abs(self.data.time - self.data.stag_time)))
+            elif self.data.mass_density is not None:
+                # Last resort: timestep with the maximum density anywhere
+                stag_idx_fb = int(np.argmax(np.max(self.data.mass_density, axis=1)))
+            if stag_idx_fb is not None:
+                self.data.peak_density_at_ignition = float(
+                    np.max(self.data.mass_density[stag_idx_fb, :])
+                )
+                self.data.peak_density_at_ignition_is_stagnation = True
+                logger.info(
+                    f"Peak ρ at STAGNATION (no-ignition fallback): "
+                    f"{self.data.peak_density_at_ignition:.1f} g/cm³"
+                )
 
         # ---- Complete propagation time: when HS ρR ≈ total ρR ----
         # Defined as the first time after ignition when hs_rhoR >= 0.95 * total_rhoR

@@ -180,6 +180,13 @@ class ICFRunData:
                                                      # published-figure central T
         self.ignition_index: int = -1                # timestep index for the
                                                      # radial-profile CSV writer
+        self.peak_density_at_ignition: float = 0.0   # g/cm³ — max ρ at ignition;
+                                                     # falls back to peak ρ at
+                                                     # stagnation for no-burn runs
+        self.peak_density_at_ignition_is_stagnation: bool = False  # True if the
+                                                     # value above is the no-burn
+                                                     # fallback (used by summary
+                                                     # writer to label the row)
         self.burn_propagation_time: float = 0.0    # ns  (when HS ρR = total ρR)
 
         # Neutron-averaged quantities

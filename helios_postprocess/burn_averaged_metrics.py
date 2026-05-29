@@ -359,6 +359,9 @@ def extract_histories_from_run_data(data) -> Dict:
         'T_ion_onaxis_ignition_keV': getattr(data, 'ignition_T_ion_onaxis_keV', 0.0),
         'peak_total_rhoR':       getattr(data, 'peak_total_rhoR',       0.0),
         'peak_hs_rhoR_T_mask':   getattr(data, 'peak_hs_rhoR_T_mask',   0.0),
+        'peak_density_at_ignition': getattr(data, 'peak_density_at_ignition', 0.0),
+        'peak_density_at_ignition_is_stagnation':
+            getattr(data, 'peak_density_at_ignition_is_stagnation', False),
         'inflight_KE_kJ':       inflight_KE_kJ,
         'hydro_efficiency_pct':  hydro_efficiency_pct,
         'imploded_DT_mass_mg':   imploded_DT_mass_mg,
@@ -504,6 +507,9 @@ def calculate_burn_averaged_metrics(histories: Dict,
         'T_ion_onaxis_ignition_keV': histories.get('T_ion_onaxis_ignition_keV', 0.0),
         'peak_total_rhoR':       histories.get('peak_total_rhoR',       0.0),
         'peak_hs_rhoR_T_mask':   histories.get('peak_hs_rhoR_T_mask',   0.0),
+        'peak_density_at_ignition': histories.get('peak_density_at_ignition', 0.0),
+        'peak_density_at_ignition_is_stagnation':
+            histories.get('peak_density_at_ignition_is_stagnation', False),
         'inflight_KE_kJ':       histories.get('inflight_KE_kJ', 0.0),
         'hydro_efficiency_pct':  histories.get('hydro_efficiency_pct', 0.0),
         'imploded_DT_mass_mg':   histories.get('imploded_DT_mass_mg', 0.0),
@@ -528,17 +534,30 @@ def compare_with_published(sim_metrics: Dict,
     """
     Generate comparison table between simulation and published results.
 
+    Renders six columns:
+        Metric | Sim | Cluster ± unc | Δ_cluster | HYDRA ± unc | Δ_HYDRA
+
+    The HYDRA column comes from per-code keys in the published JSON
+    (e.g. 'stagnation_time_HYDRA_ns', 'peak_rhoR_total_HYDRA_gcm2').
+    Rows whose per-code key is absent render '—' in the HYDRA cell.
+    This is backwards-compatible: JSONs with no HYDRA keys render
+    the cluster columns exactly as before.
+
     Parameters
     ----------
     sim_metrics : dict
         From calculate_burn_averaged_metrics().
     published_metrics : dict
         Published values: {key: (value, uncertainty)}.
-        Supported keys:
+        Supported cluster-level keys:
           Burn-averaged: 'T_hs', 'P_hs', 'rhoR_cf', 'CR_max', 'yield', 'gain'
           Implosion: 'peak_velocity_kms', 'adiabat', 'ifar',
                      'hydro_efficiency_pct', 'imploded_DT_mass_mg',
                      'inflight_KE_kJ', 'fraction_absorbed_pct'
+        Per-code HYDRA keys (optional): '{stagnation,ignition,bang}_time_HYDRA_ns',
+          'peak_rhoR_total_HYDRA_gcm2', 'peak_rhoR_hs_HYDRA_gcm2',
+          'peak_density_at_ignition_HYDRA_gcm3', 'T_ion_hs_at_ignition_HYDRA_keV',
+          'hs_radius_ignition_HYDRA_um'.
     laser_energy_MJ : float, optional
         Override laser energy for gain calculation.
 
@@ -552,116 +571,184 @@ def compare_with_published(sim_metrics: Dict,
 
     sim_gain = sim_metrics['yield_MJ'] / laser_energy_MJ if laser_energy_MJ > 0 else 0.0
 
+    # Column widths -- keep cluster column at original width for readability
+    HDR_W   = 30
+    SIM_W   = 15
+    PUB_W   = 15
+    DELTA_W = 10
+
     lines = []
-    lines.append("=" * 80)
+    lines.append("=" * (HDR_W + SIM_W + 2 * (PUB_W + DELTA_W) + 5))
     lines.append("COMPARISON WITH PUBLISHED DATA")
-    lines.append("=" * 80)
+    lines.append("=" * (HDR_W + SIM_W + 2 * (PUB_W + DELTA_W) + 5))
     lines.append(f"  Laser energy:  Sim = {sim_metrics.get('laser_energy_MJ', 0.0):.3f} MJ"
                  f"   Published = {laser_energy_MJ:.3f} MJ")
     lines.append("")
-    lines.append(f"{'Metric':<30} {'Simulation':>15} {'Published':>15} {'Δ (%)':>10}")
-    lines.append("-" * 80)
+    hdr = (f"{'Metric':<{HDR_W}} {'Simulation':>{SIM_W}} "
+           f"{'Cluster':>{PUB_W}} {'Δ_cluster':>{DELTA_W}} "
+           f"{'HYDRA':>{PUB_W}} {'Δ_HYDRA':>{DELTA_W}}")
+    lines.append(hdr)
+    lines.append("-" * len(hdr))
+
+    def _render_cell(pub_val, pub_unc, fmt):
+        """Format a 'Published ± unc' cell."""
+        if pub_val is None or pub_val <= 0:
+            return "—"
+        out = format(pub_val, fmt)
+        if pub_unc and pub_unc > 0:
+            out += f"±{format(pub_unc, fmt)}"
+        return out
+
+    def _render_delta(sim_val, pub_val):
+        """Format a 'Δ (%)' cell as a signed percent of pub_val."""
+        if (sim_val is None or sim_val <= 0
+                or pub_val is None or pub_val <= 0):
+            return "—"
+        d = 100.0 * (sim_val - pub_val) / pub_val
+        if not np.isfinite(d):
+            return "—"
+        return f"{d:>+.1f}"
+
+    def _emit_row(label, sim_val, cluster_entry, hydra_entry, fmt, label_suffix=""):
+        """Emit one fully-formatted row with all 5 numeric cells."""
+        cluster_val, cluster_unc = (_to_tuple(cluster_entry)
+                                     if cluster_entry is not None else (None, None))
+        hydra_val,   hydra_unc   = (_to_tuple(hydra_entry)
+                                     if hydra_entry is not None else (None, None))
+        # Skip the whole row only if sim_val and BOTH refs are missing
+        if (sim_val <= 0
+                and (cluster_val is None or cluster_val <= 0)
+                and (hydra_val is None or hydra_val <= 0)):
+            return False
+        sv = format(sim_val, fmt) if sim_val > 0 else "—"
+        cv = _render_cell(cluster_val, cluster_unc, fmt)
+        dc = _render_delta(sim_val, cluster_val)
+        hv = _render_cell(hydra_val,   hydra_unc,   fmt)
+        dh = _render_delta(sim_val, hydra_val)
+        lbl = f"{label}{label_suffix}"
+        lines.append(
+            f"{lbl:<{HDR_W}} {sv:>{SIM_W}} "
+            f"{cv:>{PUB_W}} {dc:>{DELTA_W}} "
+            f"{hv:>{PUB_W}} {dh:>{DELTA_W}}"
+        )
+        return True
 
     # ── Implosion metrics section ──
+    # Tuple: (label, sim_val, cluster_key, hydra_key, fmt)
+    # hydra_key=None means no per-code HYDRA value for this metric (cluster only).
     implosion_rows = [
-        ('Stagnation time (ns)',       sim_metrics.get('stagnation_time_ns', 0.0),
-         'stagnation_time_ns',        '.3f'),
-        ('Peak velocity (km/s)',      sim_metrics.get('peak_velocity_kms', 0.0),
-         'peak_velocity_kms',         '.1f'),
-        ('Adiabat',                   sim_metrics.get('adiabat', 0.0),
-         'adiabat',                   '.2f'),
-        ('Fraction absorbed (%)',     sim_metrics.get('fraction_absorbed_pct', 0.0),
-         'fraction_absorbed_pct',     '.1f'),
-        ('In-flight KE (kJ)',        sim_metrics.get('inflight_KE_kJ', 0.0),
-         'inflight_KE_kJ',           '.1f'),
-        ('IFAR (CR=1.5)',             sim_metrics.get('ifar', 0.0),
-         'ifar',                    '.1f'),
-        ('Hydro efficiency (%)',     sim_metrics.get('hydro_efficiency_pct', 0.0),
-         'hydro_efficiency_pct',     '.1f'),
-        ('Imploded DT mass (mg)',    sim_metrics.get('imploded_DT_mass_mg', 0.0),
-         'imploded_DT_mass_mg',      '.2f'),
-        ('HS pressure at ignition (Gbar)', sim_metrics.get('P_hs_ignition_Gbar', 0.0),
-         'P_hs_ignition_Gbar',       '.1f'),
-        ('HS radius at ignition (μm)',    sim_metrics.get('hs_radius_ignition_um', 0.0),
-         'hs_radius_ignition_um',    '.1f'),
-        ('On-axis T_ion at ignition (keV)', sim_metrics.get('T_ion_onaxis_ignition_keV', 0.0),
-         'T_ion_onaxis_ignition_keV', '.2f'),
+        ('Stagnation time (ns)',
+         sim_metrics.get('stagnation_time_ns', 0.0),
+         'stagnation_time_ns', 'stagnation_time_HYDRA_ns', '.3f'),
+        ('Peak velocity (km/s)',
+         sim_metrics.get('peak_velocity_kms', 0.0),
+         'peak_velocity_kms', None, '.1f'),
+        ('Adiabat',
+         sim_metrics.get('adiabat', 0.0),
+         'adiabat', None, '.2f'),
+        ('Fraction absorbed (%)',
+         sim_metrics.get('fraction_absorbed_pct', 0.0),
+         'fraction_absorbed_pct', None, '.1f'),
+        ('In-flight KE (kJ)',
+         sim_metrics.get('inflight_KE_kJ', 0.0),
+         'inflight_KE_kJ', None, '.1f'),
+        ('IFAR (CR=1.5)',
+         sim_metrics.get('ifar', 0.0),
+         'ifar', None, '.1f'),
+        ('Hydro efficiency (%)',
+         sim_metrics.get('hydro_efficiency_pct', 0.0),
+         'hydro_efficiency_pct', None, '.1f'),
+        ('Imploded DT mass (mg)',
+         sim_metrics.get('imploded_DT_mass_mg', 0.0),
+         'imploded_DT_mass_mg', None, '.2f'),
+        ('HS pressure at ignition (Gbar)',
+         sim_metrics.get('P_hs_ignition_Gbar', 0.0),
+         'P_hs_ignition_Gbar', None, '.1f'),
+        ('HS radius at ignition (μm)',
+         sim_metrics.get('hs_radius_ignition_um', 0.0),
+         'hs_radius_ignition_um', 'hs_radius_ignition_HYDRA_um', '.1f'),
+        ('On-axis T_ion at ignition (keV)',
+         sim_metrics.get('T_ion_onaxis_ignition_keV', 0.0),
+         'T_ion_onaxis_ignition_keV', 'T_ion_hs_at_ignition_HYDRA_keV', '.2f'),
         # --- Laser intensity diagnostics (Task 2 Stage C) ---
-        ('I at r_crit peak (W/cm²)', sim_metrics.get('I_at_crit_peak_Wcm2', 0.0),
-         'I_at_crit_peak_Wcm2',       '.2e'),
-        ('I grid outer peak (W/cm²)', sim_metrics.get('I_grid_outer_peak_Wcm2', 0.0),
-         'I_grid_outer_peak_Wcm2',    '.2e'),
+        ('I at r_crit peak (W/cm²)',
+         sim_metrics.get('I_at_crit_peak_Wcm2', 0.0),
+         'I_at_crit_peak_Wcm2', None, '.2e'),
+        ('I grid outer peak (W/cm²)',
+         sim_metrics.get('I_grid_outer_peak_Wcm2', 0.0),
+         'I_grid_outer_peak_Wcm2', None, '.2e'),
         # --- Shock train breakouts (Task 3 Stage 3 multi-shock tracker) ---
         # NaN sentinel from extract_histories -> mapped to -1.0 so the
-        # existing "<= 0 == missing" skip logic in the row loop kicks in.
+        # "<= 0 == missing" skip logic in _emit_row kicks in.
         ('Foot shock breakout (ns)',
          (sim_metrics.get('t_foot_shock_breakout_ns', float('nan'))
           if np.isfinite(sim_metrics.get('t_foot_shock_breakout_ns', float('nan')))
           else -1.0),
-         't_foot_shock_breakout_ns', '.2f'),
+         't_foot_shock_breakout_ns', None, '.2f'),
         ('Ramp shock breakout (ns)',
          (sim_metrics.get('t_ramp_shock_breakout_ns', float('nan'))
           if np.isfinite(sim_metrics.get('t_ramp_shock_breakout_ns', float('nan')))
           else -1.0),
-         't_ramp_shock_breakout_ns', '.2f'),
+         't_ramp_shock_breakout_ns', None, '.2f'),
         ('Peak shock breakout (ns)',
          (sim_metrics.get('t_peak_shock_breakout_ns', float('nan'))
           if np.isfinite(sim_metrics.get('t_peak_shock_breakout_ns', float('nan')))
           else -1.0),
-         't_peak_shock_breakout_ns', '.2f'),
+         't_peak_shock_breakout_ns', None, '.2f'),
     ]
 
     has_implosion = False
-    for label, sim_val, pub_key, fmt in implosion_rows:
-        pub_entry = published_metrics.get(pub_key, None)
-        if pub_entry is None:
-            continue
-        pub_val, pub_unc = _to_tuple(pub_entry)
-        if pub_val <= 0 and sim_val <= 0:
-            continue
-        has_implosion = True
-        sv = format(sim_val, fmt) if sim_val > 0 else "—"
-        if pub_val > 0:
-            delta = 100 * (sim_val - pub_val) / pub_val if sim_val > 0 else float('nan')
-            pv = format(pub_val, fmt)
-            if pub_unc > 0:
-                pv += f"±{format(pub_unc, fmt)}"
-            delta_str = f"{delta:>9.1f}" if np.isfinite(delta) else "      —"
-        else:
-            pv = "—"
-            delta_str = "      —"
-        lines.append(f"{label:<30} {sv:>15} {pv:>15} {delta_str}")
+    for label, sim_val, cluster_key, hydra_key, fmt in implosion_rows:
+        cluster_entry = published_metrics.get(cluster_key) if cluster_key else None
+        hydra_entry   = published_metrics.get(hydra_key) if hydra_key else None
+        emitted = _emit_row(label, sim_val, cluster_entry, hydra_entry, fmt)
+        if emitted:
+            has_implosion = True
 
     if has_implosion:
-        lines.append("-" * 80)
+        lines.append("-" * len(hdr))
 
     # ── Burn-averaged metrics section ──
+    # Cluster-only rows: T_hs, P_hs, rhoR_cf, CR_max, yield, gain (no per-code
+    # HYDRA values for these in Olson 2021).
     burn_rows = [
-        ('⟨T_hs⟩ (keV)',    sim_metrics['T_burn_avg'],    'T_hs',    '.1f'),
-        ('⟨P_hs⟩ (Gbar)',   sim_metrics['P_burn_avg'],    'P_hs',    '.0f'),
-        ('⟨ρR_cf⟩ (g/cm²)', sim_metrics['rhoR_burn_avg'], 'rhoR_cf', '.2f'),
-        ('CR_max',           sim_metrics['CR_max'],         'CR_max',  '.1f'),
-        ('Peak total ρR (g/cm²)',     sim_metrics.get('peak_total_rhoR', 0.0),
-         'peak_total_rhoR_gcm2',      '.2f'),
-        ('Peak HS ρR T>4.5 (g/cm²)',  sim_metrics.get('peak_hs_rhoR_T_mask', 0.0),
-         'peak_hs_rhoR_T_mask_gcm2',  '.2f'),
-        ('Yield (MJ)',       sim_metrics['yield_MJ'],       'yield',   '.1f'),
-        ('Fusion Gain',      sim_gain,                      'gain',    '.1f'),
+        ('⟨T_hs⟩ (keV)',
+         sim_metrics['T_burn_avg'],     'T_hs',    None, '.1f'),
+        ('⟨P_hs⟩ (Gbar)',
+         sim_metrics['P_burn_avg'],     'P_hs',    None, '.0f'),
+        ('⟨ρR_cf⟩ (g/cm²)',
+         sim_metrics['rhoR_burn_avg'],  'rhoR_cf', None, '.2f'),
+        ('CR_max',
+         sim_metrics['CR_max'],         'CR_max',  None, '.1f'),
+        ('Peak total ρR (g/cm²)',
+         sim_metrics.get('peak_total_rhoR', 0.0),
+         'peak_total_rhoR_gcm2',  'peak_rhoR_total_HYDRA_gcm2', '.2f'),
+        ('Peak HS ρR T>4.5 (g/cm²)',
+         sim_metrics.get('peak_hs_rhoR_T_mask', 0.0),
+         'peak_hs_rhoR_T_mask_gcm2', 'peak_rhoR_hs_HYDRA_gcm2', '.2f'),
+        ('Yield (MJ)',
+         sim_metrics['yield_MJ'],       'yield',   None, '.1f'),
+        ('Fusion Gain',
+         sim_gain,                      'gain',    None, '.1f'),
     ]
 
-    for label, sim_val, pub_key, fmt in burn_rows:
-        pub_entry = published_metrics.get(pub_key, None)
-        if pub_entry is None:
-            continue
-        pub_val, pub_unc = _to_tuple(pub_entry)
-        if pub_val <= 0:
-            continue
-        delta = 100 * (sim_val - pub_val) / pub_val
-        sv = format(sim_val, fmt)
-        pv = format(pub_val, fmt)
-        if pub_unc > 0:
-            pv += f"±{format(pub_unc, fmt)}"
-        lines.append(f"{label:<30} {sv:>15} {pv:>15} {delta:>9.1f}")
+    for label, sim_val, cluster_key, hydra_key, fmt in burn_rows:
+        cluster_entry = published_metrics.get(cluster_key) if cluster_key else None
+        hydra_entry   = published_metrics.get(hydra_key) if hydra_key else None
+        _emit_row(label, sim_val, cluster_entry, hydra_entry, fmt)
+
+    # ── Peak ρ at ignition (HYDRA-specific, no cluster value) ──
+    # Headline no-burn hydro metric. For no-burn runs the value is at
+    # stagnation (no ignition crossing); label the row accordingly.
+    _rho_ign_val = sim_metrics.get('peak_density_at_ignition', 0.0)
+    _is_stag_fb  = bool(sim_metrics.get('peak_density_at_ignition_is_stagnation', False))
+    _rho_label   = 'Peak ρ at ignition (g/cm³)'
+    if _is_stag_fb:
+        _rho_label = 'Peak ρ at stagnation (g/cm³)'   # no-burn fallback
+    _emit_row(_rho_label, _rho_ign_val,
+              None,
+              published_metrics.get('peak_density_at_ignition_HYDRA_gcm3'),
+              '.0f')
 
     # ── Over-amplified / oversized hot-spot diagnostic (May 23 2026) ──
     # Two prior framings of this residual were wrong: the "target-mass
