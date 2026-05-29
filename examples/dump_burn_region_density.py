@@ -152,30 +152,79 @@ def extract_metrics(base_path: Path,
     else:
         peak_inflight_rhoR = float('nan')
 
+    # ---- Burn-on extras (auto-detected; NaN if burn was OFF) ----
+    yield_MJ        = float('nan')
+    bang_time_ns    = float('nan')
+    HS_rhoR_max     = float('nan')
+    foam_yield_pct  = float('nan')
+    ignition_flag   = ''
+
+    bt = getattr(data, 'bang_time', 0.0) or 0.0
+    if bt > 0:
+        bang_time_ns = float(bt)
+    if hasattr(data, 'hot_spot_rhoR_vs_time') and data.hot_spot_rhoR_vs_time is not None:
+        v = data.hot_spot_rhoR_vs_time
+        if np.any(~np.isnan(v)):
+            HS_rhoR_max = float(np.nanmax(v))
+            ignition_flag = 'YES' if HS_rhoR_max >= 0.3 else 'no'
+
+    # Total fusion yield -- prefer Helios's energy_output if populated, else from neutron count
+    energy_output = getattr(data, 'energy_output', 0.0) or 0.0
+    if energy_output > 0:
+        yield_MJ = float(energy_output)
+    elif hasattr(data, 'dt_neutron_count') and data.dt_neutron_count is not None:
+        nc = np.asarray(data.dt_neutron_count)
+        if nc.ndim >= 2:
+            n_total = nc[-1].sum()
+        else:
+            n_total = nc[-1]
+        if n_total > 0:
+            yield_MJ = float(n_total * 17.6e6 * 1.602176634e-19 * 1e-6)
+
+    # Per-zone fusion product (DT alphas) for foam yield share
+    try:
+        if hasattr(data, 'dt_neutron_count_per_zone') and data.dt_neutron_count_per_zone is not None:
+            # If pipeline already exposes per-zone cumulative DT neutron count
+            nz = np.asarray(data.dt_neutron_count_per_zone)[-1]
+            if nz.sum() > 0:
+                foam_yield_pct = 100.0 * float(nz[foam_slice].sum() / nz.sum())
+    except Exception:
+        pass
+
+    def _r(x, n):
+        return round(float(x), n) if not (x is None or (isinstance(x, float) and np.isnan(x))) else ''
+
     return dict(
         label                 = base_path.name,
         run_path              = str(base_path),
         timestamp             = datetime.now().isoformat(timespec='seconds'),
-        t_stag_ns             = round(t_stag_ns, 4),
-        V_peak_kms            = round(v_peak_kms, 1),
-        peak_inflight_rhoR    = round(peak_inflight_rhoR, 4) if not np.isnan(peak_inflight_rhoR) else '',
-        peak_total_rhoR       = round(peak_total_rhoR, 4) if not np.isnan(peak_total_rhoR) else '',
-        rho_peak_all_gcc      = round(rho_peak_all, 2),
-        rho_peak_foam_gcc     = round(rho_peak_foam, 2),
-        rho_mean_foam_gcc     = round(rho_mean_foam, 2) if not np.isnan(rho_mean_foam) else '',
-        rhoR_foam             = round(rhoR_foam, 4),
-        foam_mass_total_mg    = round(foam_mass_total_g * 1e3, 4),
-        adiabat               = round(adiabat, 2) if not np.isnan(adiabat) else '',
-        coupling_pct          = round(coupling_pct, 1) if not np.isnan(coupling_pct) else '',
+        t_stag_ns             = _r(t_stag_ns, 4),
+        bang_time_ns          = _r(bang_time_ns, 4),
+        V_peak_kms            = _r(v_peak_kms, 1),
+        peak_inflight_rhoR    = _r(peak_inflight_rhoR, 4),
+        peak_total_rhoR       = _r(peak_total_rhoR, 4),
+        rho_peak_all_gcc      = _r(rho_peak_all, 2),
+        rho_peak_foam_gcc     = _r(rho_peak_foam, 2),
+        rho_mean_foam_gcc     = _r(rho_mean_foam, 2),
+        rhoR_foam             = _r(rhoR_foam, 4),
+        foam_mass_total_mg    = _r(foam_mass_total_g * 1e3, 4),
+        adiabat               = _r(adiabat, 2),
+        coupling_pct          = _r(coupling_pct, 1),
+        HS_rhoR_max           = _r(HS_rhoR_max, 4),
+        yield_MJ              = _r(yield_MJ, 3),
+        foam_yield_pct        = _r(foam_yield_pct, 1),
+        ignition              = ignition_flag,
         foam_zone_range       = f'{foam_lo}-{foam_hi - 1}',
     )
 
 
 CSV_COLUMNS = [
     'timestamp', 'label', 'run_path',
-    't_stag_ns', 'V_peak_kms', 'peak_inflight_rhoR', 'peak_total_rhoR',
+    't_stag_ns', 'bang_time_ns', 'V_peak_kms',
+    'peak_inflight_rhoR', 'peak_total_rhoR',
     'rho_peak_all_gcc', 'rho_peak_foam_gcc', 'rho_mean_foam_gcc',
     'rhoR_foam', 'foam_mass_total_mg', 'adiabat', 'coupling_pct',
+    'HS_rhoR_max', 'yield_MJ', 'foam_yield_pct', 'ignition',
     'foam_zone_range',
 ]
 
@@ -200,7 +249,7 @@ def append_csv(csv_path: Path, row: dict) -> None:
 
 def print_row(row: dict) -> None:
     print(f"\n  {row['label']}:")
-    print(f"    t_stag = {row['t_stag_ns']} ns")
+    print(f"    t_stag = {row['t_stag_ns']} ns" + (f"    bang = {row['bang_time_ns']} ns" if row.get('bang_time_ns') not in ('', None) else ''))
     print(f"    V_peak                      = {row['V_peak_kms']:>8} km/s")
     print(f"    peak in-flight rhoR (g/cm2) = {row['peak_inflight_rhoR']:>8}")
     print(f"    peak total rhoR (g/cm2)     = {row['peak_total_rhoR']:>8}")
@@ -211,6 +260,13 @@ def print_row(row: dict) -> None:
     print(f"    foam mass (total)           = {row['foam_mass_total_mg']:>8} mg")
     print(f"    adiabat (mass-avg ice)      = {row['adiabat']:>8}")
     print(f"    effective coupling %        = {row['coupling_pct']:>8}")
+    # Burn-on extras (only if present)
+    if row.get('yield_MJ') not in ('', None):
+        print(f"    --- burn ON ---")
+        print(f"    Total yield (MJ)            = {row['yield_MJ']:>8}     <-- headline")
+        print(f"    HS rhoR peak (g/cm2)        = {row['HS_rhoR_max']:>8}")
+        print(f"    Foam yield share (%)        = {row['foam_yield_pct']:>8}")
+        print(f"    Ignition                    = {row['ignition']:>8}")
 
 
 def main():
