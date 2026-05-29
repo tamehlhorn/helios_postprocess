@@ -1965,6 +1965,20 @@ class ICFAnalyzer:
                     self.data.ion_temperature[ign_idx, 0]) / 1000.0
                 logger.info(f"On-axis T_ion at ignition: "
                             f"{self.data.ignition_T_ion_onaxis_keV:.2f} keV")
+
+                # HS-averaged T_ion at ignition: mass-weighted average
+                # over zones with T_ion > 4.5 keV at the ignition timestep.
+                # This is the apples-to-apples comparison for the per-code
+                # T_ion_hs_at_ignition_{HYDRA,LILAC,xRAGE}_keV values in
+                # the Olson 2021 published data, which report ⟨T_ion⟩_HS
+                # rather than the on-axis maximum.
+                if total_hs_mass > 0:
+                    T_ion_keV_zone = self.data.ion_temperature[ign_idx] / 1000.0
+                    self.data.ignition_T_ion_hs_avg_keV = float(
+                        np.sum(T_ion_keV_zone[hot_mask] * mass[hot_mask])
+                        / total_hs_mass)
+                    logger.info(f"HS-averaged T_ion at ignition: "
+                                f"{self.data.ignition_T_ion_hs_avg_keV:.2f} keV")
                 # Store the ignition timestep index so the radial-profile
                 # CSV writer can pull r, T_ion, rho, P at that instant
                 # without re-deriving it from ignition_time.

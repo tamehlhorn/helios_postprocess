@@ -178,6 +178,11 @@ class ICFRunData:
         self.ignition_T_ion_onaxis_keV: float = 0.0  # T_ion at r=0 at ignition;
                                                      # apples-to-apples with
                                                      # published-figure central T
+        self.ignition_T_ion_hs_avg_keV: float = 0.0  # mass-averaged T_ion over
+                                                     # T>4.5 keV zones at ignition;
+                                                     # apples-to-apples with
+                                                     # T_ion_hs_at_ignition_*_keV
+                                                     # per-code published values
         self.ignition_index: int = -1                # timestep index for the
                                                      # radial-profile CSV writer
         self.peak_density_at_ignition: float = 0.0   # g/cm³ — max ρ at ignition;

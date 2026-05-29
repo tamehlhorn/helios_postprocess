@@ -184,13 +184,20 @@ def extract_metrics(base_path: Path,
         if n_total > 0:
             yield_MJ = float(n_total * 17.6e6 * 1.602176634e-19 * 1e-6)
 
-    # Per-zone fusion product (DT alphas) for foam yield share
+    # Per-zone DT-neutron cumulative count for foam yield share.
+    # Helios EXODUS variable: TimeIntFusionProd_n_1406_zone (n_times, n_zones).
+    # Last timestep = total reactions per zone over the whole run.
     try:
-        if hasattr(data, 'dt_neutron_count_per_zone') and data.dt_neutron_count_per_zone is not None:
-            # If pipeline already exposes per-zone cumulative DT neutron count
-            nz = np.asarray(data.dt_neutron_count_per_zone)[-1]
-            if nz.sum() > 0:
-                foam_yield_pct = 100.0 * float(nz[foam_slice].sum() / nz.sum())
+        nz_attr = getattr(data, 'dt_neutron_count_zone', None)
+        if nz_attr is not None:
+            nz = np.asarray(nz_attr)
+            if nz.ndim >= 2:
+                nz_final = nz[-1]
+            else:
+                nz_final = nz
+            n_total = float(nz_final.sum())
+            if n_total > 0:
+                foam_yield_pct = 100.0 * float(nz_final[foam_slice].sum() / n_total)
     except Exception:
         pass
 
