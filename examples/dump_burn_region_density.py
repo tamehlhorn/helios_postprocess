@@ -77,10 +77,13 @@ def extract_metrics(base_path: Path,
                           drive_time=drive_t)
     run.close()
 
-    # Light analysis -- just enough to identify stagnation and ablation front
+    # Light analysis -- enough to identify stagnation, ablation front, AND burn
+    # (burn_phase populates yield, HS rhoR vs time, peak_density_at_ignition for
+    # burn-ON runs; for no-burn runs it's a near-no-op since fusion_power is zero)
     analyzer = ICFAnalyzer(data)
     analyzer.analyze_drive_phase()
     analyzer.analyze_stagnation_phase()
+    analyzer.analyze_burn_phase()
     analyzer.compute_performance_metrics()
 
     time_ns = data.time
