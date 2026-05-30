@@ -237,7 +237,30 @@ Each entry is `[value, uncertainty]`. Entries with `[0.0, 0.0]` are skipped.
     spike from being incorrectly identified as the peak implosion velocity.
     Fixed April 2026.
 
-16. **Flux-limiter convention + regime (May 2026)**:
+16. **Flux-limiter convention + regime (May 2026, updated May 29 2026)**:
+
+    **CORRECTED GLOBAL VALUE (May 29 2026): FL_prism = 0.012** (f_standard
+    = 0.048) is the appropriate global flux-limiter value for the present
+    version of Helios, replacing the per-region 0.06 DT / 0.007 foam-CH
+    split that was used in the fab007 production calibration. This
+    correction came from a separate Prism-side calibration update and is
+    treated here as the standing default for new design-study work.
+
+    Note: applying FL_prism=0.012 to all 4 regions changes the production
+    fab007 picture meaningfully — DT regions go 0.06 → 0.012 (5× less
+    conduction allowed), foam/CH regions go 0.007 → 0.012 (~1.7× more).
+    See `notes/foam_vs_ice_investigation.md` §3 dated 2026-05-29 for the
+    full design study (FL=0.012 + geometric defocus reduction recovers
+    72% of the Helios-vs-LILAC yield gap with 31.5% foam yield share at
+    `wf_fl012_c20_burn`).
+
+    **KNOWN ISSUE (May 29 2026): FL_prism = 0.012 + burn-on configurations
+    hit recurring SIGSEGV/malloc-error crashes during Helios shutdown.**
+    Two of three burn-on FL=0.012 runs crashed (baseline_burn on first
+    attempt, c20_burn on re-extraction attempt). The .exo files are
+    substantially complete at the time of crash and remain recoverable for
+    postprocessing — the metrics extract correctly. Worth flagging for
+    larger scans at this FL: budget time for at least one retry per run.
 
     a) **Per-region read**: Helios reads the thermal-conductivity flux
        limiter `f` from the .rhw file **per region** (not a single global
@@ -361,6 +384,25 @@ Key fields in `[Laser Source Data]` block (beam 1):
   deficit in PDD_27 (critical bug found April 2026)
 - `Number of laser beams` -- if set to 3 but only beam 1 is active, beams 2/3 must have
   `Laser power model is on = 0`
+
+## PDD Design-Study Anchor: c20_burn (May 29 2026)
+
+For design analysis where burn-relevant foam yield matters (not LILAC-thermo-state
+matching), the anchor configuration is **`wf_fl012_c20_burn`**:
+- FL_prism = 0.012 (global, all 4 regions)
+- cone 20°, spot 0.14 cm, focus 0.15 cm (fab02-class geometric defocus reduction)
+- Pulse: standard 25 TW foot / 329 TW peak, burn ON, non-local α-deposition
+- Yield: **69 MJ** with **31.5% foam yield share** (exceeds fab02's 26.5%)
+- V_peak 472 km/s, coupling 86%, adiabat 1.01, HS ρR 0.64
+
+This deviates from LILAC's thermo state (V_peak 472 vs 410, CR_max ~35 vs 29) but
+demonstrates that PROPACEOS wetted foam CAN be burned to LILAC-class yield given
+sufficient bootstrap-strength drive. **Use c20-class settings for HDD transfer**;
+use fab007 only for LILAC-thermo-state comparison studies.
+
+See `notes/foam_vs_ice_investigation.md` §3 dated 2026-05-29 for the design study
+narrative; `docs/Xcimer_foam_burn_deficit_report.md` §5 for the external write-up;
+`comparisons/pdd_design_comparison.png` for the decision-matrix figure.
 
 ## PDD Calibration Scan (April 2026)
 

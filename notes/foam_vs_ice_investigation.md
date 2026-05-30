@@ -2,7 +2,7 @@
 
 **Lead question:** Why does Helios's fab007 production run (wetted DT-CH foam main fuel) yield 26 MJ while LILAC's same target yields 87 MJ? Where is the foam-burn deficit, and is it a Helios artifact or a physical insight about wetted-foam designs?
 
-**Status:** Closeout pending. Foam-burn deficit traced to real material physics (PROPACEOS DT-CH foam EOS+opacity tables, isolated by direct planar experiment). Basic Helios rate kernels validated. CR_burn EOS-swap previously suspected as opacity pathology — refuted by 3-way energy ledger, now understood as an EOS-table mismatch artifact (do not interpret as physical finding).
+**Status:** **CLOSED.** Foam-burn deficit traced to real material physics (PROPACEOS DT-CH foam EOS+opacity tables, isolated by direct planar experiment). Basic Helios rate kernels validated. CR_burn EOS-swap previously suspected as opacity pathology — refuted by 3-way energy ledger, now understood as an EOS-table mismatch artifact (do not interpret as physical finding). **Design study (May 29) demonstrated that FL=0.012 + aggressive geometric defocus (c20) recovers 72% of the LILAC yield gap with 31.5% foam yield share — proving PROPACEOS foam CAN be burned in Helios given sufficient drive.**
 
 **Owner:** Prof T (Mehlhorn). Last updated: 2026-05-25.
 
@@ -190,6 +190,39 @@ Drive phase is bit-for-bit identical (peak-v KE 172.40 vs 172.31 kJ — 0.05% ma
 Lesson: do not swap one of {EOS, opacity} in isolation. They must be a consistent pair, or you produce this kind of artifact. The CR_burn diagnostic detour is closed.
 
 3-way ledger figure: `comparisons/cr_burn_triplet_energy_ledger.png`.
+
+### May 29 2026 — FL=0.012 design study: **foam burn productivity recovered**
+
+Goal: demonstrate that Helios's PROPACEOS wetted foam CAN be burned to near-LILAC yield given sufficient drive, settling the design-study question about whether the foam-burn deficit is fundamental or recoverable.
+
+**Setup:** FL_prism=0.012 (the corrected global value, replacing fab007 production's per-region 0.06 DT / 0.007 foam-CH split). Two burn-on configurations bracketing the design space:
+- `wf_fl012_baseline_burn` — fab007 geometry (cone 37°, spot 0.18, focus 0.22). Tests if FL alone is the fix.
+- `wf_fl012_c20_burn` — aggressive geometric defocus reduction (cone 20°, spot 0.14, focus 0.15). Tests maximum yield achievable.
+
+**Decision-matrix results:**
+
+| Run | V_peak (km/s) | Coup % | Yield (MJ) | HS ρR | **Foam yield share** | Adiabat | Verdict |
+|---|---:|---:|---:|---:|---:|---:|---|
+| fab007 production foam | 421 | 73.1 | 26 | 0.35 | 10.1% | 1.95 | reference |
+| baseline_burn (FL fix) | 428 | 74.9 | **33** | 0.39 | **14.0%** | 1.65 | marginal |
+| c20_burn (FL + geom) | 472 | 86.0 | **69** | 0.64 | **31.5%** | 1.01 | **strong foam burn** |
+| fab02 over-drive (ref) | 463 | 84.0 | 59 | n/a | 26.5% | 1.05 | bootstrap baseline |
+| LILAC | 410 | 68 | 87 | 0.85 | ~65% (inferred) | 3.0 | target |
+
+**Headlines:**
+
+1. **c20_burn exceeds fab02 on every dimension** — 31.5% foam yield share vs 26.5%, 69 MJ vs 59 MJ, at lower adiabat (1.01 vs 1.05). The foam region alone yields ~22 MJ in c20_burn vs ~2.6 MJ in fab007 production — **8× more foam yield**. This is genuine foam burn, not just a hotter ice core compensating.
+2. **Decision tree outcome:** "Geometry helps; baseline still under-burns" — both FL fix AND geometric defocus reduction are required. FL alone moves foam share from 10.1% → 14.0% (modest); geometry on top moves it from 14.0% → 31.5% (~5× larger effect).
+3. **The design-study question is resolved.** PROPACEOS foam CAN be burned in Helios. The path requires deviating from LILAC's calibrated thermo state (V_peak 472 vs 410, CR_max ~35 vs 29) into a bootstrap-strong regime — but the EOS and opacity tables do support strong foam burn given sufficient drive.
+
+**Caveats:**
+
+- This is a *design study*, not a calibration. The configurations that hit foam-burn targets overshoot LILAC's drive-phase metrics. The question answered here is "what Helios CAN do" not "what reproduces LILAC."
+- Two of three FL=0.012 burn-on Helios runs hit recurring SIGSEGV/malloc crashes during shutdown. Config-specific edge case (FL=0.012 + burn-on may have a Helios numerical pathology) but the .exo files are recoverable so this didn't block extraction. Worth flagging if doing larger scans at this FL.
+
+**Comparison figure:** `comparisons/pdd_design_comparison.png` (7-panel decision matrix with reference horizontal lines).
+
+**Cumulative metrics CSV:** `notebooks/pdd_scan_results.csv`.
 
 ### May 28 2026 — Planar ablation comparison: **foam-burn deficit isolated as material physics**
 
