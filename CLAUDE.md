@@ -385,24 +385,49 @@ Key fields in `[Laser Source Data]` block (beam 1):
 - `Number of laser beams` -- if set to 3 but only beam 1 is active, beams 2/3 must have
   `Laser power model is on = 0`
 
-## PDD Design-Study Anchor: c20_burn (May 29 2026)
+## PDD Design-Study Anchors: c33_burn + c25_burn (May 30 2026)
 
-For design analysis where burn-relevant foam yield matters (not LILAC-thermo-state
-matching), the anchor configuration is **`wf_fl012_c20_burn`**:
-- FL_prism = 0.012 (global, all 4 regions)
-- cone 20°, spot 0.14 cm, focus 0.15 cm (fab02-class geometric defocus reduction)
-- Pulse: standard 25 TW foot / 329 TW peak, burn ON, non-local α-deposition
-- Yield: **69 MJ** with **31.5% foam yield share** (exceeds fab02's 26.5%)
-- V_peak 472 km/s, coupling 86%, adiabat 1.01, HS ρR 0.64
+The full FL=0.012 burn-on cone-angle sweep revealed a **two-plateau staircase**, not a
+smooth ramp. Two recommended anchors for two different objectives:
 
-This deviates from LILAC's thermo state (V_peak 472 vs 410, CR_max ~35 vs 29) but
-demonstrates that PROPACEOS wetted foam CAN be burned to LILAC-class yield given
-sufficient bootstrap-strength drive. **Use c20-class settings for HDD transfer**;
-use fab007 only for LILAC-thermo-state comparison studies.
+**`wf_fl012_c33_burn`** — closest-to-LILAC anchor (minimum geometric intervention):
+- cone 33°, spot 0.16 cm, focus 0.20 cm, FL_prism = 0.012 (global)
+- Yield: **55 MJ** with **25.3% foam yield share** (matches fab02's 26.5% baseline)
+- V_peak 447 km/s (+9% vs LILAC's 410), coupling 79.6%, adiabat 1.54, HS ρR 0.53
 
-See `notes/foam_vs_ice_investigation.md` §3 dated 2026-05-29 for the design study
+**`wf_fl012_c25_burn`** — max-yield anchor (engineering ceiling):
+- cone 25°, spot 0.14 cm, focus 0.16 cm, FL_prism = 0.012 (global)
+- Yield: **69 MJ** with **31.1% foam yield share** (exceeds fab02's 26.5%)
+- V_peak 470 km/s (+15% vs LILAC), coupling 85.3%, adiabat 1.01, HS ρR 0.64
+
+**For HDD calibration transfer: use c33-class as the working geometric anchor.** Same
+strong foam burn as c25/c20, less drive overshoot, lower kinematic deviation from
+LILAC. Use c25-class only when maximum yield is the objective.
+
+**Staircase plateaus (all at FL=0.012, burn on):**
+
+| Cone | Yield (MJ) | Foam share | Note |
+|---:|---:|---:|---|
+| 37° baseline | 33 | 14% | marginal (FL fix alone) |
+| 33° | 55 | 25% | **Plateau 1** — bootstrap baseline |
+| 28° | 55 | 26% | Plateau 1 (foam over-compresses to 62 g/cc but burns no more) |
+| 25° | 69 | 31% | **Plateau 2** — unlocks at (spot 0.16→0.14, focus 0.18→0.16) |
+| 20° | 69 | 32% | Plateau 2 — saturated |
+
+**c20 is superseded by c25**: same yield, same foam share, marginally less aggressive
+geometry — use c25 as the cleaner choice when max yield is needed.
+
+**Sub-finding:** c28's foam over-compression (61.6 g/cc, 2× ice's 30 g/cc) at unchanged
+foam burn productivity confirms **foam burn is bootstrap-temperature-limited at this
+drive, not compression-limited.** Consistent with May 24 fab007 diagnostic.
+
+**KNOWN ISSUE:** FL=0.012 + burn-on hits recurring SIGSEGV/malloc-error crashes during
+Helios shutdown (~4 of 6 runs in this scan). The .exo files are substantially complete
+and metrics extract correctly; budget one retry per run for larger scans.
+
+See `notes/foam_vs_ice_investigation.md` §3 dated 2026-05-29-30 for the design study
 narrative; `docs/Xcimer_foam_burn_deficit_report.md` §5 for the external write-up;
-`comparisons/pdd_design_comparison.png` for the decision-matrix figure.
+`comparisons/pdd_design_comparison.png` for the 10-row decision-matrix figure.
 
 ## PDD Calibration Scan (April 2026)
 

@@ -191,36 +191,56 @@ Lesson: do not swap one of {EOS, opacity} in isolation. They must be a consisten
 
 3-way ledger figure: `comparisons/cr_burn_triplet_energy_ledger.png`.
 
-### May 29 2026 — FL=0.012 design study: **foam burn productivity recovered**
+### May 29-30 2026 — FL=0.012 design study: **two-plateau staircase, c33 + c25 are anchors**
 
-Goal: demonstrate that Helios's PROPACEOS wetted foam CAN be burned to near-LILAC yield given sufficient drive, settling the design-study question about whether the foam-burn deficit is fundamental or recoverable.
+Goal: demonstrate that Helios's PROPACEOS wetted foam CAN be burned to near-LILAC yield given sufficient drive, and map the full cone-angle sweep to find the optimal operating point.
 
-**Setup:** FL_prism=0.012 (the corrected global value, replacing fab007 production's per-region 0.06 DT / 0.007 foam-CH split). Two burn-on configurations bracketing the design space:
-- `wf_fl012_baseline_burn` — fab007 geometry (cone 37°, spot 0.18, focus 0.22). Tests if FL alone is the fix.
-- `wf_fl012_c20_burn` — aggressive geometric defocus reduction (cone 20°, spot 0.14, focus 0.15). Tests maximum yield achievable.
+**Setup:** FL_prism=0.012 (the corrected global value, replacing fab007 production's per-region 0.06 DT / 0.007 foam-CH split). Five burn-on configurations spanning the geometric design space:
 
-**Decision-matrix results:**
+| Config | Cone (°) | Spot (cm) | Focus (cm) |
+|---|---:|---:|---:|
+| baseline_burn | 37 | 0.18 | 0.22 (= fab007 geom) |
+| c33_burn | 33 | 0.16 | 0.20 |
+| c28_burn | 28 | 0.16 | 0.18 |
+| c25_burn | 25 | 0.14 | 0.16 |
+| c20_burn | 20 | 0.14 | 0.15 |
 
-| Run | V_peak (km/s) | Coup % | Yield (MJ) | HS ρR | **Foam yield share** | Adiabat | Verdict |
-|---|---:|---:|---:|---:|---:|---:|---|
-| fab007 production foam | 421 | 73.1 | 26 | 0.35 | 10.1% | 1.95 | reference |
-| baseline_burn (FL fix) | 428 | 74.9 | **33** | 0.39 | **14.0%** | 1.65 | marginal |
-| c20_burn (FL + geom) | 472 | 86.0 | **69** | 0.64 | **31.5%** | 1.01 | **strong foam burn** |
-| fab02 over-drive (ref) | 463 | 84.0 | 59 | n/a | 26.5% | 1.05 | bootstrap baseline |
-| LILAC | 410 | 68 | 87 | 0.85 | ~65% (inferred) | 3.0 | target |
+**Decision-matrix results (full 5-point sweep):**
 
-**Headlines:**
+| Config | V_peak | Coup % | Yield | HS ρR | Mean foam ρ | **Foam share** | Adiabat | Verdict |
+|---|---:|---:|---:|---:|---:|---:|---:|---|
+| fab007 prod foam (ref) | 421 | 73.1 | 26 | 0.35 | 12 | 10.1% | 1.95 | reference |
+| baseline_burn | 428 | 74.9 | **33** | 0.39 | 35 | **14.0%** | 1.65 | marginal |
+| **c33_burn** | 447 | 79.6 | **55** | 0.53 | 45 | **25.3%** | 1.54 | **strong foam burn** |
+| **c28_burn** | 448 | 81.4 | **55** | 0.53 | **61.6** | **25.5%** | 0.98 | **strong foam burn** |
+| **c25_burn** | 470 | 85.3 | **69** | 0.64 | 31 | **31.1%** | 1.01 | **strong foam burn** |
+| **c20_burn** | 472 | 86.0 | **69** | 0.64 | 25 | **31.5%** | 1.01 | **strong foam burn** |
+| fab02 over-drive (ref) | 463 | 84.0 | 59 | n/a | n/a | 26.5% | 1.05 | bootstrap baseline |
+| LILAC reference | 410 | 68 | 87 | 0.85 | n/a | ~65% (inferred) | 3.0 | target |
 
-1. **c20_burn exceeds fab02 on every dimension** — 31.5% foam yield share vs 26.5%, 69 MJ vs 59 MJ, at lower adiabat (1.01 vs 1.05). The foam region alone yields ~22 MJ in c20_burn vs ~2.6 MJ in fab007 production — **8× more foam yield**. This is genuine foam burn, not just a hotter ice core compensating.
-2. **Decision tree outcome:** "Geometry helps; baseline still under-burns" — both FL fix AND geometric defocus reduction are required. FL alone moves foam share from 10.1% → 14.0% (modest); geometry on top moves it from 14.0% → 31.5% (~5× larger effect).
-3. **The design-study question is resolved.** PROPACEOS foam CAN be burned in Helios. The path requires deviating from LILAC's calibrated thermo state (V_peak 472 vs 410, CR_max ~35 vs 29) into a bootstrap-strong regime — but the EOS and opacity tables do support strong foam burn given sufficient drive.
+**Headlines (revised after full 5-point sweep):**
+
+1. **The curve is a TWO-PLATEAU STAIRCASE, not a smooth ramp.**
+   - **Plateau 1 (33° ≡ 28°):** 55 MJ, 25% foam share. Matches fab02's bootstrap baseline (26.5%).
+   - **Plateau 2 (25° ≡ 20°):** 69 MJ, 31% foam share. Exceeds fab02; closes 72% of LILAC gap.
+   - **Knee between 28° and 25°:** unlocks at the (spot 0.16 → 0.14, focus 0.18 → 0.16) tightening, NOT at the cone narrowing per se. Spot+focus is the discriminator.
+
+2. **c28's foam over-compresses but doesn't burn more.** c28 reaches mean foam ρ = 61.6 g/cc at stagnation (2× ice's 30 g/cc) yet delivers the same foam yield share as c33 at 45 g/cc. **Foam burn productivity at this drive level is bootstrap-temperature-limited, not compression-limited.** Confirms the broader picture from the May 24 fab007 diagnostic — foam burn is governed by alpha bootstrap reach into foam volume, not by foam compressibility per se.
+
+3. **Two recommended design anchors for different objectives:**
+   - **c33_burn** — "minimum geometric intervention" closest to LILAC's calibrated geometry. 55 MJ, 25% foam, V_peak 447 (+9% vs LILAC). For studies where LILAC-thermo-state alignment matters.
+   - **c25_burn** — "max demonstrated yield." 69 MJ, 31% foam, V_peak 470 (+15%). Engineering ceiling.
+
+4. **c20 is superseded by c25.** Same yield, same foam share, marginally less aggressive geometric defocus. c25 is the cleaner choice.
+
+5. **Decision tree outcome:** "Geometry helps; baseline still under-burns" — FL alone moves the needle from 10.1% → 14.0% (modest); geometry-on-top-of-FL is the dominant lever. The staircase reveals that this happens in **two distinct steps**, not as a continuous gradient.
 
 **Caveats:**
 
-- This is a *design study*, not a calibration. The configurations that hit foam-burn targets overshoot LILAC's drive-phase metrics. The question answered here is "what Helios CAN do" not "what reproduces LILAC."
-- Two of three FL=0.012 burn-on Helios runs hit recurring SIGSEGV/malloc crashes during shutdown. Config-specific edge case (FL=0.012 + burn-on may have a Helios numerical pathology) but the .exo files are recoverable so this didn't block extraction. Worth flagging if doing larger scans at this FL.
+- All burn-on configurations deviate from LILAC's thermo state. This is a design study answering "what Helios CAN do with PROPACEOS foam," not "what reproduces LILAC."
+- 4 of 6 FL=0.012 + burn-on Helios runs hit recurring SIGSEGV/malloc crashes during shutdown (baseline_burn, c20_burn, c25_burn rc=139; c28_burn rc=134 on first try, clean on retry). The .exo files are substantially complete at crash time so metrics extract correctly; budget one retry per run.
 
-**Comparison figure:** `comparisons/pdd_design_comparison.png` (7-panel decision matrix with reference horizontal lines).
+**Comparison figure:** `comparisons/pdd_design_comparison.png` (10-row decision matrix + 4 reference rows).
 
 **Cumulative metrics CSV:** `notebooks/pdd_scan_results.csv`.
 
