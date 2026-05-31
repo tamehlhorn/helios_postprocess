@@ -75,7 +75,7 @@ def calculate_neutron_yield(fusion_rate: np.ndarray,
     Uses trapezoidal integration for accuracy.
     """
     # Trapezoidal rule: more accurate than simple sum
-    yield_total = np.trapz(fusion_rate, time)
+    yield_total = np.trapezoid(fusion_rate, time)
     return yield_total
 
 

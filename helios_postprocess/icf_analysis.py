@@ -2075,7 +2075,7 @@ class ICFAnalyzer:
                            "falling back to time-integration of fusion rate "
                            "(less precise, see CLAUDE.md)")
             total_fusion = np.sum(self.data.fusion_power, axis=1)
-            fusion_energy = np.trapz(total_fusion, self.data.time * 1e-9)  # ns→s
+            fusion_energy = np.trapezoid(total_fusion, self.data.time * 1e-9)  # ns→s
 
             # NOTE: The result of this integration has units that depend on
             # what FusionRate_DT_nHe4 actually represents in Helios.

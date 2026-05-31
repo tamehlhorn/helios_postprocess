@@ -141,7 +141,7 @@ def integrate_mass(
         raise RuntimeError("not enough sample points inside the integration window")
 
     integrand = rho_sel * r_sel ** 2
-    M_g = 4.0 * np.pi * float(np.trapz(integrand, r_sel))
+    M_g = 4.0 * np.pi * float(np.trapezoid(integrand, r_sel))
     return M_g, r_inner_cm, r_outer_cm
 
 

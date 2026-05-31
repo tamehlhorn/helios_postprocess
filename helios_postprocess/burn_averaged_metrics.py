@@ -267,7 +267,7 @@ def extract_histories_from_run_data(data) -> Dict:
     lpd = getattr(data, 'laser_power_delivered', None)
     if lpd is not None and E_absorbed_J > 0:
         # Integrate delivered power over time
-        E_delivered_J = np.trapz(lpd, x=time_ns * 1e-9)
+        E_delivered_J = np.trapezoid(lpd, x=time_ns * 1e-9)
         if E_delivered_J > 0:
             fraction_absorbed = E_absorbed_J / E_delivered_J * 100.0
 

@@ -315,12 +315,12 @@ class ICFOutputGenerator:
                     t_on, t_off = float(time_ns[idx[0]]), float(time_ns[idx[-1]])
                     peak_TW = float(np.max(p_W)) * 1.0e-12
                     # trapz(W, ns) -> W·ns ; ·1e-9 -> J ; ·1e-3 -> kJ ; combined: 1e-12
-                    energy_kJ = float(np.trapz(p_W, time_ns)) * 1.0e-12
+                    energy_kJ = float(np.trapezoid(p_W, time_ns)) * 1.0e-12
                     _a(f"  {b+1:<6}{t_on:>10.2f}{t_off:>10.2f}"
                        f"{peak_TW:>14.1f}{energy_kJ:>14.1f}")
                 # Total energy across all beams (= laser_energy_delivered, sanity-check)
                 total_W = per_beam.sum(axis=1)
-                total_kJ = float(np.trapz(total_W, time_ns)) * 1.0e-12
+                total_kJ = float(np.trapezoid(total_W, time_ns)) * 1.0e-12
                 _a(f"  {'TOTAL':<6}{'':<10}{'':<10}{'':<14}{total_kJ:>14.1f}")
                 _a('')
 
