@@ -1,45 +1,16 @@
-# Byte-compiled / optimized / DLL files
-__pycache__/
-*.py[cod]
-*$py.class
+# Installers / large binaries
+Miniforge3-*.sh
 
-# Distribution / packaging
-build/
-dist/
-*.egg-info/
-*.egg
-
-# Virtual environments
-venv/
-env/
-.venv/
-
-# IDE
-.vscode/
-.idea/
-*.swp
-*.swo
-
-# OS files
-.DS_Store
-Thumbs.db
-
-# Jupyter notebooks
+# Conda / Anaconda + Jupyter cruft
+anaconda_projects/
+.virtual_documents/
 .ipynb_checkpoints/
 
-# Testing / coverage
-.pytest_cache/
-.coverage
-htmlcov/
-*.bak
-patch_*.py
-*.svg
-
-# Session-scoped patch scripts and logs (pre-applied; not source of truth)
-apply_patch_*.py
-patch_*.py
-*_patchB*.log
-SESSION_HANDOFF_*.md
-archive/
-Aux Standalone files/
-Aux_Standalone_files/
+# Environment-export scratch (keep environment.yml)
+*-pip.txt
+base.yml
+d3he_fusion_model_w.yml
+fusion.yml
+fusionenv.yml
+icf.yml
+spyder-env.yml
