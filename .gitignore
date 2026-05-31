@@ -14,3 +14,8 @@ fusion.yml
 fusionenv.yml
 icf.yml
 spyder-env.yml
+
+# macOS / Python artifacts
+.DS_Store
+__pycache__/
+*.egg-info/
