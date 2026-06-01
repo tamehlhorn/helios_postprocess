@@ -495,6 +495,22 @@ class ICFAnalyzer:
         # references (Thomas et al. Vulcan HDD table).
         self._compute_cr15_metrics()
 
+        # Compute implosion velocity using RHINO convention (W. Trickey):
+        # Per-timestep shell = zones with rho > rho_peak / e.
+        # Shell velocity = sqrt(2 * KE_shell / m_shell).
+        # Implosion velocity = turning point (peak v_shell pre-stagnation).
+        # Apples-to-apples with RHINO's reported "Implosion velocity" for
+        # cross-tool sanity checks on HDD-class targets.
+        self._compute_implosion_velocity_rhino()
+
+        # Compute min shell adiabat at CR=1.5 per RHINO convention:
+        # Trigger = timestep where the Lagrangian gas/cold-fuel boundary
+        # (ri[t,0]) reaches R_inner(0) / 1.5. At that timestep, compute
+        # adiabat per zone in the shell (same rho>peak/e mask as the
+        # velocity convention), take min over those zones. Apples-to-
+        # apples with RHINO's reported "Min shell adiabat (CR=1.5)".
+        self._compute_adiabat_min_rhino()
+
         # Track ablation front position
         self._track_ablation_front()
 
@@ -777,6 +793,210 @@ class ICFAnalyzer:
         logger.info(
             f"Adiabat (DT ice, CR=1.5 mass-avg): "
             f"{self.data.adiabat_mass_averaged_ice_cr15:.2f}"
+        )
+
+    def _compute_implosion_velocity_rhino(self):
+        """
+        Implosion velocity per Will Trickey's RHINO convention:
+
+          1. At each timestep, define shell zones as those where
+             mass_density > rho_peak(t) / e.
+          2. Shell velocity at t = sqrt(2 * KE_shell / m_shell), where
+             KE_shell and m_shell are summed over the shell zones.
+          3. Implosion velocity = turning point (peak) of v_shell(t)
+             over the pre-stagnation interval -- the in-flight maximum.
+
+        Apples-to-apples with the "Implosion velocity" reported in RHINO
+        HTML reports. For WT_cthomas: RHINO reports 404 km/s.
+
+        Stored on data:
+          implosion_velocity_rhino_kms     (km/s)
+          t_implosion_velocity_rhino_ns    (ns)
+        """
+        if (self.data.velocity is None
+                or self.data.mass_density is None
+                or self.data.zone_mass is None):
+            return
+
+        rho = self.data.mass_density                  # (n_t, n_z) g/cc
+        zmass = self.data.zone_mass                   # (n_t, n_z) g
+        vel = self.data.velocity                      # (n_t, n_z+1) cm/s node-centered
+        n_times, n_zones = rho.shape
+
+        # Zone-centered velocity
+        if vel.shape[1] > n_zones:
+            v_zone = 0.5 * (vel[:, :n_zones] + vel[:, 1:n_zones + 1])
+        else:
+            v_zone = vel[:, :n_zones]
+
+        v_shell = np.zeros(n_times)
+        for t in range(n_times):
+            rho_t = rho[t]
+            rho_pk = float(np.max(rho_t))
+            if rho_pk <= 0:
+                continue
+            threshold = rho_pk / np.e
+            mask = rho_t > threshold
+            if not np.any(mask):
+                continue
+            m_shell = float(np.sum(zmass[t, mask]))
+            if m_shell <= 0:
+                continue
+            # KE_shell in erg (g * (cm/s)^2)
+            ke_shell = 0.5 * float(np.sum(zmass[t, mask] * v_zone[t, mask] ** 2))
+            v_shell[t] = np.sqrt(2.0 * ke_shell / m_shell)
+
+        # Find turning point: peak v_shell pre-stagnation.
+        # Restrict to pre-stagnation interval (alpha onset or stag_time).
+        stag_t = getattr(self.data, 'stag_time', 0.0) or 0.0
+        if stag_t > 0:
+            stag_idx = int(np.argmin(np.abs(self.data.time - stag_t)))
+        else:
+            stag_idx = n_times - 1
+        alpha_onset_idx = getattr(self.data, 'alpha_onset_index', stag_idx)
+        if alpha_onset_idx is None:
+            alpha_onset_idx = stag_idx
+        end_idx = min(stag_idx, int(alpha_onset_idx))
+        if end_idx <= 1:
+            end_idx = stag_idx
+        if end_idx <= 1:
+            return
+
+        # The turning point: argmax over the in-flight window.
+        peak_idx = int(np.argmax(v_shell[:end_idx + 1]))
+        v_peak_cms = float(v_shell[peak_idx])
+        if v_peak_cms <= 0:
+            return
+
+        self.data.implosion_velocity_rhino_kms = v_peak_cms * 1e-5     # cm/s -> km/s
+        self.data.t_implosion_velocity_rhino_ns = float(self.data.time[peak_idx])
+        logger.info(
+            f"Implosion velocity (RHINO convention): "
+            f"{self.data.implosion_velocity_rhino_kms:.1f} km/s "
+            f"at t={self.data.t_implosion_velocity_rhino_ns:.3f} ns"
+        )
+
+    def _compute_adiabat_min_rhino(self):
+        """
+        Min shell adiabat at CR=1.5 per Will Trickey's RHINO convention:
+
+          1. The "inner shell surface" is the gas/cold-fuel Lagrangian
+             interface, ri[t, 0]. Its initial radius is R_inner(0) =
+             zone_boundaries[0, ri[0, 0]].
+          2. CR=1.5 timestep = first time R_inner(t) <= R_inner(0)/1.5.
+          3. At that timestep, the shell is the set of zones with
+             rho > rho_peak(t)/e (same convention as the velocity).
+          4. Compute adiabat = P_plasma / P_Fermi per shell zone using
+             the DT Fermi formula (rho_0 = 0.205 g/cc, Lindl convention).
+          5. Take the minimum over those zones.
+
+        Apples-to-apples with RHINO's reported "Min shell adiabat (CR=1.5)".
+        For WT_cthomas: RHINO reports 4.13.
+
+        Stored on data:
+          adiabat_min_rhino                  (dimensionless)
+          t_adiabat_min_rhino_ns             (ns)
+          r_inner_initial_cm                 (cm) -- audit value
+          r_inner_at_cr15_cm                 (cm) -- audit value
+        """
+        if (self.data.mass_density is None
+                or self.data.region_interfaces_indices is None
+                or self.data.zone_boundaries is None):
+            return
+
+        rho = self.data.mass_density                  # (n_t, n_z) g/cc
+        zbnd = self.data.zone_boundaries              # (n_t, n_z+1) cm
+        ri = self.data.region_interfaces_indices      # (n_t, n_interfaces)
+        n_times, n_zones = rho.shape
+
+        if ri.shape[1] < 1:
+            return
+
+        # Initial gas/cold-fuel boundary radius
+        inner_node_0 = int(ri[0, 0])
+        if inner_node_0 < 0 or inner_node_0 >= zbnd.shape[1]:
+            return
+        R_inner_0 = float(zbnd[0, inner_node_0])
+        if R_inner_0 <= 0:
+            return
+        R_target = R_inner_0 / 1.5
+
+        # Lagrangian inner shell surface position over time
+        R_inner_t = np.full(n_times, np.nan)
+        for t in range(n_times):
+            node = int(ri[t, 0])
+            if 0 <= node < zbnd.shape[1]:
+                R_inner_t[t] = zbnd[t, node]
+
+        # First crossing of R_inner(t) <= R_target
+        valid = ~np.isnan(R_inner_t)
+        crossing_mask = valid & (R_inner_t <= R_target)
+        if not np.any(crossing_mask):
+            logger.info(
+                f"Adiabat min (RHINO): inner surface never reaches "
+                f"R_0/1.5 = {R_target:.4f} cm (min seen: "
+                f"{np.nanmin(R_inner_t):.4f} cm)"
+            )
+            return
+        t_cr15 = int(np.argmax(crossing_mask))   # first True
+
+        # Build shell mask at this timestep (same convention as velocity)
+        rho_t = rho[t_cr15]
+        rho_pk = float(np.max(rho_t))
+        if rho_pk <= 0:
+            return
+        shell_mask = rho_t > (rho_pk / np.e)
+
+        # Intersect with the DT cold-fuel region so we don't take min
+        # adiabat over ablator zones (where DT Fermi formula misapplies).
+        fa_idx = getattr(self.data, 'fuel_ablator_idx', -2)
+        if fa_idx is None or fa_idx < 0:
+            fa_idx = max(ri.shape[1] - 2, 0)
+        inner_node = int(ri[t_cr15, 0])
+        outer_col = min(int(fa_idx), ri.shape[1] - 1)
+        outer_node = int(ri[t_cr15, outer_col])
+        if outer_node <= inner_node:
+            outer_node = min(n_zones, inner_node + 1)
+        cold_fuel_mask = np.zeros(n_zones, dtype=bool)
+        cold_fuel_mask[inner_node:outer_node] = True
+
+        eval_mask = shell_mask & cold_fuel_mask
+        if not np.any(eval_mask):
+            # Fallback: all DT cold-fuel zones at this timestep
+            eval_mask = cold_fuel_mask
+        if not np.any(eval_mask):
+            return
+
+        # Plasma pressure in J/cm^3 (ion + electron, no radiation)
+        if getattr(self.data, 'plasma_pressure', None) is not None:
+            P_eval = self.data.plasma_pressure[t_cr15, eval_mask]
+        elif (self.data.ion_pressure is not None
+                and self.data.elec_pressure is not None):
+            P_eval = (self.data.ion_pressure[t_cr15, eval_mask]
+                      + self.data.elec_pressure[t_cr15, eval_mask])
+        else:
+            return
+
+        # DT Fermi pressure: P_F = 2.17 * (rho/0.205)^(5/3) Mbar
+        #                       = 2.17e5 J/cm^3 * (rho/0.205)^(5/3)
+        # (Lindl convention rho_0 = 0.205 g/cc for equimolar DT ice.)
+        RHO_0_DT = 0.205
+        P_FERMI_PREFACTOR_JCC = 2.17e5
+        rho_eval = rho_t[eval_mask]
+        P_fermi = P_FERMI_PREFACTOR_JCC * (rho_eval / RHO_0_DT) ** (5.0 / 3.0)
+        alpha_zones = P_eval / np.maximum(P_fermi, 1e-30)
+
+        self.data.adiabat_min_rhino = float(np.min(alpha_zones))
+        self.data.t_adiabat_min_rhino_ns = float(self.data.time[t_cr15])
+        self.data.r_inner_initial_cm = R_inner_0
+        self.data.r_inner_at_cr15_cm = float(R_inner_t[t_cr15])
+        logger.info(
+            f"Adiabat min (RHINO convention): "
+            f"{self.data.adiabat_min_rhino:.2f} "
+            f"at t={self.data.t_adiabat_min_rhino_ns:.3f} ns "
+            f"(R_inner: {R_inner_0:.4f} cm -> "
+            f"{self.data.r_inner_at_cr15_cm:.4f} cm; "
+            f"{int(np.sum(eval_mask))} shell zones evaluated)"
         )
 
     def _compute_adiabat_at_breakout(self):

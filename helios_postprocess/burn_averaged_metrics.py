@@ -234,10 +234,12 @@ def extract_histories_from_run_data(data) -> Dict:
     target_gain      = getattr(data, 'target_gain', 0.0)
 
     # ── Scalar implosion metrics from ICFAnalyzer ──
-    peak_vimp_kms      = abs(getattr(data, 'peak_implosion_velocity', 0.0))
-    peak_vimp_kms_cr15 = abs(getattr(data, 'peak_implosion_velocity_at_cr15', 0.0))
-    adiabat            = getattr(data, 'adiabat_mass_averaged_ice', 0.0)
-    adiabat_cr15       = getattr(data, 'adiabat_mass_averaged_ice_cr15', 0.0)
+    peak_vimp_kms       = abs(getattr(data, 'peak_implosion_velocity', 0.0))
+    peak_vimp_kms_cr15  = abs(getattr(data, 'peak_implosion_velocity_at_cr15', 0.0))
+    impl_vel_rhino_kms  = abs(getattr(data, 'implosion_velocity_rhino_kms', 0.0))
+    adiabat             = getattr(data, 'adiabat_mass_averaged_ice', 0.0)
+    adiabat_cr15        = getattr(data, 'adiabat_mass_averaged_ice_cr15', 0.0)
+    adiabat_min_rhino   = getattr(data, 'adiabat_min_rhino', 0.0)
 # IFAR variants (May 2026 — multi-variant patch)
     # - data.ifar          : compound shell at peak v_imp (legacy default)
     # - data.ifar_ice      : DT ice only at peak v_imp
@@ -350,8 +352,10 @@ def extract_histories_from_run_data(data) -> Dict:
         # Implosion metrics
         'peak_velocity_kms':     peak_vimp_kms,
         'peak_velocity_kms_cr15': peak_vimp_kms_cr15,
+        'implosion_velocity_rhino_kms': impl_vel_rhino_kms,
         'adiabat':               adiabat,
         'adiabat_cr15':          adiabat_cr15,
+        'adiabat_min_rhino':     adiabat_min_rhino,
         'ifar':                  ifar,                # comparison-ready (CR=1.5 if available)
         'ifar_compound_peak_v':  ifar_compound_pv,    # legacy
         'ifar_ice_peak_v':       ifar_ice_pv,         # diagnostic
@@ -505,8 +509,10 @@ def calculate_burn_averaged_metrics(histories: Dict,
         # Implosion metrics (pass through from histories)
         'peak_velocity_kms':     histories.get('peak_velocity_kms', 0.0),
         'peak_velocity_kms_cr15': histories.get('peak_velocity_kms_cr15', 0.0),
+        'implosion_velocity_rhino_kms': histories.get('implosion_velocity_rhino_kms', 0.0),
         'adiabat':               histories.get('adiabat', 0.0),
         'adiabat_cr15':          histories.get('adiabat_cr15', 0.0),
+        'adiabat_min_rhino':     histories.get('adiabat_min_rhino', 0.0),
         'ifar':                  histories.get('ifar', 0.0),
         'fraction_absorbed_pct': histories.get('fraction_absorbed_pct', 0.0),
         'P_hs_ignition_Gbar':    histories.get('P_hs_ignition_Gbar',    0.0),
@@ -654,6 +660,12 @@ def compare_with_published(sim_metrics: Dict,
         ('Peak velocity at CR=1.5 (km/s)',
          sim_metrics.get('peak_velocity_kms_cr15', 0.0),
          'peak_velocity_kms', None, '.1f'),
+        ('Implosion velocity RHINO (km/s)',
+         sim_metrics.get('implosion_velocity_rhino_kms', 0.0),
+         'peak_velocity_kms', None, '.1f'),
+        ('Min shell adiabat RHINO',
+         sim_metrics.get('adiabat_min_rhino', 0.0),
+         'adiabat', None, '.2f'),
         ('Adiabat',
          sim_metrics.get('adiabat', 0.0),
          'adiabat', None, '.2f'),

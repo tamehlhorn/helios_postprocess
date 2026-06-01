@@ -229,10 +229,34 @@ class ICFRunData:
                                                    # peak_implosion_velocity_at_cr15
                                                    # for cross-code comparison.
         self.peak_implosion_velocity_at_cr15: float = 0.0  # km/s -- mass-avg shell
-                                                   # velocity at CR=1.5 (Thomas/RHINO
-                                                   # convention). Apples-to-apples
-                                                   # with published HDD references.
+                                                   # velocity at CR=1.5 snapshot.
+                                                   # NOTE: empirically reports much
+                                                   # earlier-than-peak velocities;
+                                                   # prefer implosion_velocity_rhino
+                                                   # for cross-tool comparison.
         self.t_peak_velocity_at_cr15_ns: float = 0.0  # ns
+        self.implosion_velocity_rhino_kms: float = 0.0  # km/s -- RHINO/W.Trickey
+                                                   # convention: shell defined as
+                                                   # rho > rho_peak/e per timestep;
+                                                   # v_shell = sqrt(2*KE_sh/m_sh);
+                                                   # turning point (peak) of
+                                                   # v_shell(t) pre-stagnation.
+                                                   # Apples-to-apples with RHINO's
+                                                   # reported "Implosion velocity".
+        self.t_implosion_velocity_rhino_ns: float = 0.0  # ns
+        self.adiabat_min_rhino: float = 0.0        # dimensionless -- RHINO/W.Trickey
+                                                   # "Min shell adiabat (CR=1.5)".
+                                                   # Trigger = first time the
+                                                   # gas/cold-fuel Lagrangian
+                                                   # boundary radius reaches
+                                                   # R_inner(0)/1.5. Adiabat per
+                                                   # shell zone (rho>peak/e in DT
+                                                   # cold-fuel region) using
+                                                   # standard DT Fermi formula,
+                                                   # min over those zones.
+        self.t_adiabat_min_rhino_ns: float = 0.0   # ns
+        self.r_inner_initial_cm: float = 0.0       # cm (audit)
+        self.r_inner_at_cr15_cm: float = 0.0       # cm (audit)
         self.ifar: float = 0.0                      # in-flight aspect ratio at peak v_imp
         self.adiabat_mass_averaged_ice: float = 0.0  # legacy: at peak velocity
                                                      # (potentially shock-inflated

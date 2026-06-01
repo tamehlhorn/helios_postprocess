@@ -13,8 +13,14 @@ Reads `notebooks/hdd_scan_results.csv` (populated by
   1. Multi-panel comparison figure with reference horizontal lines for:
      - V_peak (km/s)            vs Thomas (410), RHINO-on-WT (404)
      - V_peak at CR=1.5         vs RHINO-on-WT (404)
+     - V_impl RHINO (km/s)      vs Thomas (410), RHINO-on-WT (404)
+       (W. Trickey convention: shell = rho>peak/e; v=sqrt(2KE/m_sh);
+        turning point pre-stagnation)
      - Adiabat                  vs Thomas (6.0)
      - Adiabat at CR=1.5        vs RHINO-on-WT (4.13)
+     - Min shell adiabat RHINO  vs Thomas (6.0), RHINO-on-WT (4.13)
+       (W. Trickey convention: at timestep where inner shell surface
+        reaches R_0/1.5, min adiabat over rho>peak/e shell zones)
      - Imploded DT mass (mg)    vs Thomas (3.0)
      - Total yield (MJ)         vs Thomas (256), WT_cthomas (196)
      - HS rhoR peak             vs Thomas implied (~3), RHINO-on-WT (6.4)
@@ -59,8 +65,8 @@ import matplotlib.pyplot as plt
 # useful for cross-tool sanity checks.
 REFERENCES = {
     'Thomas (Vulcan HDD)': dict(
-        V_peak_kms=410, V_peak_kms_cr15=410,
-        adiabat=6.0, adiabat_cr15=6.0,
+        V_peak_kms=410, V_peak_kms_cr15=410, V_impl_rhino_kms=410,
+        adiabat=6.0, adiabat_cr15=6.0, adiabat_min_rhino=6.0,
         peak_total_rhoR=1.60,    # rhoR_cf from JSON
         imploded_DT_mg=3.0,
         coupling_pct=97.0,
@@ -69,8 +75,8 @@ REFERENCES = {
         HS_rhoR_max=float('nan'),  # not in Thomas table
     ),
     'RHINO on WT_cthomas': dict(
-        V_peak_kms=404, V_peak_kms_cr15=404,
-        adiabat=4.13, adiabat_cr15=4.13,
+        V_peak_kms=404, V_peak_kms_cr15=404, V_impl_rhino_kms=404,
+        adiabat=4.13, adiabat_cr15=4.13, adiabat_min_rhino=4.13,
         peak_total_rhoR=6.4,
         imploded_DT_mg=3.0,
         coupling_pct=85.5,
@@ -86,9 +92,13 @@ REF_LINES = {
                           (404, 'RHINO on WT', '#1a9850')],
     'V_peak_kms_cr15':   [(410, 'Thomas', '#cc3333'),
                           (404, 'RHINO on WT', '#1a9850')],
+    'V_impl_rhino_kms':  [(410, 'Thomas', '#cc3333'),
+                          (404, 'RHINO on WT', '#1a9850')],
     'adiabat':           [(6.0, 'Thomas', '#cc3333'),
                           (4.13, 'RHINO on WT', '#1a9850')],
     'adiabat_cr15':      [(6.0, 'Thomas', '#cc3333'),
+                          (4.13, 'RHINO on WT', '#1a9850')],
+    'adiabat_min_rhino': [(6.0, 'Thomas', '#cc3333'),
                           (4.13, 'RHINO on WT', '#1a9850')],
     'imploded_DT_mg':    [(3.0, 'Thomas', '#cc3333')],
     'yield_MJ':          [(256.0, 'Thomas', '#cc3333'),
@@ -106,11 +116,11 @@ def parse_float(s):
         return float('nan')
 
 
-NUMERIC_COLS = ['V_peak_kms', 'V_peak_kms_cr15',
+NUMERIC_COLS = ['V_peak_kms', 'V_peak_kms_cr15', 'V_impl_rhino_kms',
                 'coupling_pct', 'peak_total_rhoR', 'peak_inflight_rhoR',
                 'rho_peak_all_gcc', 'rho_peak_foam_gcc', 'rho_mean_foam_gcc',
                 'rhoR_foam', 'foam_mass_total_mg', 'imploded_DT_mg',
-                'adiabat', 'adiabat_cr15',
+                'adiabat', 'adiabat_cr15', 'adiabat_min_rhino',
                 'HS_rhoR_max', 'yield_MJ', 'foam_yield_pct',
                 't_stag_ns', 'bang_time_ns']
 
@@ -206,8 +216,10 @@ def make_figure(rows: List[dict], out_path: Path) -> None:
     panels = [
         ('V_peak_kms',        'Peak velocity (legacy)',       'V_peak (km/s)',     'V_peak_kms'),
         ('V_peak_kms_cr15',   'Peak velocity at CR=1.5',     'V_peak (km/s)',     'V_peak_kms_cr15'),
+        ('V_impl_rhino_kms',  'Implosion velocity (RHINO)',  'V (km/s)',          'V_impl_rhino_kms'),
         ('adiabat',           'Adiabat (legacy)',             'α',                 'adiabat'),
         ('adiabat_cr15',      'Adiabat at CR=1.5',           'α',                 'adiabat_cr15'),
+        ('adiabat_min_rhino', 'Min shell adiabat (RHINO)',   'α',                 'adiabat_min_rhino'),
         ('coupling_pct',      'Effective coupling',           'Coupling (%)',      'coupling_pct'),
         ('imploded_DT_mg',    'Imploded DT mass',             'mass (mg)',         'imploded_DT_mg'),
         ('HS_rhoR_max',       'Peak HS ρR (T>4.5 keV)',      'ρR (g/cm²)',       'HS_rhoR_max'),
@@ -262,16 +274,19 @@ def print_table(rows: List[dict]) -> None:
     print('=' * 130)
     print('  HDD design comparison')
     print('=' * 130)
-    hdr = (f"{'label':24s} {'V_peak':>7s} {'V@cr1.5':>8s} {'adi':>5s} {'adi@cr1.5':>9s} "
+    hdr = (f"{'label':24s} {'V_peak':>7s} {'V@cr1.5':>8s} {'V_RHINO':>8s} "
+           f"{'adi':>5s} {'adi@cr1.5':>9s} {'a_RHINO':>8s} "
            f"{'coup%':>6s} {'impl_DT':>8s} {'HS_ρR':>6s} {'yield':>7s}  verdict")
     print(hdr)
-    print('-' * 130)
+    print('-' * 150)
     for r in rows:
         print(f"{r['label']:24s} "
               f"{_fmt(r.get('V_peak_kms')):>7s} "
               f"{_fmt(r.get('V_peak_kms_cr15')):>8s} "
+              f"{_fmt(r.get('V_impl_rhino_kms')):>8s} "
               f"{_fmt(r.get('adiabat'), '{:.2f}'):>5s} "
               f"{_fmt(r.get('adiabat_cr15'), '{:.2f}'):>9s} "
+              f"{_fmt(r.get('adiabat_min_rhino'), '{:.2f}'):>8s} "
               f"{_fmt(r.get('coupling_pct')):>6s} "
               f"{_fmt(r.get('imploded_DT_mg'), '{:.2f}'):>8s} "
               f"{_fmt(r.get('HS_rhoR_max'), '{:.2f}'):>6s} "
