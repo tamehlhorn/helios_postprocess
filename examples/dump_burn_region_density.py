@@ -138,11 +138,29 @@ def extract_metrics(base_path: Path,
     else:
         peak_total_rhoR = float('nan')
 
-    # ---- V_peak (in-flight, from ICFAnalyzer) ----
+    # ---- V_peak (legacy: peak inward zone velocity, pre-bang) ----
+    # NOTE: inflated by late-time shock-convergence spike on high-CR targets;
+    # prefer v_peak_kms_cr15 for cross-code comparison with RHINO / Thomas.
     v_peak_kms = abs(float(getattr(data, 'peak_implosion_velocity', float('nan'))))
 
-    # ---- Adiabat (mass-averaged ice, at peak v) ----
+    # ---- V_peak at CR=1.5 (Thomas/RHINO convention) ----
+    v_peak_kms_cr15 = float(getattr(data, 'peak_implosion_velocity_at_cr15', float('nan')))
+
+    # ---- Adiabat (legacy: at peak velocity) ----
     adiabat = float(getattr(data, 'adiabat_mass_averaged_ice', float('nan')))
+
+    # ---- Adiabat at CR=1.5 (Thomas/RHINO convention) ----
+    adiabat_cr15 = float(getattr(data, 'adiabat_mass_averaged_ice_cr15', float('nan')))
+
+    # ---- Imploded DT mass (now correct for 5+ region targets) ----
+    # unablated_fuel_mass is a FRACTION (0-1); multiply by initial DT mass
+    # to get mg. Useful headline for cross-code comparison.
+    unablated_frac = float(getattr(data, 'unablated_fuel_mass', float('nan')))
+    init_dt_mg     = float(getattr(data, 'initial_fuel_mass_mg', float('nan')))
+    if not (np.isnan(unablated_frac) or np.isnan(init_dt_mg)):
+        imploded_DT_mg = unablated_frac * init_dt_mg
+    else:
+        imploded_DT_mg = float('nan')
 
     # ---- Effective coupling ----
     coupling_pct = float(getattr(data, 'eff_avg_coupling_pct', float('nan')))
@@ -219,6 +237,9 @@ def extract_metrics(base_path: Path,
         rhoR_foam             = _r(rhoR_foam, 4),
         foam_mass_total_mg    = _r(foam_mass_total_g * 1e3, 4),
         adiabat               = _r(adiabat, 2),
+        V_peak_kms_cr15       = _r(v_peak_kms_cr15, 1),
+        adiabat_cr15          = _r(adiabat_cr15, 2),
+        imploded_DT_mg        = _r(imploded_DT_mg, 3),
         coupling_pct          = _r(coupling_pct, 1),
         HS_rhoR_max           = _r(HS_rhoR_max, 4),
         yield_MJ              = _r(yield_MJ, 3),
@@ -230,10 +251,11 @@ def extract_metrics(base_path: Path,
 
 CSV_COLUMNS = [
     'timestamp', 'label', 'run_path',
-    't_stag_ns', 'bang_time_ns', 'V_peak_kms',
+    't_stag_ns', 'bang_time_ns', 'V_peak_kms', 'V_peak_kms_cr15',
     'peak_inflight_rhoR', 'peak_total_rhoR',
     'rho_peak_all_gcc', 'rho_peak_foam_gcc', 'rho_mean_foam_gcc',
-    'rhoR_foam', 'foam_mass_total_mg', 'adiabat', 'coupling_pct',
+    'rhoR_foam', 'foam_mass_total_mg', 'imploded_DT_mg',
+    'adiabat', 'adiabat_cr15', 'coupling_pct',
     'HS_rhoR_max', 'yield_MJ', 'foam_yield_pct', 'ignition',
     'foam_zone_range',
 ]
