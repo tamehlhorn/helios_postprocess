@@ -486,6 +486,15 @@ class ICFAnalyzer:
         # Compute base adiabat at breakout time (Olson convention)
         self._compute_adiabat_at_breakout()
 
+        # Compute V_peak + adiabat at CR=1.5 (Thomas/RHINO convention).
+        # The legacy peak-velocity diagnostic catches a late-time shock-
+        # convergence spike on high-CR HDD-class targets (e.g. WT_cthomas
+        # with CR=106 reports peak V = 2887 km/s vs RHINO's 404 km/s).
+        # The CR=1.5 variant matches the standard ICF design convention
+        # and gives apples-to-apples comparison with RHINO and published
+        # references (Thomas et al. Vulcan HDD table).
+        self._compute_cr15_metrics()
+
         # Track ablation front position
         self._track_ablation_front()
 
@@ -675,6 +684,100 @@ class ICFAnalyzer:
         except Exception as e:
             logger.warning(f"Could not compute adiabat: {e}")
             self.data.adiabat_mass_averaged_ice = 0.0
+
+    def _compute_cr15_metrics(self):
+        """
+        Compute V_peak and adiabat at CR=1.5 -- the Thomas/RHINO ICF design
+        convention. These supplement the legacy peak-velocity and peak-v
+        adiabat measurements, which are inflated by late-time shock-
+        convergence spikes for high-CR HDD-class targets.
+
+        For WT_cthomas (CR=106) RHINO gives V=404 km/s and α=4.13 at CR=1.5;
+        the legacy diagnostics report 2887 km/s and 45.5 -- spike artifacts.
+        For lower-CR PDD targets the difference is small (PDD targets reach
+        CR~30, no significant late-time spike), but having both numbers
+        available makes any future HDD-class comparison apples-to-apples
+        without convention guesswork.
+        """
+        ri = self.data.region_interfaces_indices
+        if ri is None or ri.shape[1] < 2:
+            return
+        if self.data.zone_boundaries is None or self.data.velocity is None:
+            return
+
+        # Find CR=1.5 timestep using the same helper used by IFAR variants.
+        try:
+            t_cr15 = self._find_cr_index(cr_target=1.5)
+        except Exception:
+            t_cr15 = None
+        if t_cr15 is None:
+            logger.info("CR=1.5 metrics: target CR not reached pre-stagnation — skipping")
+            return
+
+        n_zones = self.data.mass_density.shape[1]
+        vel = self.data.velocity
+        if vel.shape[1] > n_zones:
+            v_zone = 0.5 * (vel[:, :n_zones] + vel[:, 1:n_zones + 1])
+        else:
+            v_zone = vel[:, :n_zones]
+
+        # Mass-weighted shell velocity over the fuel layer at CR=1.5.
+        # Shell zones = inside hot-spot-boundary to fuel/ablator boundary.
+        z_lo = int(ri[t_cr15, 0])
+        z_hi = int(ri[t_cr15, getattr(self.data, 'fuel_ablator_idx', -2)])
+        if z_hi <= z_lo:
+            z_hi = n_zones
+        zmass = self.data.zone_mass[t_cr15, z_lo:z_hi]
+        v_shell = v_zone[t_cr15, z_lo:z_hi]
+        total_mass = float(np.sum(zmass))
+        if total_mass > 0:
+            # Mass-weighted average; INWARD velocity is negative -> take abs
+            v_avg = float(np.sum(v_shell * zmass) / total_mass)
+            self.data.peak_implosion_velocity_at_cr15 = abs(v_avg) * 1e-5  # cm/s -> km/s
+            self.data.t_peak_velocity_at_cr15_ns = float(self.data.time[t_cr15])
+            logger.info(
+                f"V_peak (CR=1.5 mass-avg shell): "
+                f"{self.data.peak_implosion_velocity_at_cr15:.1f} km/s "
+                f"at t={self.data.t_peak_velocity_at_cr15_ns:.3f} ns"
+            )
+
+        # Adiabat at CR=1.5 -- mass-weighted over the DT ice layer.
+        # Use ri[:, 1] as the outer edge of the ice layer (gas/ice|gas/foam interface
+        # at index 0; ice/foam or ice/ablator at index 1) when 3+ regions exist;
+        # else use the fuel/ablator boundary.
+        if ri.shape[1] >= 3:
+            ice_lo = int(ri[t_cr15, 0])
+            ice_hi = int(ri[t_cr15, 1])
+        else:
+            ice_lo = int(ri[t_cr15, 0])
+            ice_hi = int(ri[t_cr15, getattr(self.data, 'fuel_ablator_idx', -2)])
+        if ice_hi <= ice_lo:
+            ice_hi = z_hi   # fallback to full shell
+        ice_lo = max(0, min(ice_lo, n_zones))
+        ice_hi = max(0, min(ice_hi, n_zones))
+        if ice_hi <= ice_lo:
+            return
+
+        if self.data.plasma_pressure is None:
+            return
+        p_tot = self.data.plasma_pressure[t_cr15, ice_lo:ice_hi]
+        p_Mbar = p_tot * 1e-5                              # J/cm^3 -> Mbar
+        rho_layer = self.data.mass_density[t_cr15, ice_lo:ice_hi]
+        mass_layer = self.data.zone_mass[t_cr15, ice_lo:ice_hi]
+        if float(np.sum(mass_layer)) <= 0:
+            return
+
+        rho0 = 0.205                                       # equimolar DT ice (Lindl)
+        p_fermi = 2.17 * (rho_layer / rho0) ** (5.0 / 3.0)  # Mbar
+        with np.errstate(divide='ignore', invalid='ignore'):
+            alpha = p_Mbar / p_fermi
+            alpha[~np.isfinite(alpha)] = 0.0
+        self.data.adiabat_mass_averaged_ice_cr15 = float(
+            np.average(alpha, weights=mass_layer))
+        logger.info(
+            f"Adiabat (DT ice, CR=1.5 mass-avg): "
+            f"{self.data.adiabat_mass_averaged_ice_cr15:.2f}"
+        )
 
     def _compute_adiabat_at_breakout(self):
         """

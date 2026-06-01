@@ -221,9 +221,25 @@ class ICFRunData:
         self.stagnated_fuel_mass: float = 0.0
 
         # Implosion
-        self.peak_implosion_velocity: float = 0.0  # km/s
+        self.peak_implosion_velocity: float = 0.0  # km/s -- legacy: peak inward
+                                                   # zone velocity in shell, pre-bang.
+                                                   # For high-CR HDD-class targets
+                                                   # this is inflated by late-time
+                                                   # shock-convergence spikes; prefer
+                                                   # peak_implosion_velocity_at_cr15
+                                                   # for cross-code comparison.
+        self.peak_implosion_velocity_at_cr15: float = 0.0  # km/s -- mass-avg shell
+                                                   # velocity at CR=1.5 (Thomas/RHINO
+                                                   # convention). Apples-to-apples
+                                                   # with published HDD references.
+        self.t_peak_velocity_at_cr15_ns: float = 0.0  # ns
         self.ifar: float = 0.0                      # in-flight aspect ratio at peak v_imp
-        self.adiabat_mass_averaged_ice: float = 0.0
+        self.adiabat_mass_averaged_ice: float = 0.0  # legacy: at peak velocity
+                                                     # (potentially shock-inflated
+                                                     # on high-CR targets)
+        self.adiabat_mass_averaged_ice_cr15: float = 0.0  # Thomas/RHINO convention:
+                                                     # at CR=1.5, before late-time
+                                                     # shock pre-heating
         self.shock_breakout_time_ns: float = 0.0     # ns  (first shock exits DT ice into hot spot)
         self.shock_breakout_pressure_Gbar: float = 0.0  # Gbar (post-shock pressure at breakout)
         self.shock_breakout_mach: float = 0.0        # Mach number at breakout
@@ -294,12 +310,39 @@ class ICFRunData:
     @property
     def fuel_ablator_idx(self) -> int:
         """Column index in region_interfaces_indices for the fuel/ablator interface.
-        For standard capsules this is the second-to-last column; for halfraum-capsule
-        targets it is one column inside `capsule_outer_idx`.
+
+        The interface index is the OUTER edge of the LAST DT-bearing region.
+        Identified by scanning region_names for the first non-DT region (i.e. the
+        first region whose name doesn't contain 'DT'). For targets with multiple
+        ablator layers (e.g. WT_cthomas with 'CD ablator' + 'CD ablator_2'),
+        this correctly returns the inner ablator boundary rather than mistakenly
+        pointing to a boundary inside the ablator stack.
+
+        Backwards-compatible with the legacy n_capsule_regions-2 formula for
+        standard 4-region targets (Olson_PDD_20, VI_6) where there is exactly
+        one ablator region.
         """
         if self.region_interfaces_indices is None:
             return -2
         n_total = self.region_interfaces_indices.shape[1]
+
+        # Primary: scan region_names for the first region whose name does not
+        # contain 'dt'. The interface immediately INNER to that region is the
+        # fuel/ablator boundary (= outer edge of the last DT region).
+        names = getattr(self, 'region_names', None)
+        if names is not None and len(names) > 0:
+            for i, name in enumerate(names):
+                lower = str(name).lower()
+                if 'dt' in lower:
+                    continue
+                # First non-DT region — interface before it
+                if i > 0:
+                    return i - 1
+                return 0   # entirely ablator from index 0 (unusual)
+            # All regions DT-bearing — no ablator; return outer-most region
+            return max(n_total - 1, 0)
+
+        # Fallback: legacy n_capsule_regions-2 formula
         if self.n_capsule_regions <= 1 or self.n_capsule_regions > n_total:
             return max(n_total - 2, 0)
         return self.n_capsule_regions - 2
