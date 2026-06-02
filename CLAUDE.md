@@ -1,11 +1,17 @@
-# helios_postprocessor -- Project Guide
+# helios_postprocess -- Project Guide
 
 ## Repository
-- **GitHub**: `tamehlhorn/helios_postprocessor`
+- **GitHub**: `tamehlhorn/helios_postprocess`
 - **Package**: `helios_postprocess/`
 - **Version**: 3.0.0 (March 2026)
-- **Dev machine**: MacBook (`~/Codes/helios_postprocessor`) -- editing, pushing; use `python` not `python3`
-- **Run machine**: Mac Studio (`tommehlhorn`, `~/helios_postprocessor`) -- use `python3`
+- **Dev machine**: MacBook (`~/Codes/helios_postprocess/`) -- editing, pushing; use `python` not `python3`
+- **Run machine**: Mac Studio (`tommehlhorn`, `~/helios_postprocess/`) -- use `python3`
+- **NOTE (June 2026)**: Both the GitHub repo and both filesystem checkouts use
+  the short name `helios_postprocess` (no `-or` suffix). The doc previously
+  said `helios_postprocessor` everywhere — that was wrong on every machine.
+  Only the legacy docx filenames `helios_postprocessor_guide.docx` and
+  `helios_postprocessor_report.docx` still carry the old name (referenced
+  below in "Diagnostic Scripts"); leave those as-is unless renamed on disk.
 - **MacBook python**: Anaconda (`python` command); Mac Studio uses `python3`
 - **Package install**: `pip install -e . --user` (MacBook); `pip install -e .` (Mac Studio)
 
@@ -33,10 +39,10 @@ HeliosRun(exo_path)  ->  build_run_data(run)  ->  ICFRunData (dataclass, ~68 att
 
 ```bash
 # Mac Studio
-python3 ~/helios_postprocessor/examples/run_analysis.py <base_path>
+python3 ~/helios_postprocess/examples/run_analysis.py <base_path>
 
 # MacBook
-python ~/Codes/helios_postprocessor/examples/run_analysis.py <base_path>
+python ~/Codes/helios_postprocess/examples/run_analysis.py <base_path>
 ```
 
 Takes a path WITHOUT extension and derives all filenames:
@@ -877,7 +883,7 @@ NEVER use `idx = nt // 2` -- the temporal midpoint is almost always past laser-o
 
 ```bash
 # Mac Studio -- Olson (primary validation target)
-python3 ~/helios_postprocessor/examples/run_analysis.py \
+python3 ~/helios_postprocess/examples/run_analysis.py \
   ~/Sims/Xcimer/Olson_PDD/Olson_PDD_9/Olson_PDD_9
 
 # Validation checks
@@ -1020,13 +1026,13 @@ Peak-coronal-intensity table (updated with DM_01b):
 Standard usage (all scripts accept .exo path as first positional arg):
 ```bash
 # Standalone diagnostic scripts (still supported):
-python3 ~/helios_postprocessor/plot_adiabat_shock.py \
+python3 ~/helios_postprocess/plot_adiabat_shock.py \
   ~/Sims/Xcimer/Xcimer_Sims/D_Montgomery/VI_6/VI_6.exo
-python3 ~/helios_postprocessor/plot_laser_deposition.py \
+python3 ~/helios_postprocess/plot_laser_deposition.py \
   ~/Sims/Xcimer/Olson_PDD/Olson_PDD_2021_01a/Olson_PDD_2021_01a.exo
 
 # Laser intensity now part of the main pipeline -- no separate script needed:
-python3 ~/helios_postprocessor/examples/run_analysis.py \
+python3 ~/helios_postprocess/examples/run_analysis.py \
   ~/Sims/Xcimer/Olson_PDD/Olson_PDD_26b_burn/Olson_PDD_26b_burn
 # produces <base>_report.pdf with 3 intensity pages,
 #          <base>_summary.txt with LASER INTENSITY section,
@@ -1382,12 +1388,12 @@ T_ion > 4.5 keV mask used only for burn propagation plot, not for scalar thresho
 
 ### run_analysis.py usage (updated April 2026)
     # Mac Studio
-    python3 ~/helios_postprocessor/examples/run_analysis.py <base_path>
-    python3 ~/helios_postprocessor/examples/run_analysis.py <base_path> --contours
+    python3 ~/helios_postprocess/examples/run_analysis.py <base_path>
+    python3 ~/helios_postprocess/examples/run_analysis.py <base_path> --contours
 
     # MacBook
-    python ~/Codes/helios_postprocessor/examples/run_analysis.py <base_path>
-    python ~/Codes/helios_postprocessor/examples/run_analysis.py <base_path> --contours
+    python ~/Codes/helios_postprocess/examples/run_analysis.py <base_path>
+    python ~/Codes/helios_postprocess/examples/run_analysis.py <base_path> --contours
 ## Session Update — April 26, 2026
 
 This appendix captures changes from the April 2026 calibration session. Older
