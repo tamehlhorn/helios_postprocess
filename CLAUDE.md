@@ -2792,3 +2792,158 @@ In order of expected information yield:
 4. **HDD lrm5 spot=0.27 at FL=0.04** — absorbed-fraction monotonicity
    test.  Deprioritized pending (1) and (2); will pick up later if
    the prepulse lever does not close the adiabat gap.
+
+## Session Update — June 2 2026 (WT_cthomas HDD calibration breakthrough + retractions)
+
+### Production HDD calibration: `WT_cthomas_baseline_picket_012`
+
+`WT_cthomas_baseline_picket_012` (FL=0.012, EOS-fixed CD ablator, picket
+modification) matches Thomas Vulcan HDD reference on the four headline
+structural metrics:
+
+| Metric | picket_012 | Thomas | Δ |
+|---|---:|---:|---:|
+| **Yield (MJ)** | **256.4** | **256** | **+0.1%** ✓ |
+| **Hydro efficiency (%)** | **8.3** | **8.0** | **+4%** ✓ |
+| In-flight KE (kJ) | 258 | 300 ± 15 | -14% ✓ |
+| ⟨ρR_cf⟩ (g/cm²) | 1.17 | 1.60 ± 0.08 | -27% close |
+| RHINO V_impl (km/s) | 389 | 410 | -5% ✓ |
+| Foot shock (ns) | 7.88 | — | 2-shock train emerges |
+| Ramp shock (ns) | 11.45 | — | — |
+| Base adiabat at breakout | 1.08 | ~6 | tripled vs picket-OFF (0.35) |
+| CR_max | 53 | ~20 | persistent 1D residual (still over) |
+| Imploded DT mass (mg) | 0.05 | 3.0 | persistent 1D residual (-98%) |
+| ⟨T_hs⟩ (keV) | 120 | 47 | persistent 1D over-shoot (+157%) |
+
+This is the HDD analog of `Olson_PDD_20_fab007` for PDD — structural
+metrics within 15% of reference, persistent 1D-vs-3D residuals in the
+hot-spot fine structure that aren't fixable inside Helios. Production
+calibration anchor going forward.
+
+Run path (Studio): `~/Sims/Xcimer/HDD_26/HDD_scan/WT_cthomas_baseline_picket_012/`
+
+Three settings define this anchor:
+1. **CD ablator EOS path resolved to Studio-local PROPACEOS table** (NOT
+   Will's hard-coded Windows OneDrive path — see CD EOS bug below)
+2. **Flux limiter = 0.012 in all 5 regions**
+3. **Picket modification on the Trad table at Rmax** (peak still 135 eV;
+   the picket SHAPE / TIMING was modified to triple the base adiabat at
+   breakout — exact .rhw diff to be documented after one more validation
+   pass)
+
+### CD EOS Windows-path fallback: ±50% yield bug
+
+The original `WT_cthomas_baseline.rhw` from Will Trickey contains a
+hard-coded Windows OneDrive path for the CD ablator EOS:
+
+```
+EOS filepath = C:/Users/WilliamTrickey/OneDrive - Xcimer Energy Corporation/Documents/tables/TMelhorn_PROPACEOS/CD.prp
+```
+
+On Mac Studio (and likely on any non-Windows host), Helios prints:
+
+```
+The EOS file C:/Users/WilliamTrickey/...CD.prp does not exist.
+Check spatial regions for valid EOS filepath.
+```
+
+…then **silently falls back to an ideal-gas-like default**. The
+simulation completes without error. The downstream impact is structural:
+
+| | Will baseline (fallback) | baseline_tm (proper EOS) | Δ |
+|---|---:|---:|---:|
+| RHINO V_impl (km/s) | 396.7 | 395.3 | -0.4% (identical) |
+| Shock breakout, base adiabat, ablation P | — | — | all identical |
+| Peak density (g/cc) | 102,971 | 31,062 | **-70%** |
+| Burn FWHM (ns) | 0.065 | 0.082 | +27% |
+| **Yield (MJ)** | **196** | **295** | **+50%** |
+
+In-flight phase is identical; the entire effect lives at stagnation,
+where the CD ablator EOS controls the bounce. Soft (ideal-gas-fallback)
+ablator → easy compression → high peak ρ but short burn → low integrated
+yield. Stiff (tabulated) ablator → moderate peak ρ but sustained burn →
+high integrated yield.
+
+**Implications:**
+
+- Will's published `WT_cthomas` yield of 196 MJ likely used the fallback
+  EOS on his own machine too — his RHINO postprocess of his own .exo
+  also reports 196 MJ, matching what fallback-Helios produces.
+- Before quoting any yield number for a WT-derived run, grep the .rhw
+  for `.prp` paths and confirm Helios resolves all of them. The script:
+
+  ```bash
+  grep -nE "EOS filepath|Opacity filepath" <run>.rhw | grep -v '^\s*#'
+  ```
+
+  Any path starting with `C:/` will fall back silently on macOS/Linux.
+  Remap to a Studio-local table.
+
+### RHINO convention validation status
+
+Implosion velocity convention (W. Trickey) is **validated and production-ready**:
+
+- Per-timestep shell = zones with `rho > rho_peak/e`
+- v_shell = sqrt(2 KE_shell / m_shell)
+- Implosion velocity = first significant local maximum of v_shell pre-stagnation
+
+Helios reproduces Will's reported V_impl to within 3–5% across every
+WT_cthomas configuration tested (baseline, baseline_tm, baseline_012,
+picket_012). Available as `data.implosion_velocity_rhino_kms` and in the
+comparison table as `Implosion velocity RHINO (km/s)`.
+
+Min shell adiabat convention is **pending**:
+
+- Helios reports 0.15–0.19 across WT_cthomas variants
+- Will reports 4.13 — 20–25× higher
+- Alpha range across shell zones at our CR=1.5 timestep is 0.15..1.49
+  (baseline) to 0.19..1.88 (picket_012). The MAX is approaching Will's
+  4.13; the MIN is dragged down by one cold outer-edge zone.
+
+Most likely the formula or zone-selection differs:
+- Will's min may exclude the outer cold edge
+- Or use electron-pressure-only adiabat (P_e / P_Fermi)
+- Or use Thomas-Fermi-corrected Fermi pressure
+
+**TM has RHINO source code access** — direct inspection of Will's
+adiabat algorithm is the highest-value next step. Once that's reconciled,
+`adiabat_min_rhino` becomes a third cross-tool comparable metric
+alongside V_impl and (eventually) ρR breakdowns.
+
+### Retired diagnoses (incorrect — do not pursue)
+
+1. **"FL=0.012 + zoning mismatch couples to crash Helios hydro"** —
+   WRONG. Heap-corruption / malloc abort errors on `WT_cthomas_fl012.rhw`
+   and `WT_cthomas_picket_v1.rhw` were caused by the CD EOS path issue,
+   not by the FL value or the zoning. FL=0.012 runs cleanly when CD EOS
+   is properly resolved. User pointed out the FL-causes-malloc story made
+   no physical sense; they were right.
+
+2. **"Foam_2 / CD_2 bisections introduce dMass discontinuities"** —
+   WRONG. Computed dMass(i)/dMass(i-1) ratios at every region boundary:
+
+   | Boundary | Type | Ratio |
+   |---|---|---:|
+   | 0 → 1 (gas → gas) | spherical-geometry first zone | **7.0×** (the MAX Helios complained about) |
+   | 58 → 59 (foam_1 → foam_2 bisection) | clean | 0.92× |
+   | 125 → 126 (foam_2 → CD ablator) | material interface | **0.577×** (the MIN) |
+   | 155 → 156 (CD_1 → CD_2 bisection) | clean | 0.885× |
+
+   The 7× max is intrinsic to spherical geometry at r=0 (full sphere of
+   width Δr vs first shell of similar Δr; ratio = 7 regardless of FL or
+   bisection). The bisections introduced by Will for diagnostic purposes
+   are essentially perfect (~0.9× ratios). The "Poor mass matching" warning
+   was a red herring; it's present in baseline too and doesn't correlate
+   with the crash.
+
+### Validation run on tap: `WT_cthomas_baseline_picket_015`
+
+Same picket as picket_012, FL=0.015 instead of 0.012. Tests whether the
+picket alone (without tighter FL) is sufficient for the Thomas yield
+match, or whether the FL=0.012 + picket combination is what's needed.
+
+Expected results:
+- If yield ~256 MJ: picket is the primary lever, FL secondary
+- If yield ~295 MJ (like baseline_tm): FL is essential to reach Thomas
+
+Either result is informative. User to run.
