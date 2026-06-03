@@ -240,6 +240,14 @@ def extract_histories_from_run_data(data) -> Dict:
     adiabat             = getattr(data, 'adiabat_mass_averaged_ice', 0.0)
     adiabat_cr15        = getattr(data, 'adiabat_mass_averaged_ice_cr15', 0.0)
     adiabat_min_rhino   = getattr(data, 'adiabat_min_rhino', 0.0)
+    # RHINO-formula parallel adiabats (proper degenerate electron gas
+    # Fermi pressure with actual n_e per zone). Same zone-selection and
+    # time-selection as the Lindl-convention adiabats above; just a
+    # different Fermi-pressure denominator. Typically ~14x larger at
+    # ICF densities.
+    adiabat_rhino_formula        = getattr(data, 'adiabat_mass_averaged_ice_rhino_formula', 0.0)
+    adiabat_cr15_rhino_formula   = getattr(data, 'adiabat_mass_averaged_ice_cr15_rhino_formula', 0.0)
+    adiabat_breakout_rhino_formula = getattr(data, 'adiabat_at_breakout_rhino_formula', 0.0)
 # IFAR variants (May 2026 — multi-variant patch)
     # - data.ifar          : compound shell at peak v_imp (legacy default)
     # - data.ifar_ice      : DT ice only at peak v_imp
@@ -356,6 +364,9 @@ def extract_histories_from_run_data(data) -> Dict:
         'adiabat':               adiabat,
         'adiabat_cr15':          adiabat_cr15,
         'adiabat_min_rhino':     adiabat_min_rhino,
+        'adiabat_rhino_formula': adiabat_rhino_formula,
+        'adiabat_cr15_rhino_formula': adiabat_cr15_rhino_formula,
+        'adiabat_breakout_rhino_formula': adiabat_breakout_rhino_formula,
         'ifar':                  ifar,                # comparison-ready (CR=1.5 if available)
         'ifar_compound_peak_v':  ifar_compound_pv,    # legacy
         'ifar_ice_peak_v':       ifar_ice_pv,         # diagnostic
@@ -513,6 +524,9 @@ def calculate_burn_averaged_metrics(histories: Dict,
         'adiabat':               histories.get('adiabat', 0.0),
         'adiabat_cr15':          histories.get('adiabat_cr15', 0.0),
         'adiabat_min_rhino':     histories.get('adiabat_min_rhino', 0.0),
+        'adiabat_rhino_formula': histories.get('adiabat_rhino_formula', 0.0),
+        'adiabat_cr15_rhino_formula': histories.get('adiabat_cr15_rhino_formula', 0.0),
+        'adiabat_breakout_rhino_formula': histories.get('adiabat_breakout_rhino_formula', 0.0),
         'ifar':                  histories.get('ifar', 0.0),
         'fraction_absorbed_pct': histories.get('fraction_absorbed_pct', 0.0),
         'P_hs_ignition_Gbar':    histories.get('P_hs_ignition_Gbar',    0.0),
@@ -666,11 +680,20 @@ def compare_with_published(sim_metrics: Dict,
         ('Min shell adiabat RHINO',
          sim_metrics.get('adiabat_min_rhino', 0.0),
          'adiabat', None, '.2f'),
-        ('Adiabat',
+        ('Adiabat (Lindl peak v)',
          sim_metrics.get('adiabat', 0.0),
          'adiabat', None, '.2f'),
-        ('Adiabat at CR=1.5',
+        ('Adiabat at CR=1.5 (Lindl)',
          sim_metrics.get('adiabat_cr15', 0.0),
+         'adiabat', None, '.2f'),
+        ('Adiabat at peak v (RHINO formula)',
+         sim_metrics.get('adiabat_rhino_formula', 0.0),
+         'adiabat', None, '.2f'),
+        ('Adiabat at CR=1.5 (RHINO formula)',
+         sim_metrics.get('adiabat_cr15_rhino_formula', 0.0),
+         'adiabat', None, '.2f'),
+        ('Adiabat at breakout (RHINO formula)',
+         sim_metrics.get('adiabat_breakout_rhino_formula', 0.0),
          'adiabat', None, '.2f'),
         ('Fraction absorbed (%)',
          sim_metrics.get('fraction_absorbed_pct', 0.0),

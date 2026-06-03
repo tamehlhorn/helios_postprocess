@@ -263,11 +263,30 @@ class ICFRunData:
                                                    # shell surface at t=0)
         self.ifar: float = 0.0                      # in-flight aspect ratio at peak v_imp
         self.adiabat_mass_averaged_ice: float = 0.0  # legacy: at peak velocity
+                                                     # Lindl convention
                                                      # (potentially shock-inflated
                                                      # on high-CR targets)
         self.adiabat_mass_averaged_ice_cr15: float = 0.0  # Thomas/RHINO convention:
                                                      # at CR=1.5, before late-time
                                                      # shock pre-heating
+                                                     # Lindl convention
+        self.adiabat_mass_averaged_ice_rhino_formula: float = 0.0  # same selection
+                                                     # as adiabat_mass_averaged_ice
+                                                     # but using proper degenerate
+                                                     # electron gas Fermi pressure
+                                                     # (RHINO partially_ionized).
+                                                     # Typically ~14x larger than
+                                                     # the Lindl value at ICF
+                                                     # densities.
+        self.adiabat_mass_averaged_ice_cr15_rhino_formula: float = 0.0  # at CR=1.5
+                                                     # mass-avg with RHINO Fermi
+                                                     # formula. Cross-tool
+                                                     # comparable to publication
+                                                     # references that use the
+                                                     # physics Fermi (Thomas etc).
+        self.adiabat_at_breakout_rhino_formula: float = 0.0  # base adiabat at
+                                                     # shock breakout, RHINO
+                                                     # Fermi formula.
         self.shock_breakout_time_ns: float = 0.0     # ns  (first shock exits DT ice into hot spot)
         self.shock_breakout_pressure_Gbar: float = 0.0  # Gbar (post-shock pressure at breakout)
         self.shock_breakout_mach: float = 0.0        # Mach number at breakout

@@ -684,7 +684,15 @@ class ICFAnalyzer:
                 f"[{fuel_lo}..{fuel_hi - 1}], rho_peak_ice={rho_peak_ice:.3f} g/cc"
             )
 
-            # -- Fermi pressure for equimolar DT --
+            # -- Fermi pressure for equimolar DT (Lindl convention) --
+            # Lindl normalizes rho_0 = 0.205 g/cc so that alpha = 1 at
+            # cryo DT solid density. This makes Lindl P_F ~14x larger than
+            # the actual degenerate electron gas Fermi pressure at ICF
+            # densities, so Lindl alpha values are ~14x smaller than the
+            # physics-grounded "RHINO formula" adiabat. See the parallel
+            # RHINO-formula calculation immediately below for the
+            # physically-grounded version (P_F from proper degenerate
+            # electron gas formula with actual n_e per zone).
             rho0 = 0.205                                  # g/cc (DT ice density)
             p_fermi = 2.17 * (rho / rho0) ** (5.0 / 3.0)  # Mbar
 
@@ -694,12 +702,42 @@ class ICFAnalyzer:
 
             # Mass-weighted average over the DT ice layer.
             self.data.adiabat_mass_averaged_ice = float(np.average(alpha, weights=mass))
-            logger.info(f"Mass-averaged adiabat (cold fuel, t={self.data.time[eval_idx]:.2f} ns): "
-                        f"{self.data.adiabat_mass_averaged_ice:.2f}")
+            logger.info(f"Mass-averaged adiabat (cold fuel, t={self.data.time[eval_idx]:.2f} ns) "
+                        f"[Lindl convention]: {self.data.adiabat_mass_averaged_ice:.2f}")
+
+            # -- RHINO-formula adiabat (parallel calculation) --
+            # alpha = P_total / P_F where
+            #   P_total = ion + electron pressure (same as Lindl numerator)
+            #   P_F = (3 pi^2)^(2/3) / 5 * hbar^2 / m_e * n_e^(5/3)
+            #         using the actual electron density per zone
+            #         (RHINO "partially_ionized" mode).
+            # P_F (J/cm^3) = 2.337e-34 * n_e^(5/3) [n_e in cm^-3]
+            # Sanity check: P_F at DT n_e for rho=1 g/cc ~ 2.2 Mbar.
+            self.data.adiabat_mass_averaged_ice_rhino_formula = 0.0
+            if getattr(self.data, 'electron_density', None) is not None:
+                n_e = self.data.electron_density[eval_idx, fuel_lo:fuel_hi]
+                with np.errstate(invalid='ignore'):
+                    p_fermi_rhino_jcc = 2.337e-34 * np.where(n_e > 0, n_e, np.nan) ** (5.0 / 3.0)
+                    alpha_rhino = np.where(
+                        p_fermi_rhino_jcc > 0,
+                        p_tot / p_fermi_rhino_jcc,
+                        np.nan,
+                    )
+                # Mass-weighted average (skipping NaNs from degenerate zones).
+                finite = np.isfinite(alpha_rhino)
+                if np.any(finite):
+                    self.data.adiabat_mass_averaged_ice_rhino_formula = float(
+                        np.average(alpha_rhino[finite], weights=mass[finite])
+                    )
+                    logger.info(
+                        f"Mass-averaged adiabat (cold fuel, t={self.data.time[eval_idx]:.2f} ns) "
+                        f"[RHINO formula]: {self.data.adiabat_mass_averaged_ice_rhino_formula:.2f}"
+                    )
 
         except Exception as e:
             logger.warning(f"Could not compute adiabat: {e}")
             self.data.adiabat_mass_averaged_ice = 0.0
+            self.data.adiabat_mass_averaged_ice_rhino_formula = 0.0
 
     def _compute_cr15_metrics(self):
         """
@@ -791,9 +829,31 @@ class ICFAnalyzer:
         self.data.adiabat_mass_averaged_ice_cr15 = float(
             np.average(alpha, weights=mass_layer))
         logger.info(
-            f"Adiabat (DT ice, CR=1.5 mass-avg): "
+            f"Adiabat (DT ice, CR=1.5 mass-avg) [Lindl]: "
             f"{self.data.adiabat_mass_averaged_ice_cr15:.2f}"
         )
+
+        # RHINO-formula parallel: P_F from proper degenerate electron gas
+        # formula with actual n_e per zone.
+        self.data.adiabat_mass_averaged_ice_cr15_rhino_formula = 0.0
+        if getattr(self.data, 'electron_density', None) is not None:
+            n_e_layer = self.data.electron_density[t_cr15, ice_lo:ice_hi]
+            with np.errstate(invalid='ignore'):
+                p_fermi_rhino_jcc = 2.337e-34 * np.where(n_e_layer > 0, n_e_layer, np.nan) ** (5.0 / 3.0)
+                alpha_rhino = np.where(
+                    p_fermi_rhino_jcc > 0,
+                    p_tot / p_fermi_rhino_jcc,
+                    np.nan,
+                )
+            finite = np.isfinite(alpha_rhino)
+            if np.any(finite):
+                self.data.adiabat_mass_averaged_ice_cr15_rhino_formula = float(
+                    np.average(alpha_rhino[finite], weights=mass_layer[finite])
+                )
+                logger.info(
+                    f"Adiabat (DT ice, CR=1.5 mass-avg) [RHINO formula]: "
+                    f"{self.data.adiabat_mass_averaged_ice_cr15_rhino_formula:.2f}"
+                )
 
     def _compute_implosion_velocity_rhino(self):
         """
@@ -1268,13 +1328,36 @@ class ICFAnalyzer:
             n_ice = fuel_hi - fuel_lo
             rho_peak_ice = float(np.max(rho)) if n_ice > 0 else 0.0
             logger.info(
-                f"Base adiabat at breakout (t={self.data.shock_breakout_time_ns:.3f} ns): "
-                f"{self.data.adiabat_at_breakout:.2f}  "
+                f"Base adiabat at breakout (t={self.data.shock_breakout_time_ns:.3f} ns) "
+                f"[Lindl]: {self.data.adiabat_at_breakout:.2f}  "
                 f"[{n_ice} ice zones, rho_peak_ice={rho_peak_ice:.3f} g/cc]"
             )
 
+            # -- RHINO-formula parallel: P_F from proper degenerate electron
+            # gas formula with actual n_e (RHINO partially_ionized mode).
+            self.data.adiabat_at_breakout_rhino_formula = 0.0
+            if getattr(self.data, 'electron_density', None) is not None:
+                n_e = self.data.electron_density[idx_b, fuel_lo:fuel_hi]
+                with np.errstate(invalid='ignore'):
+                    p_fermi_rhino_jcc = 2.337e-34 * np.where(n_e > 0, n_e, np.nan) ** (5.0 / 3.0)
+                    alpha_rhino = np.where(
+                        p_fermi_rhino_jcc > 0,
+                        p_tot / p_fermi_rhino_jcc,
+                        np.nan,
+                    )
+                finite = np.isfinite(alpha_rhino)
+                if np.any(finite):
+                    self.data.adiabat_at_breakout_rhino_formula = float(
+                        np.average(alpha_rhino[finite], weights=mass[finite])
+                    )
+                    logger.info(
+                        f"Base adiabat at breakout (t={self.data.shock_breakout_time_ns:.3f} ns) "
+                        f"[RHINO formula]: {self.data.adiabat_at_breakout_rhino_formula:.2f}"
+                    )
+
         except Exception as e:
             logger.warning(f"Could not compute base adiabat at breakout: {e}")
+            self.data.adiabat_at_breakout_rhino_formula = 0.0
 
     def _compute_shock_breakout(self):
         """
