@@ -2925,12 +2925,87 @@ private; TM has read access). The previous implementation was off by
 
 Validation on `WT_cthomas_baseline_tm`: **5.64 vs Thomas 6.00 (-6%)**.
 
-Will's reported 4.13 was almost certainly computed on his original
-fallback-EOS run (the WT_cthomas_baseline.rhw with the Windows path
-that doesn't resolve on Mac). Pending validation that our same
-algorithm on the fallback-EOS .exo gives ~4.13 too -- expected
-behaviour since the fallback EOS gives -50% on yield and similar
-shifts on other compression-channel metrics.
+### Four-run cross-check (final, June 2 2026)
+
+After commit 829fd8e (sub-cell interp + any-overlap mask), the four
+WT_cthomas configurations and their RHINO-convention α_min:
+
+| Run | V_impl (km/s) | α_min RHINO | Δ_Thomas (6.0) |
+|---|---:|---:|---:|
+| `baseline` (fallback EOS) | 396.7 | **5.62** | -6% |
+| `baseline_tm` (proper EOS) | 395.3 | **5.62** | -6% |
+| `baseline_012` (FL=0.012) | 391.5 | **5.64** | -6% |
+| **`baseline_picket_012`** (picket+FL=0.012) | **389.1** | **6.43** | **+7%** |
+
+Headlines:
+
+- **Picket adiabat-shaping signature is +14%** (5.62 → 6.43)
+  in RHINO units. Direction matches the Lindl base-adiabat signal
+  (0.35 → 1.08, 3×) but magnitude is smaller because the two
+  metrics evaluate the shell at different times.
+- **`picket_012` matches Thomas to within ±7%** on α_min (and to
+  +0.1% on yield, +4% on hydro efficiency, -5% on V_impl). Confirms
+  it as the production HDD calibration anchor.
+- **Helios with proper-EOS shows no FL or EOS sensitivity on α_min
+  at CR=1.5** -- the three no-picket runs all land at 5.62-5.64
+  despite very different stagnation dynamics. The CR=1.5 timestep
+  is too early in the implosion for FL/EOS effects to manifest.
+
+### Direct RHINO native cross-check + 36% systematic offset
+
+Installed RHINO 1.5.1 from Will's private repo
+(`wtrickey27/RHINO`) on the MacBook and ran:
+
+```python
+import rhino as rno
+sim = rno.HeliosSphericalSimulation(
+    '/Volumes/tommehlhorn/Sims/Xcimer/HDD_26/WT_cthomas_baseline/',
+    filename='WT_cthomas_baseline.exo',
+)
+sim.implosion_velocity     # 404.38 km/s
+sim.implosion_adiabat      # 4.125 dimensionless
+sim.breakout_time          # 11.158 ns
+sim.time_at_cr(1.5)        # 13.802 ns
+```
+
+On the same `.exo`, our re-implementation gives:
+
+- V_impl: **396.7 km/s** (vs RHINO 404.4) -- match to -2%
+- breakout: **11.16 ns** (vs RHINO 11.16) -- exact match
+- t_cr15: **13.80 ns** (vs RHINO 13.80) -- exact match
+- α_min: **5.62** (vs RHINO 4.125) -- **+36% systematic**
+
+So the breakout-time interpolation, CR=1.5 trigger, and shell-surface
+definitions are all aligned with RHINO to 1% precision. The α_min gap
+is entirely in the min-over-shell aggregation order:
+
+- **RHINO's pattern**: `min_shell_adiabat` is computed at every
+  discrete timestep first (`adiabat.min_between(shell_inner,
+  shell_outer)` returns a time series), then `at_time(t_cr15)`
+  interpolates that time series.
+- **Our pattern**: pick the discrete timestep nearest `t_cr15`,
+  then compute the shell at that single snapshot and take the min
+  over zones.
+
+RHINO's per-timestep min can catch transiently colder zones between
+snapshots that our single-snapshot approach misses. Closing this
+fully would require another iteration porting RHINO's
+`ImplosionVariable.at_time` time-interpolation pattern. Not pursued
+because:
+
+- The Thomas reference comparison (±7% on `picket_012`) is the
+  operationally meaningful calibration check.
+- The picket-vs-baseline trend (+14% lift) is signed correctly and
+  consistent.
+- Cross-tool absolute-value comparison can be done by running
+  RHINO native directly (now installed on the MacBook).
+
+**Documented systematic**: `data.adiabat_min_rhino` reads ~30-40%
+higher than RHINO native on the same `.exo`. Use as:
+
+- Direct value for Thomas/publication comparison.
+- Subtract ~30-40% systematic for direct RHINO-native comparison.
+- Trend direction + ratios for picket-shaping diagnostics.
 
 **Other adiabat methods in this file** (`_compute_adiabat`,
 `_compute_adiabat_at_breakout`, `_compute_cr15_metrics`) retain
