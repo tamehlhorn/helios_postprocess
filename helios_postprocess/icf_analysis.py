@@ -514,6 +514,12 @@ class ICFAnalyzer:
         # Track ablation front position
         self._track_ablation_front()
 
+        # RHINO diagnostics suite (added June 2026): seven additional
+        # RHINO-convention analyses ported from the RHINO source. Each
+        # gives a cross-tool-comparable scalar matching W. Trickey's
+        # RHINO postprocessor output. See _compute_rhino_diagnostics.
+        self._compute_rhino_diagnostics()
+
         # Compute in-flight aspect ratio
         self._compute_ifar()
         
@@ -1256,6 +1262,261 @@ class ICFAnalyzer:
             f"{int(np.sum(mask))} zones; "
             f"alpha range {np.min(alpha_shell):.2f}..{np.max(alpha_shell):.2f})"
         )
+
+    def _compute_rhino_diagnostics(self):
+        """
+        Seven additional RHINO-convention diagnostics, clean-room
+        re-implemented from W. Trickey's RHINO source (private repo
+        wtrickey27/RHINO, read access).
+
+        Sets on `data`:
+          shell_inner_pos_history_cm        (n_t,)  cm
+          shell_outer_pos_history_cm        (n_t,)  cm
+          shell_thickness_history_cm        (n_t,)  cm  (outer - inner)
+          shell_mass_history_mg             (n_t,)  mg  (sum of zones in mask)
+          shell_velocity_history_kms        (n_t,)  km/s (RHINO RMS conv)
+          cr_inner_history                  (n_t,)  -    (R_inner(0)/R_inner(t))
+
+          t_max_shell_velocity_rhino_ns     scalar, ns -- first dv/dt
+                                            zero-crossing pos→neg after
+                                            breakout (peak shell velocity)
+          stag_time_rhino_ns                scalar, ns -- first dv/dt
+                                            zero-crossing neg→pos after
+                                            t_max_shell_velocity (RHINO
+                                            "stagnation_time"). Different
+                                            from this pipeline's
+                                            `stag_time` (HS radius min).
+          assembled_mass_rhino_mg           scalar, mg -- mass within
+                                            shell_outer at RHINO stag time
+          burn_fraction_rhino               scalar, dimensionless -- yield
+                                            divided by full-burn-up energy
+                                            of assembled mass
+          ablation_pressure_at_cr_3p5_Mbar  scalar, Mbar -- ablation P
+                                            at the time when cr_inner first
+                                            reaches 3.5 (Vulcan HDD design
+                                            convention)
+          t_at_cr_3p5_ns                    scalar, ns -- audit value
+
+        Shell convention: rho > rho_peak(t)/e per timestep (same as
+        _compute_implosion_velocity_rhino). Inner shell surface = inner
+        boundary of innermost zone in the mask; outer shell surface =
+        outer boundary of outermost zone in the mask. Note this is
+        SIMPLER than the time-dependent (1% pre-breakout / 1/e post-
+        breakout) shell_inner used by _compute_adiabat_min_rhino, which
+        matches RHINO's adiabat-specific convention more precisely. The
+        ~constant-threshold convention here matches W. Trickey's
+        textual description of the velocity convention and the
+        diagnostics that build on it.
+        """
+        if (self.data.velocity is None
+                or self.data.mass_density is None
+                or self.data.zone_mass is None
+                or self.data.zone_boundaries is None):
+            return
+
+        rho = self.data.mass_density            # (n_t, n_z) g/cc
+        zbnd = self.data.zone_boundaries        # (n_t, n_z+1) cm
+        zmass = self.data.zone_mass             # (n_t, n_z) g
+        vel = self.data.velocity                # (n_t, n_z+1) cm/s node
+        time = self.data.time                   # (n_t,) ns
+        n_times, n_zones = rho.shape
+
+        # Zone-centered velocity
+        if vel.shape[1] > n_zones:
+            v_zone = 0.5 * (vel[:, :n_zones] + vel[:, 1:n_zones + 1])
+        else:
+            v_zone = vel[:, :n_zones]
+
+        # --- 1+2+3: Per-timestep shell histories ---
+        shell_inner_pos = np.full(n_times, np.nan)
+        shell_outer_pos = np.full(n_times, np.nan)
+        shell_mass_g    = np.zeros(n_times)
+        shell_vel_cms   = np.zeros(n_times)
+        for t in range(n_times):
+            rho_t = rho[t]
+            rho_pk = float(np.max(rho_t))
+            if rho_pk <= 0:
+                continue
+            mask = rho_t > (rho_pk / np.e)
+            if not np.any(mask):
+                continue
+            idx_inner = int(np.argmax(mask))
+            idx_outer = int(np.where(mask)[0][-1])
+            shell_inner_pos[t] = float(zbnd[t, idx_inner])
+            shell_outer_pos[t] = float(zbnd[t, idx_outer + 1])
+            m_t = float(np.sum(zmass[t, mask]))
+            if m_t > 0:
+                shell_mass_g[t] = m_t
+                ke_t = 0.5 * float(np.sum(zmass[t, mask] * v_zone[t, mask] ** 2))
+                shell_vel_cms[t] = np.sqrt(2.0 * ke_t / m_t)
+
+        shell_thick_cm = shell_outer_pos - shell_inner_pos
+
+        # cr_inner(t) = R_inner(t=0) / R_inner(t)
+        if np.isnan(shell_inner_pos[0]) or shell_inner_pos[0] <= 0:
+            valid0 = np.where(~np.isnan(shell_inner_pos))[0]
+            if len(valid0) == 0:
+                return
+            R_inner_0 = float(shell_inner_pos[valid0[0]])
+        else:
+            R_inner_0 = float(shell_inner_pos[0])
+        with np.errstate(divide='ignore', invalid='ignore'):
+            cr_inner = np.where(shell_inner_pos > 0,
+                                R_inner_0 / shell_inner_pos, np.nan)
+
+        # Store histories
+        self.data.shell_inner_pos_history_cm = shell_inner_pos
+        self.data.shell_outer_pos_history_cm = shell_outer_pos
+        self.data.shell_thickness_history_cm = shell_thick_cm
+        self.data.shell_mass_history_mg      = shell_mass_g * 1e3   # g -> mg
+        self.data.shell_velocity_history_kms = shell_vel_cms * 1e-5 # cm/s -> km/s
+        self.data.cr_inner_history           = cr_inner
+
+        # --- 4: t_max_shell_velocity_rhino: first dv/dt pos->neg after breakout ---
+        # Numerical derivative on zone-center times
+        breakout_t = float(getattr(self.data, 't_breakout_rhino_ns',
+                                    self.data.shock_breakout_time_ns or 0.0))
+        dv_dt = np.gradient(shell_vel_cms, time)
+        t_mid = time
+        post_breakout = t_mid >= breakout_t
+        idx_post = np.where(post_breakout)[0]
+        t_max_v = np.nan
+        if len(idx_post) >= 2:
+            dv_post = dv_dt[idx_post]
+            # First pos -> neg sign change
+            sign_changes = np.where((dv_post[:-1] > 0) & (dv_post[1:] <= 0))[0]
+            if len(sign_changes) > 0:
+                k = int(sign_changes[0])
+                i_loc = idx_post[k]
+                # Linear interpolation between t[i] and t[i+1]
+                t0 = float(time[i_loc])
+                t1 = float(time[i_loc + 1])
+                v0 = float(dv_post[k])
+                v1 = float(dv_post[k + 1])
+                if v0 != v1:
+                    t_max_v = t0 + (t1 - t0) * v0 / (v0 - v1)
+                else:
+                    t_max_v = t1
+        self.data.t_max_shell_velocity_rhino_ns = float(t_max_v) if not np.isnan(t_max_v) else 0.0
+
+        # --- 5: stag_time_rhino: first dv/dt neg->pos after t_max_shell_velocity ---
+        stag_t_rhino = np.nan
+        if not np.isnan(t_max_v):
+            post_max = t_mid >= t_max_v
+            idx_post_max = np.where(post_max)[0]
+            if len(idx_post_max) >= 2:
+                dv_post = dv_dt[idx_post_max]
+                sign_changes = np.where((dv_post[:-1] <= 0) & (dv_post[1:] > 0))[0]
+                if len(sign_changes) > 0:
+                    k = int(sign_changes[0])
+                    i_loc = idx_post_max[k]
+                    t0 = float(time[i_loc])
+                    t1 = float(time[i_loc + 1])
+                    v0 = float(dv_post[k])
+                    v1 = float(dv_post[k + 1])
+                    if v1 != v0:
+                        stag_t_rhino = t0 + (t1 - t0) * (-v0) / (v1 - v0)
+                    else:
+                        stag_t_rhino = t1
+        self.data.stag_time_rhino_ns = float(stag_t_rhino) if not np.isnan(stag_t_rhino) else 0.0
+
+        # --- 6: assembled_mass at RHINO stagnation_time ---
+        # Mass enclosed within shell_outer at t = stag_time_rhino
+        assembled_mg = 0.0
+        if not np.isnan(stag_t_rhino) and stag_t_rhino > 0:
+            stag_idx_rhino = int(np.argmin(np.abs(time - stag_t_rhino)))
+            so_at_stag = shell_outer_pos[stag_idx_rhino]
+            if not np.isnan(so_at_stag) and so_at_stag > 0:
+                # Mass of all zones whose centers are <= shell_outer at stag
+                centers = 0.5 * (zbnd[stag_idx_rhino, :-1]
+                                 + zbnd[stag_idx_rhino, 1:])
+                mask_assembled = centers <= so_at_stag
+                assembled_mg = float(np.sum(zmass[stag_idx_rhino, mask_assembled])) * 1e3
+        self.data.assembled_mass_rhino_mg = assembled_mg
+
+        # --- 7: burn_fraction = yield / (assembled_mass * DT specific energy)
+        # DT fusion energy density: 17.6 MeV / (5 amu) = 3.38e11 J/g
+        DT_SPECIFIC_ENERGY_J_PER_G = 3.38e11
+        burn_frac = 0.0
+        if assembled_mg > 0:
+            yield_J = float(getattr(self.data, 'fusion_yield', 0.0)) * 1e6  # MJ -> J
+            assembled_g = assembled_mg * 1e-3
+            denom = assembled_g * DT_SPECIFIC_ENERGY_J_PER_G
+            if denom > 0:
+                burn_frac = yield_J / denom
+        self.data.burn_fraction_rhino = float(burn_frac)
+
+        # --- 8: ablation_pressure_at_cr(3.5) (Vulcan HDD design convention) ---
+        # Find first time cr_inner reaches 3.5, then interp ablation_pressure there
+        self.data.t_at_cr_3p5_ns = 0.0
+        self.data.ablation_pressure_at_cr_3p5_Mbar = 0.0
+        cr_target = 3.5
+        valid_cr = ~np.isnan(cr_inner)
+        crossings = np.where(valid_cr & (cr_inner >= cr_target))[0]
+        if len(crossings) > 0:
+            j = int(crossings[0])
+            if j > 0 and not np.isnan(cr_inner[j - 1]):
+                cr0 = float(cr_inner[j - 1])
+                cr1 = float(cr_inner[j])
+                t0 = float(time[j - 1])
+                t1 = float(time[j])
+                if cr1 != cr0:
+                    f_interp = (cr_target - cr0) / (cr1 - cr0)
+                    t_cr_target = t0 + f_interp * (t1 - t0)
+                else:
+                    t_cr_target = t1
+            else:
+                t_cr_target = float(time[j])
+            self.data.t_at_cr_3p5_ns = float(t_cr_target)
+
+            # Interpolate ablation pressure history at this time
+            P_abl_history = getattr(self.data, 'ablation_pressure_Gbar', None)
+            if P_abl_history is not None and len(P_abl_history) == n_times:
+                p_at_cr_Gbar = float(np.interp(t_cr_target, time, P_abl_history))
+                # Convert Gbar -> Mbar (1 Gbar = 1000 Mbar)
+                self.data.ablation_pressure_at_cr_3p5_Mbar = p_at_cr_Gbar * 1000.0
+
+        logger.info(
+            f"RHINO diagnostics: "
+            f"t_max_v={self.data.t_max_shell_velocity_rhino_ns:.3f} ns, "
+            f"stag_t_rhino={self.data.stag_time_rhino_ns:.3f} ns, "
+            f"assembled_mass={self.data.assembled_mass_rhino_mg:.3f} mg, "
+            f"burn_fraction={self.data.burn_fraction_rhino:.3f}, "
+            f"P_abl@CR=3.5: {self.data.ablation_pressure_at_cr_3p5_Mbar:.1f} Mbar "
+            f"(at t={self.data.t_at_cr_3p5_ns:.3f} ns)"
+        )
+
+    def time_at_cr_rhino(self, cr: float) -> float:
+        """
+        Inverse function: returns time (ns) when cr_inner first reaches `cr`.
+
+        Uses linear interpolation of the cr_inner history between adjacent
+        timesteps. Returns 0.0 if no crossing found (CR never reached).
+
+        Matches RHINO's `time_at_cr` (hydrocode_classes.py:505).
+
+        Example:
+            t_shock_breakout = data.time_at_cr_rhino(1.5)   # CR=1.5 trigger
+            t_cr_3 = data.time_at_cr_rhino(3.0)
+            t_cr_5 = data.time_at_cr_rhino(5.0)
+        """
+        cr_inner = getattr(self.data, 'cr_inner_history', None)
+        if cr_inner is None:
+            return 0.0
+        time = self.data.time
+        valid = ~np.isnan(cr_inner)
+        crossings = np.where(valid & (cr_inner >= cr))[0]
+        if len(crossings) == 0:
+            return 0.0
+        j = int(crossings[0])
+        if j == 0 or np.isnan(cr_inner[j - 1]):
+            return float(time[j])
+        cr0 = float(cr_inner[j - 1])
+        cr1 = float(cr_inner[j])
+        if cr1 == cr0:
+            return float(time[j])
+        f_interp = (cr - cr0) / (cr1 - cr0)
+        return float(time[j - 1]) + f_interp * (float(time[j]) - float(time[j - 1]))
 
     def _compute_adiabat_at_breakout(self):
         """

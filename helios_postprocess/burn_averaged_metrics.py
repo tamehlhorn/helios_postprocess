@@ -249,6 +249,13 @@ def extract_histories_from_run_data(data) -> Dict:
     adiabat_cr15_rhino_formula   = getattr(data, 'adiabat_mass_averaged_ice_cr15_rhino_formula', 0.0)
     adiabat_breakout_rhino_formula = getattr(data, 'adiabat_at_breakout_rhino_formula', 0.0)
     adiabat_at_breakout            = getattr(data, 'adiabat_at_breakout', 0.0)
+    # RHINO diagnostics suite (June 2026)
+    t_max_shell_velocity_rhino_ns   = getattr(data, 't_max_shell_velocity_rhino_ns', 0.0)
+    stag_time_rhino_ns              = getattr(data, 'stag_time_rhino_ns', 0.0)
+    assembled_mass_rhino_mg         = getattr(data, 'assembled_mass_rhino_mg', 0.0)
+    burn_fraction_rhino             = getattr(data, 'burn_fraction_rhino', 0.0)
+    ablation_pressure_at_cr_3p5_Mbar = getattr(data, 'ablation_pressure_at_cr_3p5_Mbar', 0.0)
+    t_at_cr_3p5_ns                  = getattr(data, 't_at_cr_3p5_ns', 0.0)
 # IFAR variants (May 2026 — multi-variant patch)
     # - data.ifar          : compound shell at peak v_imp (legacy default)
     # - data.ifar_ice      : DT ice only at peak v_imp
@@ -369,6 +376,13 @@ def extract_histories_from_run_data(data) -> Dict:
         'adiabat_cr15_rhino_formula': adiabat_cr15_rhino_formula,
         'adiabat_breakout_rhino_formula': adiabat_breakout_rhino_formula,
         'adiabat_at_breakout':           adiabat_at_breakout,
+        # RHINO diagnostics suite
+        't_max_shell_velocity_rhino_ns': t_max_shell_velocity_rhino_ns,
+        'stag_time_rhino_ns':            stag_time_rhino_ns,
+        'assembled_mass_rhino_mg':       assembled_mass_rhino_mg,
+        'burn_fraction_rhino':           burn_fraction_rhino,
+        'ablation_pressure_at_cr_3p5_Mbar': ablation_pressure_at_cr_3p5_Mbar,
+        't_at_cr_3p5_ns':                t_at_cr_3p5_ns,
         'ifar':                  ifar,                # comparison-ready (CR=1.5 if available)
         'ifar_compound_peak_v':  ifar_compound_pv,    # legacy
         'ifar_ice_peak_v':       ifar_ice_pv,         # diagnostic
@@ -530,6 +544,13 @@ def calculate_burn_averaged_metrics(histories: Dict,
         'adiabat_cr15_rhino_formula': histories.get('adiabat_cr15_rhino_formula', 0.0),
         'adiabat_breakout_rhino_formula': histories.get('adiabat_breakout_rhino_formula', 0.0),
         'adiabat_at_breakout':           histories.get('adiabat_at_breakout', 0.0),
+        # RHINO diagnostics suite
+        't_max_shell_velocity_rhino_ns': histories.get('t_max_shell_velocity_rhino_ns', 0.0),
+        'stag_time_rhino_ns':            histories.get('stag_time_rhino_ns', 0.0),
+        'assembled_mass_rhino_mg':       histories.get('assembled_mass_rhino_mg', 0.0),
+        'burn_fraction_rhino':           histories.get('burn_fraction_rhino', 0.0),
+        'ablation_pressure_at_cr_3p5_Mbar': histories.get('ablation_pressure_at_cr_3p5_Mbar', 0.0),
+        't_at_cr_3p5_ns':                histories.get('t_at_cr_3p5_ns', 0.0),
         'ifar':                  histories.get('ifar', 0.0),
         'fraction_absorbed_pct': histories.get('fraction_absorbed_pct', 0.0),
         'P_hs_ignition_Gbar':    histories.get('P_hs_ignition_Gbar',    0.0),
@@ -742,6 +763,22 @@ def compare_with_published(sim_metrics: Dict,
         ('Adiabat at breakout (Lindl)',
          sim_metrics.get('adiabat_at_breakout', 0.0),
          _adi_ref('adiabat_lindl_breakout'), None, '.2f'),
+        # --- RHINO diagnostics suite (June 2026) ---
+        ('Peak shell velocity time RHINO (ns)',
+         sim_metrics.get('t_max_shell_velocity_rhino_ns', 0.0),
+         _adi_ref('t_max_shell_velocity_rhino_ns'), None, '.3f'),
+        ('Stagnation time RHINO (ns)',
+         sim_metrics.get('stag_time_rhino_ns', 0.0),
+         _adi_ref('stag_time_rhino_ns'), None, '.3f'),
+        ('Assembled mass RHINO (mg)',
+         sim_metrics.get('assembled_mass_rhino_mg', 0.0),
+         _adi_ref('assembled_mass_rhino_mg'), None, '.3f'),
+        ('Burn fraction RHINO',
+         sim_metrics.get('burn_fraction_rhino', 0.0),
+         _adi_ref('burn_fraction_rhino'), None, '.3f'),
+        ('Ablation P at CR=3.5 (Mbar)',
+         sim_metrics.get('ablation_pressure_at_cr_3p5_Mbar', 0.0),
+         _adi_ref('ablation_pressure_at_cr_3p5_Mbar'), None, '.1f'),
         ('Adiabat at breakout (RHINO formula)',
          sim_metrics.get('adiabat_breakout_rhino_formula', 0.0),
          adi_rhino_bo_key, None, '.2f'),

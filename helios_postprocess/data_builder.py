@@ -261,6 +261,28 @@ class ICFRunData:
                                                    # audit value (peak density
                                                    # crosses 1%-threshold inner
                                                    # shell surface at t=0)
+        # ── RHINO diagnostics suite (June 2026) ──────────────────
+        # Seven additional RHINO-convention metrics from
+        # ICFAnalyzer._compute_rhino_diagnostics. See that method for
+        # the algorithmic definitions; all match W. Trickey's RHINO
+        # postprocessor (private repo wtrickey27/RHINO) conventions.
+        self.shell_inner_pos_history_cm: Optional[np.ndarray] = None
+        self.shell_outer_pos_history_cm: Optional[np.ndarray] = None
+        self.shell_thickness_history_cm: Optional[np.ndarray] = None
+        self.shell_mass_history_mg:      Optional[np.ndarray] = None
+        self.shell_velocity_history_kms: Optional[np.ndarray] = None
+        self.cr_inner_history:           Optional[np.ndarray] = None
+        self.t_max_shell_velocity_rhino_ns: float = 0.0
+        self.stag_time_rhino_ns: float = 0.0    # RHINO stagnation_time
+                                                # (shell-velocity minimum;
+                                                # different from this
+                                                # pipeline's stag_time
+                                                # which is HS radius min)
+        self.assembled_mass_rhino_mg: float = 0.0
+        self.burn_fraction_rhino: float = 0.0
+        self.ablation_pressure_at_cr_3p5_Mbar: float = 0.0  # Vulcan HDD
+                                                # design convention
+        self.t_at_cr_3p5_ns: float = 0.0       # audit
         self.ifar: float = 0.0                      # in-flight aspect ratio at peak v_imp
         self.adiabat_mass_averaged_ice: float = 0.0  # legacy: at peak velocity
                                                      # Lindl convention
