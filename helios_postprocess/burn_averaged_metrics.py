@@ -41,7 +41,7 @@ Workflow
     >>>
     >>> histories = extract_histories_from_run_data(data)
     >>> metrics = calculate_burn_averaged_metrics(histories)
-    >>> print(compare_with_published(metrics, published_data, laser_energy_MJ=4.0))
+    >>> print(compare_with_published(metrics, published_metrics, laser_energy_MJ=4.0))
 
 Author: Prof T
 Date: November 2025 (original), March 2026 (refactored for ICFRunData pipeline)
@@ -681,13 +681,13 @@ def compare_with_published(sim_metrics: Dict,
     #   'adiabat_rhino_formula_breakout'   — proper-Fermi mass-avg at breakout.
     # When a convention-specific key is absent in the published data,
     # the corresponding row's cluster_key is set to a sentinel name not
-    # present in published_data so the comparison helper renders '—'
+    # present in published_metrics so the comparison helper renders '—'
     # for the published column instead of showing a misleading
     # +860%-type mismatch against the wrong-convention reference.
     def _adi_ref(key):
-        """Return key if it's in published_data, else a sentinel that
+        """Return key if it's in published_metrics, else a sentinel that
         won't be found (which suppresses the published-side comparison)."""
-        if published_data and key in published_data:
+        if published_metrics and key in published_metrics:
             return key
         return '__adi_ref_missing__'
     # Lindl peak v (standard ICF / Olson convention): try 'adiabat'.
@@ -700,7 +700,7 @@ def compare_with_published(sim_metrics: Dict,
     # which is a different convention -- value shown but Δ should be
     # interpreted carefully).
     adi_rhino_min_key  = ('adiabat_rhino_min_cr15'
-                          if (published_data and 'adiabat_rhino_min_cr15' in published_data)
+                          if (published_metrics and 'adiabat_rhino_min_cr15' in published_metrics)
                           else _adi_ref('adiabat'))
     # RHINO-formula adiabats (proper Fermi): no fallback. Rare in
     # publications; suppress Δ when absent.
