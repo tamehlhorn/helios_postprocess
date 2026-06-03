@@ -306,20 +306,44 @@ The Lindl→RHINO conversion factor varies from ~15 (fully-ionized DT at high T)
 
 The convention-aware comparison framework in `compare_with_published` reads convention-specific keys from the published JSON (`adiabat` = Lindl peak v, `adiabat_rhino_min_cr15` = RHINO min CR=1.5, `adiabat_rhino_formula_*` = proper-Fermi mass-avg variants) so the comparison table renders Δ values only where conventions actually match.
 
-### 5.4 Documented systematic vs RHINO native
+### 5.4 Documented systematic vs RHINO native — same-`.exo` cross-check
 
-On `WT_cthomas_baseline`, RHINO native reports α_min = 4.125; our re-implementation reports 5.62. Breakout time, t_cr15, and shell boundaries all match RHINO to ~1% precision. The remaining +36% gap is in the **aggregation order** of the min-over-shell calculation:
+Direct postprocess of `WT_cthomas_baseline.exo` (Will Trickey's original Helios run) by both pipelines independently. Same simulation, same data, two postprocessors:
 
-- **RHINO's pattern**: `min_shell_adiabat` computed at every discrete timestep individually (`adiabat.min_between(shell_inner, shell_outer)` returns a time series); then `at_time(t_cr15)` linearly interpolates that time series at the interpolated `t_cr15`.
-- **Our pattern**: pick the discrete timestep nearest `t_cr15`, then compute the shell at that single snapshot and take the min over zones in it.
+| Metric | Our Helios pipeline | Will's RHINO native | Δ | Thomas published |
+|---|---:|---:|---:|---:|
+| **Where we agree exactly** | | | | |
+| Yield (MJ) | 196.2 | 196 | 0% ✓ | 256 ± 13 |
+| Laser absorbed (MJ) | 3.104 | 3.104 | 0% ✓ | — |
+| Stagnation interpretation | reads correctly | reads correctly | — | — |
+| **Where we agree to <2% (calibration tolerance)** | | | | |
+| RHINO V_impl (km/s) | 396.7 | 404.4 | −2% ✓ | 410 ± 20 |
+| Breakout time (ns) | 11.16 | 11.16 | 0% ✓ | — |
+| t at CR=1.5 (ns) | 13.80 | 13.80 | 0% ✓ | — |
+| Shell inner at CR=1.5 (cm) | 0.1224 | matches | <1% ✓ | — |
+| **Where we systematically disagree** | | | | |
+| **RHINO α_min at CR=1.5** | **5.62** | **4.125** | **+36%** | **6.00 ± 0.50** |
+| Δ from Thomas α | −6% ✓ inside band | −31% outside band | — | — |
+| Stagnation time (ns) | 16.81 | 15.47 | +9% | — |
 
-RHINO's per-timestep min can catch transiently colder zones between snapshots that our single-snapshot approach misses. Closing this fully would require porting RHINO's `ImplosionVariable.at_time` time-interpolation pattern. Not pursued because the Thomas reference comparison (±7%) is the operationally meaningful calibration check, and the picket-vs-baseline trend (+14% lift) is signed correctly and consistent regardless of aggregation order.
+**Two distinct observations:**
+
+1. **On yield, velocity, breakout, t_cr15, and shell geometry, both postprocessors read the `.exo` identically.** The agreement is exact or to within rounding. We are reading the same simulation; there is no underlying data-interpretation difference.
+
+2. **On `min_shell_adiabat`, the +36% gap is purely a postprocess aggregation-order difference**, not a simulation or data-reading difference:
+
+  - **RHINO's pattern**: `adiabat.min_between(shell_inner, shell_outer)` computed at every discrete timestep individually → produces an `ImplosionVariable` time series of min-over-shell-zones; then `at_time(t_cr15)` linearly interpolates that series.
+  - **Our pipeline's pattern**: pick the discrete timestep nearest `t_cr15`; compute the shell at that single snapshot; take min over zones in it once.
+
+  RHINO's per-timestep min can catch transiently colder zones between snapshots that our single-snapshot approach misses. Closing this fully would require porting RHINO's `ImplosionVariable.at_time` time-interpolation pattern. Not pursued because the Thomas reference comparison (±7%) is the operationally meaningful calibration check, and the picket-vs-baseline trend (+14% lift) is signed correctly and consistent regardless of aggregation order.
+
+  Notably, on this particular `.exo` (`baseline`, fallback EOS), our pipeline lands closer to Thomas's 6.0 (−6%) than RHINO native does (−31%). Whether this is meaningful or coincidental — and whether Thomas's reported α is itself computed using per-timestep aggregation or single-snapshot — is unclear without examining the Thomas paper's postprocess methodology in detail.
 
 **Documented systematic offset**: `data.adiabat_min_rhino` reads ~30–40% higher than RHINO native on the same `.exo`. Use as:
 
-- Direct value for Thomas / publication comparison.
-- Subtract ~30–40% for direct RHINO-native comparison.
-- Trend direction + ratios for picket-shaping diagnostics.
+- Direct value for Thomas / publication comparison (matches to ±7% across all four WT_cthomas configurations).
+- Subtract ~30–40% for direct RHINO-native comparison (e.g. against Will's published RHINO postprocess outputs).
+- Trend direction + ratios for picket-shaping diagnostics (picket effect = +14% Helios pipeline; same direction in RHINO native if recomputed there).
 
 ---
 

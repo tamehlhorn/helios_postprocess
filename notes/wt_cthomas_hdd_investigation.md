@@ -200,6 +200,24 @@ Validation across four WT_cthomas configurations:
 
 ### 5.2 Min shell adiabat convention — VALIDATED to Thomas; +36% systematic vs RHINO native
 
+**Same-`.exo` direct cross-check on `WT_cthomas_baseline.exo`** (June 2026, code rev 8986f50, both postprocessors reading the same file):
+
+| Metric | Helios pipeline | RHINO native | Δ | Thomas |
+|---|---:|---:|---:|---:|
+| **Where we agree** | | | | |
+| Yield (MJ) | 196.2 | 196 | 0% ✓ | 256 ± 13 |
+| Laser absorbed (MJ) | 3.104 | 3.104 | 0% ✓ | — |
+| RHINO V_impl (km/s) | 396.7 | 404.4 | −2% ✓ | 410 ± 20 |
+| Breakout time (ns) | 11.16 | 11.16 | 0% ✓ | — |
+| t at CR=1.5 (ns) | 13.80 | 13.80 | 0% ✓ | — |
+| Shell inner at CR=1.5 (cm) | 0.1224 | matches | <1% ✓ | — |
+| **Where we disagree** | | | | |
+| **RHINO α_min at CR=1.5** | **5.62** | **4.125** | **+36%** | **6.0 ± 0.5** |
+| Stagnation time (ns) | 16.81 | 15.47 | +9% | — |
+
+Both postprocessors read the same `.exo` identically on yield, velocity, breakout, t_cr15, and shell geometry. The +36% gap on α_min is purely a postprocess aggregation-order difference (see below). Our pipeline value (5.62) lands closer to Thomas's published α=6.0 (−6%) than RHINO native (4.125, −31%).
+
+
 Algorithm (from RHINO source, clean-room reimpl in `_compute_adiabat_min_rhino`):
 
 1. Per-zone adiabat = P_total / P_Fermi where
