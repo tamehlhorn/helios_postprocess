@@ -80,6 +80,8 @@ class ICFRunData:
         self.laser_power_delivered: Optional[np.ndarray] = None   # (n_times,) W — total laser power on target
         self.laser_power_delivered_per_beam: Optional[np.ndarray] = None  # (n_times, n_beam) W — preserved for multi-beam
         self.electron_density: Optional[np.ndarray] = None        # (n_times, n_zones) cm⁻³
+        self.ion_density: Optional[np.ndarray] = None             # (n_times, n_zones) cm⁻³
+        self.mean_charge: Optional[np.ndarray] = None              # (n_times, n_zones) Z̄
         # Laser intensity reconstruction inputs (raw from EXODUS; cleaned in laser_intensity.py)
         self.laser_attenuation_coeff: Optional[np.ndarray] = None  # (n_times, n_beam, n_bnd) 1/cm
         self.laser_power_on_target: Optional[np.ndarray] = None           # (n_times,) W — total summed across beams
@@ -283,6 +285,14 @@ class ICFRunData:
         self.ablation_pressure_at_cr_3p5_Mbar: float = 0.0  # Vulcan HDD
                                                 # design convention
         self.t_at_cr_3p5_ns: float = 0.0       # audit
+        # Adiabat using RHINO's fully_ionized_dt convention (n_e = ρ/m_avg_ion
+        # instead of actual electron_density). This is RHINO's default --
+        # matches Will Trickey's RHINO native output. Pure DT zones give
+        # identical results to partially_ionized; multi-material foam zones
+        # diverge because fully_ionized_dt assumes Z̄=1 (under-counts e- in
+        # CD foam).
+        self.adiabat_min_rhino_fully_ionized: float = 0.0
+        self.adiabat_mass_avg_rhino_fully_ionized: float = 0.0
         self.ifar: float = 0.0                      # in-flight aspect ratio at peak v_imp
         self.adiabat_mass_averaged_ice: float = 0.0  # legacy: at peak velocity
                                                      # Lindl convention
@@ -469,6 +479,8 @@ _VARIABLE_MAP = [
     ("laser_power_delivered", ["LaserPwrDeliveredForBeam",
                                "laser_power_delivered"],                           False),
     ("electron_density",      ["electron_density", "elec_density", "n_e"],        False),
+    ("ion_density",           ["ion_density", "n_i"],                              False),
+    ("mean_charge",           ["mean_charge", "Zbar", "z_bar"],                    False),
     ("laser_power_on_target", ["LaserPwrOnTargetForBeam",
                                "laser_power_on_target"],                           False),
     ("laser_attenuation_coeff", ["laserAttinuationCoeff",

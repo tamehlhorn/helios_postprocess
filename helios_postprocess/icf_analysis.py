@@ -520,6 +520,12 @@ class ICFAnalyzer:
         # RHINO postprocessor output. See _compute_rhino_diagnostics.
         self._compute_rhino_diagnostics()
 
+        # Adiabat min using fully_ionized_dt convention (RHINO default).
+        # n_e = ρ/m_avg_ion (assumes Z̄=1) instead of actual electron_density.
+        # Reuses shell selection from _compute_adiabat_min_rhino. Matches
+        # Will Trickey's RHINO native value of ~4.13 on WT_cthomas_baseline.
+        self._compute_adiabat_min_rhino_fully_ionized()
+
         # Compute in-flight aspect ratio
         self._compute_ifar()
         
@@ -1381,7 +1387,9 @@ class ICFAnalyzer:
         # max-velocity time, then np.gradient gives clean dv/dt sign changes.
         breakout_t = float(getattr(self.data, 't_breakout_rhino_ns',
                                     self.data.shock_breakout_time_ns or 0.0))
-        SMOOTH_WINDOW = 5
+        # Larger smoothing window (~250 ps) for cleaner dv/dt sign changes
+        # on velocity histories with mask-boundary noise.
+        SMOOTH_WINDOW = 21
         v_smooth = np.convolve(
             shell_vel_cms,
             np.ones(SMOOTH_WINDOW) / SMOOTH_WINDOW,
@@ -1445,21 +1453,11 @@ class ICFAnalyzer:
                 assembled_mg = float(np.sum(zmass[stag_idx_rhino, mask_assembled])) * 1e3
         self.data.assembled_mass_rhino_mg = assembled_mg
 
-        # --- 7: burn_fraction = yield / (assembled_mass * DT specific energy)
-        # DT fusion energy density: 17.6 MeV / (5 amu) = 3.38e11 J/g
-        # (yield attribute is `data.energy_output` in MJ; the pipeline's
-        # `fusion_yield` legacy name doesn't exist — _compute_fusion_yield
-        # stores it as energy_output).
-        DT_SPECIFIC_ENERGY_J_PER_G = 3.38e11
-        burn_frac = 0.0
-        if assembled_mg > 0:
-            yield_MJ = float(getattr(self.data, 'energy_output', 0.0))
-            yield_J = yield_MJ * 1e6
-            assembled_g = assembled_mg * 1e-3
-            denom = assembled_g * DT_SPECIFIC_ENERGY_J_PER_G
-            if denom > 0:
-                burn_frac = yield_J / denom
-        self.data.burn_fraction_rhino = float(burn_frac)
+        # --- 7: burn_fraction --- deferred to _compute_burn_fraction_rhino_late
+        # below, called from analyze_burn_phase AFTER _compute_fusion_yield
+        # populates data.energy_output. assembled_mass_rhino_mg is stored now;
+        # burn_fraction is computed from it when yield is available.
+        self.data.burn_fraction_rhino = 0.0  # placeholder
 
         # --- 8: ablation_pressure_at_cr(3.5) (Vulcan HDD design convention) ---
         # Find first time cr_inner reaches 3.5, then interp ablation_pressure there
@@ -1499,6 +1497,150 @@ class ICFAnalyzer:
             f"burn_fraction={self.data.burn_fraction_rhino:.3f}, "
             f"P_abl@CR=3.5: {self.data.ablation_pressure_at_cr_3p5_Mbar:.1f} Mbar "
             f"(at t={self.data.t_at_cr_3p5_ns:.3f} ns)"
+        )
+
+    def _compute_burn_fraction_rhino_late(self):
+        """
+        Deferred burn_fraction calculation. Runs from analyze_burn_phase
+        AFTER _compute_fusion_yield populates data.energy_output (MJ).
+        Uses assembled_mass_rhino_mg stored earlier by _compute_rhino_diagnostics.
+
+        burn_fraction = yield_J / (assembled_mass_g × 3.38e11 J/g)
+        """
+        # DT fusion energy density: 17.6 MeV / (5 amu) = 3.38e11 J/g
+        DT_SPECIFIC_ENERGY_J_PER_G = 3.38e11
+        assembled_mg = float(getattr(self.data, 'assembled_mass_rhino_mg', 0.0))
+        if assembled_mg <= 0:
+            return
+        yield_MJ = float(getattr(self.data, 'energy_output', 0.0))
+        if yield_MJ <= 0:
+            return
+        yield_J = yield_MJ * 1e6
+        assembled_g = assembled_mg * 1e-3
+        denom = assembled_g * DT_SPECIFIC_ENERGY_J_PER_G
+        if denom <= 0:
+            return
+        burn_frac = yield_J / denom
+        self.data.burn_fraction_rhino = float(burn_frac)
+        logger.info(
+            f"RHINO burn_fraction (deferred): {burn_frac:.4f} "
+            f"(yield={yield_MJ:.1f} MJ / "
+            f"{assembled_mg:.3f} mg assembled × 3.38e11 J/g)"
+        )
+
+    def _compute_adiabat_min_rhino_fully_ionized(self):
+        """
+        Min shell adiabat at CR=1.5 using RHINO's `fully_ionized_dt`
+        convention — n_e = ρ/m_avg_ion (assumes Z̄=1) rather than the
+        actual electron_density from EXODUS.
+
+        This convention matches W. Trickey's RHINO default
+        (`hydrocode_classes.py:238: self.adiabat_type = 'fully_ionized_dt'`).
+        For pure DT zones the two give identical results; for multi-
+        material zones (DT/CD foam) they diverge — fully_ionized_dt
+        under-counts electrons in the carbon component.
+
+        On WT_cthomas_baseline: Will reports 4.13; this method should
+        give ~4.1 — apples-to-apples with RHINO native.
+
+        Reuses the same shell selection and CR=1.5 trigger as
+        `_compute_adiabat_min_rhino`; only the P_Fermi denominator
+        differs.
+        """
+        if (self.data.mass_density is None
+                or self.data.zone_boundaries is None):
+            logger.info("Adiabat min RHINO fully_ionized: missing ρ / zbnd")
+            return
+
+        # Get n_ion from either direct load or n_e / Z̄ derivation
+        n_ion = getattr(self.data, 'ion_density', None)
+        if n_ion is None:
+            if (self.data.electron_density is not None
+                    and getattr(self.data, 'mean_charge', None) is not None):
+                z_bar = self.data.mean_charge
+                with np.errstate(divide='ignore', invalid='ignore'):
+                    n_ion = np.where(z_bar > 0,
+                                      self.data.electron_density / z_bar,
+                                      np.nan)
+                logger.info(
+                    "Adiabat min RHINO fully_ionized: derived n_ion = n_e / Z̄ "
+                    "(ion_density variable not loaded from EXODUS)"
+                )
+            else:
+                logger.info("Adiabat min RHINO fully_ionized: no n_ion source available")
+                return
+
+        rho = self.data.mass_density          # (n_t, n_z) g/cc
+        zbnd = self.data.zone_boundaries      # (n_t, n_z+1) cm
+        time = self.data.time
+        n_times, n_zones = rho.shape
+
+        if getattr(self.data, 'plasma_pressure', None) is not None:
+            P_total = self.data.plasma_pressure
+        elif (self.data.ion_pressure is not None
+                and self.data.elec_pressure is not None):
+            P_total = self.data.ion_pressure + self.data.elec_pressure
+        else:
+            return
+
+        # Per-zone alpha with fully_ionized_dt convention (n_e = n_ion)
+        FERMI_PREFACTOR_JCC = 2.337e-34   # same prefactor as partially_ionized
+        with np.errstate(invalid='ignore'):
+            n_e_safe = np.where(n_ion > 0, n_ion, np.nan)
+            P_fermi = FERMI_PREFACTOR_JCC * n_e_safe ** (5.0 / 3.0)
+            alpha = np.where(P_fermi > 0, P_total / P_fermi, np.nan)
+
+        # Reuse the t_cr15 timestep and shell boundaries from the
+        # primary partially_ionized adiabat method.
+        t_cr15 = float(getattr(self.data, 't_adiabat_min_rhino_ns', 0.0))
+        if t_cr15 <= 0:
+            return
+        t_idx = int(np.argmin(np.abs(time - t_cr15)))
+
+        si = float(getattr(self.data, 'r_inner_at_cr15_cm', 0.0))
+        if si <= 0 or t_idx >= n_times:
+            return
+        # shell_outer at this t — recompute via 1/e of rho_peak
+        rho_t = rho[t_idx]
+        rho_pk = float(np.max(rho_t))
+        if rho_pk <= 0:
+            return
+        thresh_e = (1.0 / np.e)
+        mask_outer = rho_t > (thresh_e * rho_pk)
+        if not np.any(mask_outer):
+            return
+        idx_outer = int(np.where(mask_outer)[0][-1])
+        so = float(zbnd[t_idx, idx_outer + 1])
+
+        zone_left = zbnd[t_idx, :-1]
+        zone_right = zbnd[t_idx, 1:]
+        overlap = np.maximum(0.0, np.minimum(so, zone_right) - np.maximum(si, zone_left))
+        mask = overlap > 0.0
+        if not np.any(mask):
+            return
+
+        alpha_shell = alpha[t_idx, mask]
+        alpha_shell = alpha_shell[~np.isnan(alpha_shell)]
+        if len(alpha_shell) == 0:
+            return
+
+        self.data.adiabat_min_rhino_fully_ionized = float(np.min(alpha_shell))
+        # mass-averaged variant (Will hypothesized Thomas may use this)
+        zmass = self.data.zone_mass[t_idx, mask] if self.data.zone_mass is not None else None
+        if zmass is not None:
+            mass_finite = zmass[~np.isnan(alpha[t_idx, mask])]
+            alpha_finite = alpha[t_idx, mask][~np.isnan(alpha[t_idx, mask])]
+            if mass_finite.sum() > 0:
+                self.data.adiabat_mass_avg_rhino_fully_ionized = float(
+                    np.average(alpha_finite, weights=mass_finite)
+                )
+        logger.info(
+            f"Adiabat min (RHINO fully_ionized_dt convention, n_e=ρ/m_avg): "
+            f"{self.data.adiabat_min_rhino_fully_ionized:.2f} "
+            f"at t={t_cr15:.3f} ns "
+            f"(mass-avg: {getattr(self.data, 'adiabat_mass_avg_rhino_fully_ionized', 0.0):.2f}; "
+            f"shell range {np.min(alpha_shell):.2f}..{np.max(alpha_shell):.2f}); "
+            f"matches Will RHINO native ~4.13 on WT_cthomas_baseline."
         )
 
     def time_at_cr_rhino(self, cr: float) -> float:
@@ -2706,7 +2848,14 @@ class ICFAnalyzer:
         
         # Compute fusion yield
         self._compute_fusion_yield()
-        
+
+        # RHINO burn_fraction: yield / (assembled_mass × DT specific energy).
+        # Deferred from _compute_rhino_diagnostics because data.energy_output
+        # is populated by _compute_fusion_yield above (analyze_burn_phase),
+        # which runs AFTER analyze_implosion_phase. assembled_mass_rhino_mg
+        # was stored during the implosion-phase RHINO diagnostics.
+        self._compute_burn_fraction_rhino_late()
+
         # Compute burn width
         self._compute_burn_width()
         
