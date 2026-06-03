@@ -275,6 +275,37 @@ Validation pattern across the four configurations (after the sub-cell interpolat
 
 **Helios vs Thomas (publication reference): all within ±8%.** The picket effect is +14% (5.62 → 6.43), consistent in direction with the +208% Lindl base-adiabat signal at breakout.
 
+### 5.3a Note on adiabat convention — Thomas uses RHINO, Olson uses Lindl
+
+PDD and HDD reference publications use **different adiabat conventions**, an important detail when cross-comparing calibration narratives.
+
+**Olson 2021 PDD reference (α = 3.0)**: uses the **Lindl convention** —
+mass-averaged adiabat in the DT ice layer at peak implosion velocity, with
+P_Fermi = 2.17 × (ρ/0.205)^(5/3) Mbar (a *normalized* Fermi-pressure form where α = 1 at cryo DT solid density).
+
+**Thomas et al. Vulcan HDD reference (α = 6.0)**: uses the **RHINO convention** — min shell adiabat at CR=1.5, with P_Fermi = (3π²)^(2/3)/5 × ℏ²/m_e × n_e^(5/3) (the proper degenerate electron-gas Fermi pressure).
+
+The two conventions give numerically **very different** α values on the same physical state. For pure fully-ionized DT, Lindl P_F is ~15× larger than the proper P_F, so Lindl α is ~15× smaller than RHINO α. Direct cross-comparison example on `WT_cthomas_baseline_picket_012`:
+
+| Convention | α value | Comparable published reference |
+|---|---:|---|
+| **RHINO min shell adiabat (CR=1.5)** | **6.43** | **Thomas α = 6.0 ± 0.5 (+7%) ✓** |
+| RHINO mass-avg (CR=1.5) | 31.3 | (no published reference in this convention) |
+| RHINO mass-avg at breakout | 30.9 | — |
+| Lindl mass-avg at breakout | 1.08 | — |
+| Lindl mass-avg at CR=1.5 | 1.10 | — |
+| Lindl mass-avg at peak v | 87.3 | (shock-inflated; not physical) |
+
+The Lindl→RHINO conversion factor varies from ~15 (fully-ionized DT at high T) to ~28 (cold partially-ionized DT). At our cold-shell CR=1.5 timestep on `picket_012`, the ratio is ~28× (1.10 Lindl → 31.3 RHINO formula). The variability stems from the actual ionization state (Z̄ < 1 at cold conditions suppresses n_e, which makes the proper P_F smaller and RHINO α larger; Lindl is agnostic to ionization since it uses ρ only).
+
+**Practical guideline for comparing Helios runs to published references**:
+
+- For Olson 2021 / classical ICF references (PDD-class): use `data.adiabat_mass_averaged_ice` (Lindl peak v).
+- For Thomas et al. / Will Trickey RHINO references (Vulcan HDD-class): use `data.adiabat_min_rhino` (RHINO min CR=1.5).
+- For cross-tool sanity checking against any RHINO postprocessor on Helios output: use the `data.adiabat_*_rhino_formula` values, with the documented +30-40% systematic vs RHINO native (§5.4).
+
+The convention-aware comparison framework in `compare_with_published` reads convention-specific keys from the published JSON (`adiabat` = Lindl peak v, `adiabat_rhino_min_cr15` = RHINO min CR=1.5, `adiabat_rhino_formula_*` = proper-Fermi mass-avg variants) so the comparison table renders Δ values only where conventions actually match.
+
 ### 5.4 Documented systematic vs RHINO native
 
 On `WT_cthomas_baseline`, RHINO native reports α_min = 4.125; our re-implementation reports 5.62. Breakout time, t_cr15, and shell boundaries all match RHINO to ~1% precision. The remaining +36% gap is in the **aggregation order** of the min-over-shell calculation:

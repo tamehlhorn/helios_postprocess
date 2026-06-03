@@ -248,6 +248,7 @@ def extract_histories_from_run_data(data) -> Dict:
     adiabat_rhino_formula        = getattr(data, 'adiabat_mass_averaged_ice_rhino_formula', 0.0)
     adiabat_cr15_rhino_formula   = getattr(data, 'adiabat_mass_averaged_ice_cr15_rhino_formula', 0.0)
     adiabat_breakout_rhino_formula = getattr(data, 'adiabat_at_breakout_rhino_formula', 0.0)
+    adiabat_at_breakout            = getattr(data, 'adiabat_at_breakout', 0.0)
 # IFAR variants (May 2026 — multi-variant patch)
     # - data.ifar          : compound shell at peak v_imp (legacy default)
     # - data.ifar_ice      : DT ice only at peak v_imp
@@ -367,6 +368,7 @@ def extract_histories_from_run_data(data) -> Dict:
         'adiabat_rhino_formula': adiabat_rhino_formula,
         'adiabat_cr15_rhino_formula': adiabat_cr15_rhino_formula,
         'adiabat_breakout_rhino_formula': adiabat_breakout_rhino_formula,
+        'adiabat_at_breakout':           adiabat_at_breakout,
         'ifar':                  ifar,                # comparison-ready (CR=1.5 if available)
         'ifar_compound_peak_v':  ifar_compound_pv,    # legacy
         'ifar_ice_peak_v':       ifar_ice_pv,         # diagnostic
@@ -527,6 +529,7 @@ def calculate_burn_averaged_metrics(histories: Dict,
         'adiabat_rhino_formula': histories.get('adiabat_rhino_formula', 0.0),
         'adiabat_cr15_rhino_formula': histories.get('adiabat_cr15_rhino_formula', 0.0),
         'adiabat_breakout_rhino_formula': histories.get('adiabat_breakout_rhino_formula', 0.0),
+        'adiabat_at_breakout':           histories.get('adiabat_at_breakout', 0.0),
         'ifar':                  histories.get('ifar', 0.0),
         'fraction_absorbed_pct': histories.get('fraction_absorbed_pct', 0.0),
         'P_hs_ignition_Gbar':    histories.get('P_hs_ignition_Gbar',    0.0),
@@ -661,6 +664,50 @@ def compare_with_published(sim_metrics: Dict,
         )
         return True
 
+    # ─── Adiabat convention-aware reference-key selection ───
+    # Each adiabat row in the implosion_rows table compares against a
+    # published-JSON key that matches its OWN convention. Conventions
+    # in the published-data JSON (only fill the relevant ones per
+    # publication):
+    #   'adiabat'                          — Lindl peak v mass-avg
+    #                                        (Olson 2021 / classical
+    #                                        ICF convention, default).
+    #   'adiabat_lindl_cr15'               — Lindl mass-avg at CR=1.5.
+    #   'adiabat_rhino_min_cr15'           — RHINO min shell adiabat at
+    #                                        CR=1.5 (Thomas Vulcan HDD;
+    #                                        Will Trickey postprocessor).
+    #   'adiabat_rhino_formula_peak_v'     — proper-Fermi mass-avg at peak v.
+    #   'adiabat_rhino_formula_cr15'       — proper-Fermi mass-avg at CR=1.5.
+    #   'adiabat_rhino_formula_breakout'   — proper-Fermi mass-avg at breakout.
+    # When a convention-specific key is absent in the published data,
+    # the corresponding row's cluster_key is set to a sentinel name not
+    # present in published_data so the comparison helper renders '—'
+    # for the published column instead of showing a misleading
+    # +860%-type mismatch against the wrong-convention reference.
+    def _adi_ref(key):
+        """Return key if it's in published_data, else a sentinel that
+        won't be found (which suppresses the published-side comparison)."""
+        if published_data and key in published_data:
+            return key
+        return '__adi_ref_missing__'
+    # Lindl peak v (standard ICF / Olson convention): try 'adiabat'.
+    adi_lindl_pv_key   = _adi_ref('adiabat')
+    # Lindl CR=1.5: prefer dedicated key, no fallback to 'adiabat'
+    # (those two are different physical quantities).
+    adi_lindl_cr15_key = _adi_ref('adiabat_lindl_cr15')
+    # RHINO min CR=1.5 (Thomas Vulcan HDD): prefer the convention-
+    # specific key; fall back to 'adiabat' (compares to Olson Lindl,
+    # which is a different convention -- value shown but Δ should be
+    # interpreted carefully).
+    adi_rhino_min_key  = ('adiabat_rhino_min_cr15'
+                          if (published_data and 'adiabat_rhino_min_cr15' in published_data)
+                          else _adi_ref('adiabat'))
+    # RHINO-formula adiabats (proper Fermi): no fallback. Rare in
+    # publications; suppress Δ when absent.
+    adi_rhino_pv_key   = _adi_ref('adiabat_rhino_formula_peak_v')
+    adi_rhino_cr15_key = _adi_ref('adiabat_rhino_formula_cr15')
+    adi_rhino_bo_key   = _adi_ref('adiabat_rhino_formula_breakout')
+
     # ── Implosion metrics section ──
     # Tuple: (label, sim_val, cluster_key, hydra_key, fmt)
     # hydra_key=None means no per-code HYDRA value for this metric (cluster only).
@@ -679,22 +726,25 @@ def compare_with_published(sim_metrics: Dict,
          'peak_velocity_kms', None, '.1f'),
         ('Min shell adiabat RHINO',
          sim_metrics.get('adiabat_min_rhino', 0.0),
-         'adiabat', None, '.2f'),
+         adi_rhino_min_key, None, '.2f'),
         ('Adiabat (Lindl peak v)',
          sim_metrics.get('adiabat', 0.0),
-         'adiabat', None, '.2f'),
+         adi_lindl_pv_key, None, '.2f'),
         ('Adiabat at CR=1.5 (Lindl)',
          sim_metrics.get('adiabat_cr15', 0.0),
-         'adiabat', None, '.2f'),
+         adi_lindl_cr15_key, None, '.2f'),
         ('Adiabat at peak v (RHINO formula)',
          sim_metrics.get('adiabat_rhino_formula', 0.0),
-         'adiabat', None, '.2f'),
+         adi_rhino_pv_key, None, '.2f'),
         ('Adiabat at CR=1.5 (RHINO formula)',
          sim_metrics.get('adiabat_cr15_rhino_formula', 0.0),
-         'adiabat', None, '.2f'),
+         adi_rhino_cr15_key, None, '.2f'),
+        ('Adiabat at breakout (Lindl)',
+         sim_metrics.get('adiabat_at_breakout', 0.0),
+         _adi_ref('adiabat_lindl_breakout'), None, '.2f'),
         ('Adiabat at breakout (RHINO formula)',
          sim_metrics.get('adiabat_breakout_rhino_formula', 0.0),
-         'adiabat', None, '.2f'),
+         adi_rhino_bo_key, None, '.2f'),
         ('Fraction absorbed (%)',
          sim_metrics.get('fraction_absorbed_pct', 0.0),
          'fraction_absorbed_pct', None, '.1f'),
