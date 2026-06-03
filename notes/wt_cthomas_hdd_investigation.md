@@ -16,6 +16,7 @@
 | **WT_cthomas_baseline_tm** | `~/Sims/Xcimer/HDD_26/WT_cthomas_baseline_tm/` | EOS path repointed to Studio-local PROPACEOS CD table. FL=0.015. Yield 295 MJ. |
 | **WT_cthomas_baseline_012** | `~/Sims/Xcimer/HDD_26/WT_cthomas_baseline_012/` | EOS-fixed + FL=0.012 in all 5 regions, picket unchanged. Yield 303 MJ. Flash burn (6 ps FWHM). |
 | **WT_cthomas_baseline_picket_012** ★ | `~/Sims/Xcimer/HDD_26/HDD_scan/WT_cthomas_baseline_picket_012/` | **PRODUCTION ANCHOR.** EOS-fixed + FL=0.012 + picket Trad modified. Yield 256.4 MJ, matches Thomas to 0.1%. |
+| **WT_cthomas_baseline_picket_015** | `~/Sims/Xcimer/HDD_26/WT_cthomas_baseline_picket_015/` | EOS-fixed + FL=0.015 + same picket as picket_012. Yield 245.3 MJ, matches Thomas to -4%. **FL-isolation control: confirms picket is the dominant lever.** |
 | Thomas (Vulcan publication) | reference values in `_published.json` | yield 256 MJ, gain 65, V_impl 410, α 6.0, hydro eff 8.0% |
 | Will Trickey RHINO postprocess on baseline | reported in HDD comparison reference rows | V_impl 404 km/s, α_min 4.13, yield 196 MJ |
 
@@ -98,6 +99,28 @@ At FL=0.012 with EOS-fixed CD, the implosion regime shifts dramatically with **n
 | **Yield (MJ)** | **295** | **303** | +3% |
 
 Tighter conduction cap → more energy retained in shell (more KE) → less assembled mass at stagnation → briefer burn at lower density → essentially same integrated yield via the ρR·t product compensating. Two routes to same yield, very different physics. *Without* picket, FL=0.012 lands in the **flash-burn / disassembly** regime.
+
+### Knob 2b: Picket-dominance over FL (June 2 isolation experiment)
+
+`WT_cthomas_baseline_picket_015` directly isolates picket vs FL: same picket as `picket_012`, FL=0.015 instead of 0.012. Result confirms the picket is the dominant calibration lever; FL is secondary within the 0.012–0.015 window.
+
+**Picket effect (FL held constant, isolated):**
+
+| Comparison | Yield Δ | Hydro eff Δ | CR_max Δ | Burn FWHM Δ |
+|---|---:|---:|---:|---:|
+| baseline_tm → picket_015 (FL=0.015) | 295 → 245, -17% | 21.3% → 8.3%, **-61%** | 113 → 53.7, -52% | 82 ps → 60 ps, -27% |
+| baseline_012 → picket_012 (FL=0.012) | 303 → 256, -16% | 24.3% → 8.3%, -66% | 110 → 53.3, -52% | 6 ps → 65 ps, +983% |
+
+**FL effect (picket held constant, isolated):**
+
+| Comparison | Yield Δ | Hydro eff Δ | CR_max Δ | Burn FWHM Δ |
+|---|---:|---:|---:|---:|
+| baseline_tm → baseline_012 (no picket) | 295 → 303, +3% | 21.3% → 24.3%, +14% | 113 → 110, -3% | 82 ps → 6 ps, **-93% (regime change)** |
+| picket_015 → picket_012 (picket on) | 245 → 256, **+4%** | 8.3% → 8.3%, 0% | 53.7 → 53.3, -1% | 60 ps → 65 ps, +8% |
+
+**Physical interpretation:** The picket establishes the adiabat structure (Lindl base 0.35 → 1.08 = ×3, RHINO α_min 5.6 → 6.4 = +14%) which sets cold-shell stiffness and bounce dynamics. Once the picket has done that, FL changes within ±0.003 are second-order. Without the picket, FL changes are regime-determining (flash-burn vs assembly).
+
+**HDD calibration practice for picket-dominant designs:** establish picket first, then fine-tune FL within a small window.
 
 ### Knob 3: Picket Trad modification (the adiabat-shaping knob)
 
@@ -237,7 +260,7 @@ Re-extracted both baseline (fallback EOS) and baseline_tm (proper EOS) with the 
 ## 7. Open items (deferred — not calibration-blockers)
 
 1. **RHINO `min_shell_adiabat` per-timestep aggregation** — close the 36% systematic by porting RHINO's `ImplosionVariable.at_time` time-interpolation of the per-timestep min. ~1 hour. Improves cross-tool comparability but doesn't change any Thomas-comparison conclusions.
-2. **WT_cthomas_baseline_picket_015 validation** — same picket as picket_012 but with FL=0.015. Isolates picket-vs-FL contributions cleanly. Expected: if yield ~256 MJ, picket is primary lever; if yield ~295 MJ (like baseline_tm), FL is essential.
+2. ~~**WT_cthomas_baseline_picket_015 validation**~~ — **DONE June 2.** Result: yield 245.3 MJ (-4% Thomas), hydro eff 8.3% (matches), α_min RHINO 6.49 (+8% Thomas). **Picket is the dominant lever; FL is secondary** (yield difference picket_015 vs picket_012 is only ±4%; without picket, FL changes are regime-determining). Captured in §3 Knob 2b.
 3. **RHINO `stagnation_time` definition** — RHINO reports 15.47 ns on baseline, ours 16.81 ns. Doesn't affect adiabat result (t_cr15 matches), but worth understanding which physical event RHINO pins to. Background TODO.
 4. **PDF report HDD section** — add a dedicated HDD calibration figure to the Xcimer report, mirroring the PDD design-comparison plot. `examples/hdd_design_comparison.py` produces the multi-panel figure; needs to be embedded in the report narrative.
 5. **Persistent 1D residuals** (imploded DT mass, T_hs overshoot, fraction absorbed) — same gaps documented on the PDD side; not closeable inside Helios 1D. Documented as known limitations.
