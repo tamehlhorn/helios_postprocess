@@ -1373,10 +1373,21 @@ class ICFAnalyzer:
         self.data.cr_inner_history           = cr_inner
 
         # --- 4: t_max_shell_velocity_rhino: first dv/dt pos->neg after breakout ---
-        # Numerical derivative on zone-center times
+        # Numerical derivative on zone-center times. shell_velocity from the
+        # ρ>peak/e shell mask has small-amplitude noise at the timestep scale
+        # (~10 ps), which np.gradient amplifies into spurious zero crossings.
+        # 5-point moving-average smoothing (~50 ps window, much smaller than
+        # implosion timescale) removes the noise without biasing the physical
+        # max-velocity time, then np.gradient gives clean dv/dt sign changes.
         breakout_t = float(getattr(self.data, 't_breakout_rhino_ns',
                                     self.data.shock_breakout_time_ns or 0.0))
-        dv_dt = np.gradient(shell_vel_cms, time)
+        SMOOTH_WINDOW = 5
+        v_smooth = np.convolve(
+            shell_vel_cms,
+            np.ones(SMOOTH_WINDOW) / SMOOTH_WINDOW,
+            mode='same',
+        )
+        dv_dt = np.gradient(v_smooth, time)
         t_mid = time
         post_breakout = t_mid >= breakout_t
         idx_post = np.where(post_breakout)[0]
@@ -1436,10 +1447,14 @@ class ICFAnalyzer:
 
         # --- 7: burn_fraction = yield / (assembled_mass * DT specific energy)
         # DT fusion energy density: 17.6 MeV / (5 amu) = 3.38e11 J/g
+        # (yield attribute is `data.energy_output` in MJ; the pipeline's
+        # `fusion_yield` legacy name doesn't exist — _compute_fusion_yield
+        # stores it as energy_output).
         DT_SPECIFIC_ENERGY_J_PER_G = 3.38e11
         burn_frac = 0.0
         if assembled_mg > 0:
-            yield_J = float(getattr(self.data, 'fusion_yield', 0.0)) * 1e6  # MJ -> J
+            yield_MJ = float(getattr(self.data, 'energy_output', 0.0))
+            yield_J = yield_MJ * 1e6
             assembled_g = assembled_mg * 1e-3
             denom = assembled_g * DT_SPECIFIC_ENERGY_J_PER_G
             if denom > 0:
