@@ -1014,20 +1014,55 @@ class ICFAnalyzer:
         threshold_1pct = 0.01 * rho_peak
 
         def innermost_coord_above(rho_t, thr, zbnd_t):
-            """Inner boundary of innermost zone where rho_t > thr."""
+            """Sub-cell linearly-interpolated coordinate where rho first
+            crosses thr going outward (matches RHINO's
+            find_coord_over_value with istart=0).
+
+            Interpolation is between zone centers (geometric midpoints),
+            not zone boundaries -- matches RHINO's r_com convention.
+            """
             above = rho_t > thr
             if not np.any(above):
                 return np.nan
             idx = int(np.argmax(above))         # first True (innermost)
-            return float(zbnd_t[idx])
+            n_zones = len(rho_t)
+            if idx == 0:
+                return float(zbnd_t[0])         # innermost cell already above
+            if idx >= n_zones:
+                return float(zbnd_t[-1])
+            r_com = 0.5 * (zbnd_t[:-1] + zbnd_t[1:])
+            rho_lo = rho_t[idx - 1]             # below threshold
+            rho_hi = rho_t[idx]                 # above threshold
+            if rho_hi == rho_lo:
+                return float(r_com[idx])
+            return float(
+                r_com[idx - 1]
+                + (thr - rho_lo) * (r_com[idx] - r_com[idx - 1]) / (rho_hi - rho_lo)
+            )
 
         def outermost_coord_above(rho_t, thr, zbnd_t):
-            """Outer boundary of outermost zone where rho_t > thr."""
+            """Sub-cell linearly-interpolated coordinate where rho crosses
+            thr going inward from outside (matches RHINO's
+            find_coord_over_value with negative istart)."""
             above = rho_t > thr
             if not np.any(above):
                 return np.nan
-            idx = int(np.where(above)[0][-1])   # last True (outermost)
-            return float(zbnd_t[idx + 1])
+            indices_above = np.where(above)[0]
+            idx = int(indices_above[-1])        # last True (outermost above)
+            n_zones = len(rho_t)
+            if idx >= n_zones - 1:
+                return float(zbnd_t[-1])        # outermost cell is above
+            if idx == 0:
+                return float(zbnd_t[0])
+            r_com = 0.5 * (zbnd_t[:-1] + zbnd_t[1:])
+            rho_in = rho_t[idx]                 # above threshold
+            rho_out = rho_t[idx + 1]            # below threshold
+            if rho_in == rho_out:
+                return float(r_com[idx])
+            return float(
+                r_com[idx]
+                + (thr - rho_in) * (r_com[idx + 1] - r_com[idx]) / (rho_out - rho_in)
+            )
 
         # Constant-1%-threshold inner surface (used only for breakout)
         si_1pct = np.array([
@@ -1127,8 +1162,17 @@ class ICFAnalyzer:
             )
             return
 
-        zone_centers = 0.5 * (zbnd[t_cr15_idx, :-1] + zbnd[t_cr15_idx, 1:])
-        mask = (zone_centers >= si) & (zone_centers <= so)
+        # RHINO any-overlap zone selection (hydrovariable_classes.py
+        # min_between): include any cell whose [zone_left, zone_right]
+        # interval has positive overlap with the [si, so] shell range.
+        # Excludes cells whose boundary exactly equals si or so (overlap=0).
+        zone_left = zbnd[t_cr15_idx, :-1]
+        zone_right = zbnd[t_cr15_idx, 1:]
+        overlap = np.maximum(
+            0.0,
+            np.minimum(so, zone_right) - np.maximum(si, zone_left)
+        )
+        mask = overlap > 0.0
         if not np.any(mask):
             return
 
