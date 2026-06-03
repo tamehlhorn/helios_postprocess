@@ -2892,23 +2892,58 @@ WT_cthomas configuration tested (baseline, baseline_tm, baseline_012,
 picket_012). Available as `data.implosion_velocity_rhino_kms` and in the
 comparison table as `Implosion velocity RHINO (km/s)`.
 
-Min shell adiabat convention is **pending**:
+Min shell adiabat convention is **VALIDATED (June 2 2026, commit 5704bca)**:
 
-- Helios reports 0.15–0.19 across WT_cthomas variants
-- Will reports 4.13 — 20–25× higher
-- Alpha range across shell zones at our CR=1.5 timestep is 0.15..1.49
-  (baseline) to 0.19..1.88 (picket_012). The MAX is approaching Will's
-  4.13; the MIN is dragged down by one cold outer-edge zone.
+Clean-room re-implemented from RHINO source (wtrickey27/RHINO,
+private; TM has read access). The previous implementation was off by
+~27× from Will's reported 4.13 because of three independent bugs:
 
-Most likely the formula or zone-selection differs:
-- Will's min may exclude the outer cold edge
-- Or use electron-pressure-only adiabat (P_e / P_Fermi)
-- Or use Thomas-Fermi-corrected Fermi pressure
+1. **Fermi pressure formula.** Old code used Lindl convention
+   `P_F = 2.17 × (ρ/0.205)^(5/3) Mbar` — that's a *normalized*
+   adiabat (α=1 at cryo DT solid density), not the actual degenerate
+   electron-gas Fermi pressure. At ICF densities it's ~14× larger
+   than the proper formula. New code uses
+   `P_F = (3π²)^(2/3)/5 × ℏ²/m_e × n_e^(5/3)` with `n_e` from
+   `data.electron_density` per zone (RHINO's `partially_ionized`
+   mode — correct for multi-material shells).
 
-**TM has RHINO source code access** — direct inspection of Will's
-adiabat algorithm is the highest-value next step. Once that's reconciled,
-`adiabat_min_rhino` becomes a third cross-tool comparable metric
-alongside V_impl and (eventually) ρR breakdowns.
+2. **Shell inner threshold.** Old code used 1/e always. New code
+   uses RHINO's time-dependent default — 1% of peak density
+   *pre-breakout*, 1/e *post-breakout*. Critical for the t=0
+   shell anchor: at t=0 in WT_cthomas, only the dense CH ablator
+   passes 1/e of peak; with the 1% threshold, the foam + ablator
+   together comprise the shell, giving R_inner_0 at the gas/foam
+   interface (0.1875 cm) as Will intends.
+
+3. **CR=1.5 trigger.** Old code used "innermost zone of
+   rho>peak/e mask" radius. New code uses Will's
+   `cr_inner = shell_inner(t=0) / shell_inner(t)` reaching 1.5, with
+   the time-dependent shell_inner above. Breakout time itself is
+   computed per Will's definition: the time when peak-density
+   position first crosses shell_inner_0 derived from a constant 1%
+   threshold.
+
+Validation on `WT_cthomas_baseline_tm`: **5.64 vs Thomas 6.00 (-6%)**.
+
+Will's reported 4.13 was almost certainly computed on his original
+fallback-EOS run (the WT_cthomas_baseline.rhw with the Windows path
+that doesn't resolve on Mac). Pending validation that our same
+algorithm on the fallback-EOS .exo gives ~4.13 too -- expected
+behaviour since the fallback EOS gives -50% on yield and similar
+shifts on other compression-channel metrics.
+
+**Other adiabat methods in this file** (`_compute_adiabat`,
+`_compute_adiabat_at_breakout`, `_compute_cr15_metrics`) retain
+the Lindl convention they always used. Changing them would shift
+the documented PDD/HDD calibration history by ~14×. The RHINO
+method is the only cross-tool-comparable one; the Lindl-convention
+methods stay for historical continuity. Future analyses should
+prefer the RHINO method (`data.adiabat_min_rhino`) for any
+comparison to RHINO-postprocessed reference simulations.
+
+Audit attributes on data: `t_breakout_rhino_ns`,
+`r_inner_initial_cm`, `r_inner_at_cr15_cm` — appear in the
+`Adiabat min (RHINO convention, ...)` log line for sanity-checking.
 
 ### Retired diagnoses (incorrect — do not pursue)
 
