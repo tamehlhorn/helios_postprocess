@@ -257,6 +257,10 @@ class ICFRunData:
         self.t_adiabat_min_rhino_ns: float = 0.0   # ns
         self.r_inner_initial_cm: float = 0.0       # cm (audit)
         self.r_inner_at_cr15_cm: float = 0.0       # cm (audit)
+        self.t_breakout_rhino_ns: float = 0.0      # ns -- RHINO breakout-time
+                                                   # audit value (peak density
+                                                   # crosses 1%-threshold inner
+                                                   # shell surface at t=0)
         self.ifar: float = 0.0                      # in-flight aspect ratio at peak v_imp
         self.adiabat_mass_averaged_ice: float = 0.0  # legacy: at peak velocity
                                                      # (potentially shock-inflated

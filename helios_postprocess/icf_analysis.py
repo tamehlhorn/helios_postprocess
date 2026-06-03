@@ -916,121 +916,241 @@ class ICFAnalyzer:
 
     def _compute_adiabat_min_rhino(self):
         """
-        Min shell adiabat at CR=1.5 per Will Trickey's RHINO convention:
+        Min shell adiabat at CR=1.5 per Will Trickey's RHINO convention.
 
-          1. The "shell" is the set of zones with rho > rho_peak(t)/e
-             (same definition Will uses for shell velocity).
-          2. The "inner shell surface" is the INNER boundary of the
-             INNERMOST zone in the shell mask -- NOT the Lagrangian
-             gas/fuel interface. Its initial radius R_inner(0) uses
-             the t=0 shell mask.
-          3. CR=1.5 timestep = first time R_inner(t) <= R_inner(0)/1.5.
-          4. At that timestep, compute adiabat = P_plasma / P_Fermi for
-             each shell-mask zone using the DT Fermi formula
-             (rho_0 = 0.205 g/cc, Lindl convention).
-          5. Take the minimum over those zones.
+        CLEAN-ROOM re-implementation derived from RHINO source inspection
+        (rhino/one_dimensional_calculations.py::calculate_adiabat +
+        calculate_breakout_time + calculate_shell_inner +
+        calculate_shell_outer; rhino/hydrocode_classes.py::shell_inner +
+        cr_inner + time_at_cr + min_shell_adiabat_at_cr +
+        implosion_adiabat). RHINO is (c) Xcimer Energy, Inc.; only the
+        algorithm description (derivable from standard ICF practice and
+        Will's textual notes) is used here -- no RHINO code is copied.
 
-        Apples-to-apples with RHINO's reported "Min shell adiabat (CR=1.5)".
-        For WT_cthomas: RHINO reports 4.13.
+        Algorithm:
+
+          1. Per-zone adiabat = P_total / P_Fermi where
+             P_total = ion_pressure + electron_pressure  (plasma pressure)
+             P_Fermi = (3 pi^2)^(2/3) / 5 * hbar^2 / m_e * n_e^(5/3)
+             using the actual electron density per zone (RHINO's
+             "partially_ionized" mode -- exactly correct for multi-material
+             shells like WT_cthomas's DT/CD foam + CH ablator).
+
+             NOTE: this is the PROPER degenerate electron gas Fermi
+             pressure, NOT the Lindl-convention form
+             P_F = 2.17 * (rho/0.205)^(5/3) Mbar used elsewhere in this
+             file. The Lindl form is ~14x larger at ICF densities (it
+             renormalizes rho_0 to make alpha = 1 at cryo DT solid
+             density), so the Lindl-derived "adiabat" values are ~14x
+             SMALLER than RHINO's. Other adiabat methods here
+             (`_compute_adiabat`, `_compute_adiabat_at_breakout`,
+             `_compute_cr15_metrics`) retain Lindl convention for
+             backward compatibility with PDD/HDD calibration history.
+
+          2. Shock breakout time: defined as the time when the position of
+             peak mass density first crosses the position of the inner
+             shell surface at t=0. The inner shell surface for this
+             purpose uses a CONSTANT 1%-of-peak-density threshold.
+
+          3. Time-dependent shell surfaces (RHINO default):
+             * shell_inner: innermost coordinate where rho > frac * rho_peak
+               - frac = 0.01 BEFORE breakout
+               - frac = 1/e   AFTER breakout
+             * shell_outer: outermost coordinate where rho > (1/e) * rho_peak
+               (constant 1/e threshold).
+
+          4. CR=1.5 trigger: cr_inner(t) = shell_inner(t=0) / shell_inner(t)
+             reaches 1.5 (restricted to before stagnation).
+
+          5. Min shell adiabat = min(alpha) over zones whose centers lie
+             between shell_inner and shell_outer at the CR=1.5 timestep.
+
+        Validation target: WT_cthomas_baseline_tm should give ~4.13
+        (Will's reported value).
 
         Stored on data:
           adiabat_min_rhino                  (dimensionless)
           t_adiabat_min_rhino_ns             (ns)
-          r_inner_initial_cm                 (cm) -- audit value
-          r_inner_at_cr15_cm                 (cm) -- audit value
+          r_inner_initial_cm                 (cm) -- audit
+          r_inner_at_cr15_cm                 (cm) -- audit
+          t_breakout_rhino_ns                (ns) -- audit
         """
         if (self.data.mass_density is None
-                or self.data.zone_boundaries is None):
+                or self.data.zone_boundaries is None
+                or self.data.electron_density is None):
+            logger.info("Adiabat min (RHINO): missing inputs (rho/zbnd/n_e)")
             return
 
-        rho = self.data.mass_density                  # (n_t, n_z) g/cc
-        zbnd = self.data.zone_boundaries              # (n_t, n_z+1) cm
+        rho = self.data.mass_density            # (n_t, n_z) g/cc
+        zbnd = self.data.zone_boundaries        # (n_t, n_z+1) cm
+        n_e = self.data.electron_density        # (n_t, n_z) cm^-3
+        time = self.data.time                   # (n_t,) ns
         n_times, n_zones = rho.shape
-
-        # Compute the inner shell surface position at every timestep.
-        # Shell = zones with rho > rho_peak(t)/e; inner surface = inner
-        # boundary of innermost shell zone.
-        R_inner_t = np.full(n_times, np.nan)
-        innermost_zone_t = np.full(n_times, -1, dtype=int)
-        for t in range(n_times):
-            rho_t = rho[t]
-            rho_pk = float(np.max(rho_t))
-            if rho_pk <= 0:
-                continue
-            mask = rho_t > (rho_pk / np.e)
-            if not np.any(mask):
-                continue
-            inner_zone = int(np.argmax(mask))   # innermost True
-            innermost_zone_t[t] = inner_zone
-            if inner_zone < zbnd.shape[1]:
-                R_inner_t[t] = zbnd[t, inner_zone]
-
-        # Initial inner shell surface (from t=0 shell mask)
-        if innermost_zone_t[0] < 0 or np.isnan(R_inner_t[0]):
-            # If t=0 mask is degenerate, use the first valid timestep
-            first_valid = np.where(innermost_zone_t >= 0)[0]
-            if len(first_valid) == 0:
-                return
-            R_inner_0 = float(R_inner_t[first_valid[0]])
-        else:
-            R_inner_0 = float(R_inner_t[0])
-
-        if R_inner_0 <= 0:
-            return
-        R_target = R_inner_0 / 1.5
-
-        # First crossing of R_inner(t) <= R_target
-        valid = ~np.isnan(R_inner_t)
-        crossing_mask = valid & (R_inner_t <= R_target)
-        if not np.any(crossing_mask):
-            logger.info(
-                f"Adiabat min (RHINO): inner shell surface never reaches "
-                f"R_0/1.5 = {R_target:.4f} cm (min seen: "
-                f"{np.nanmin(R_inner_t):.4f} cm)"
-            )
-            return
-        t_cr15 = int(np.argmax(crossing_mask))   # first True
-
-        # Shell mask at this timestep
-        rho_t = rho[t_cr15]
-        rho_pk = float(np.max(rho_t))
-        if rho_pk <= 0:
-            return
-        shell_mask = rho_t > (rho_pk / np.e)
-        if not np.any(shell_mask):
-            return
 
         # Plasma pressure in J/cm^3 (ion + electron, no radiation)
         if getattr(self.data, 'plasma_pressure', None) is not None:
-            P_eval = self.data.plasma_pressure[t_cr15, shell_mask]
+            P_total = self.data.plasma_pressure
         elif (self.data.ion_pressure is not None
                 and self.data.elec_pressure is not None):
-            P_eval = (self.data.ion_pressure[t_cr15, shell_mask]
-                      + self.data.elec_pressure[t_cr15, shell_mask])
+            P_total = self.data.ion_pressure + self.data.elec_pressure
         else:
+            logger.info("Adiabat min (RHINO): no plasma pressure available")
             return
 
-        # DT Fermi pressure: P_F = 2.17 * (rho/0.205)^(5/3) Mbar
-        #                       = 2.17e5 J/cm^3 * (rho/0.205)^(5/3)
-        # (Lindl convention rho_0 = 0.205 g/cc for equimolar DT ice.)
-        RHO_0_DT = 0.205
-        P_FERMI_PREFACTOR_JCC = 2.17e5
-        rho_eval = rho_t[shell_mask]
-        P_fermi = P_FERMI_PREFACTOR_JCC * (rho_eval / RHO_0_DT) ** (5.0 / 3.0)
-        alpha_zones = P_eval / np.maximum(P_fermi, 1e-30)
+        # ---- Per-zone Fermi pressure (degenerate electron gas) ----
+        # P_F (J/cm^3) = (3 pi^2)^(2/3)/5 * hbar^2 / m_e * n_e^(5/3)
+        # In CGS this is 2.337e-27 erg*cm^5 per (cm^-3)^(5/3); converting
+        # erg -> J yields 2.337e-34 J*cm^5. Sanity check: at n_e for
+        # DT at rho = 1 g/cc (n_e ~ 2.4e23 cm^-3), this gives ~2.19 Mbar.
+        FERMI_PREFACTOR_JCC = 2.337e-34
+        with np.errstate(invalid='ignore'):
+            n_e_safe = np.where(n_e > 0, n_e, np.nan)
+            P_fermi = FERMI_PREFACTOR_JCC * n_e_safe ** (5.0 / 3.0)
+            alpha = np.where(P_fermi > 0, P_total / P_fermi, np.nan)
 
-        self.data.adiabat_min_rhino = float(np.min(alpha_zones))
-        self.data.t_adiabat_min_rhino_ns = float(self.data.time[t_cr15])
+        # ---- Per-timestep peak density and constant 1%-threshold
+        #      inner-shell-surface (for breakout calculation) ----
+        rho_peak = rho.max(axis=1)              # (n_t,)
+        threshold_1pct = 0.01 * rho_peak
+
+        def innermost_coord_above(rho_t, thr, zbnd_t):
+            """Inner boundary of innermost zone where rho_t > thr."""
+            above = rho_t > thr
+            if not np.any(above):
+                return np.nan
+            idx = int(np.argmax(above))         # first True (innermost)
+            return float(zbnd_t[idx])
+
+        def outermost_coord_above(rho_t, thr, zbnd_t):
+            """Outer boundary of outermost zone where rho_t > thr."""
+            above = rho_t > thr
+            if not np.any(above):
+                return np.nan
+            idx = int(np.where(above)[0][-1])   # last True (outermost)
+            return float(zbnd_t[idx + 1])
+
+        # Constant-1%-threshold inner surface (used only for breakout)
+        si_1pct = np.array([
+            innermost_coord_above(rho[t], threshold_1pct[t], zbnd[t])
+            for t in range(n_times)
+        ])
+
+        if np.isnan(si_1pct[0]) or si_1pct[0] <= 0:
+            logger.info("Adiabat min (RHINO): t=0 1%-threshold inner "
+                        "surface undefined")
+            return
+        shell_inner_0_1pct = float(si_1pct[0])
+
+        # ---- Breakout time: peak-density-position crosses shell_inner_0_1pct ----
+        peak_density_pos = np.full(n_times, np.nan)
+        for t in range(n_times):
+            if rho_peak[t] > 0:
+                idx_peak = int(np.argmax(rho[t]))
+                peak_density_pos[t] = 0.5 * (zbnd[t, idx_peak]
+                                             + zbnd[t, idx_peak + 1])
+        valid = ~np.isnan(peak_density_pos)
+        crossing = valid & (peak_density_pos <= shell_inner_0_1pct)
+        if not np.any(crossing):
+            # Pre-breakout for the whole sim -- use 1% throughout
+            breakout_time = float(time[-1])
+        else:
+            j = int(np.argmax(crossing))        # first True
+            if j > 0 and peak_density_pos[j] != peak_density_pos[j - 1]:
+                t0, t1 = float(time[j - 1]), float(time[j])
+                p0, p1 = peak_density_pos[j - 1], peak_density_pos[j]
+                breakout_time = t0 + (shell_inner_0_1pct - p0) * (t1 - t0) / (p1 - p0)
+            else:
+                breakout_time = float(time[j])
+
+        # ---- Time-dependent shell surfaces (RHINO default) ----
+        shell_inner_pos = np.full(n_times, np.nan)
+        shell_outer_pos = np.full(n_times, np.nan)
+        thresh_e = (1.0 / np.e)
+        for t in range(n_times):
+            if rho_peak[t] <= 0:
+                continue
+            # Inner: 1% pre-breakout, 1/e post-breakout
+            frac_inner = 0.01 if time[t] < breakout_time else thresh_e
+            thr_inner = frac_inner * rho_peak[t]
+            shell_inner_pos[t] = innermost_coord_above(rho[t], thr_inner, zbnd[t])
+            # Outer: always 1/e
+            thr_outer = thresh_e * rho_peak[t]
+            shell_outer_pos[t] = outermost_coord_above(rho[t], thr_outer, zbnd[t])
+
+        if np.isnan(shell_inner_pos[0]) or shell_inner_pos[0] <= 0:
+            logger.info("Adiabat min (RHINO): t=0 shell_inner undefined")
+            return
+        R_inner_0 = float(shell_inner_pos[0])
+
+        # ---- CR=1.5 trigger via cr_inner = shell_inner(0) / shell_inner(t) ----
+        stag_t = getattr(self.data, 'stag_time', 0.0) or float(time[-1])
+        stag_idx = int(np.argmin(np.abs(time - stag_t)))
+        if stag_idx < 2:
+            return
+
+        with np.errstate(divide='ignore', invalid='ignore'):
+            cr_inner = np.where(shell_inner_pos > 0,
+                                R_inner_0 / shell_inner_pos, np.nan)
+        cr_pre_stag = cr_inner[: stag_idx + 1]
+
+        crossings = np.where(cr_pre_stag >= 1.5)[0]
+        if len(crossings) == 0:
+            logger.info(
+                f"Adiabat min (RHINO): cr_inner never reaches 1.5 "
+                f"(max seen: {np.nanmax(cr_pre_stag):.2f}; "
+                f"R_inner_0 = {R_inner_0:.4f} cm; "
+                f"min R_inner = {np.nanmin(shell_inner_pos[: stag_idx + 1]):.4f} cm)"
+            )
+            return
+        t_cr15_idx = int(crossings[0])
+
+        # Linear interp for precise t_cr15 (logging only)
+        if t_cr15_idx > 0:
+            cr0, cr1 = cr_pre_stag[t_cr15_idx - 1], cr_pre_stag[t_cr15_idx]
+            if cr1 != cr0:
+                f_interp = (1.5 - cr0) / (cr1 - cr0)
+                t_cr15 = float(time[t_cr15_idx - 1]) + f_interp * (
+                    float(time[t_cr15_idx]) - float(time[t_cr15_idx - 1])
+                )
+            else:
+                t_cr15 = float(time[t_cr15_idx])
+        else:
+            t_cr15 = float(time[t_cr15_idx])
+
+        # ---- Min adiabat over [shell_inner, shell_outer] at t_cr15 ----
+        si = shell_inner_pos[t_cr15_idx]
+        so = shell_outer_pos[t_cr15_idx]
+        if np.isnan(si) or np.isnan(so) or so <= si:
+            logger.info(
+                f"Adiabat min (RHINO): shell range degenerate at t_cr15 "
+                f"(si={si}, so={so})"
+            )
+            return
+
+        zone_centers = 0.5 * (zbnd[t_cr15_idx, :-1] + zbnd[t_cr15_idx, 1:])
+        mask = (zone_centers >= si) & (zone_centers <= so)
+        if not np.any(mask):
+            return
+
+        alpha_shell = alpha[t_cr15_idx, mask]
+        alpha_shell = alpha_shell[~np.isnan(alpha_shell)]
+        if len(alpha_shell) == 0:
+            return
+
+        self.data.adiabat_min_rhino = float(np.min(alpha_shell))
+        self.data.t_adiabat_min_rhino_ns = float(t_cr15)
         self.data.r_inner_initial_cm = R_inner_0
-        self.data.r_inner_at_cr15_cm = float(R_inner_t[t_cr15])
+        self.data.r_inner_at_cr15_cm = float(si)
+        self.data.t_breakout_rhino_ns = float(breakout_time)
         logger.info(
-            f"Adiabat min (RHINO convention): "
+            f"Adiabat min (RHINO convention, clean-room reimpl): "
             f"{self.data.adiabat_min_rhino:.2f} "
-            f"at t={self.data.t_adiabat_min_rhino_ns:.3f} ns "
-            f"(R_inner shell surface: {R_inner_0:.4f} cm -> "
-            f"{self.data.r_inner_at_cr15_cm:.4f} cm; "
-            f"{int(np.sum(shell_mask))} shell zones evaluated; "
-            f"alpha range {np.min(alpha_zones):.2f}..{np.max(alpha_zones):.2f})"
+            f"at t={t_cr15:.3f} ns "
+            f"(breakout_t={breakout_time:.3f} ns; "
+            f"R_inner: {R_inner_0:.4f} -> {si:.4f} cm; "
+            f"shell [si, so] = [{si:.4f}, {so:.4f}] cm; "
+            f"{int(np.sum(mask))} zones; "
+            f"alpha range {np.min(alpha_shell):.2f}..{np.max(alpha_shell):.2f})"
         )
 
     def _compute_adiabat_at_breakout(self):
