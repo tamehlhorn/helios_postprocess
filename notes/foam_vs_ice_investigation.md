@@ -323,7 +323,7 @@ Comparison figure: `comparisons/planar_dtice_vs_foam.png`.
 - ✅ Planar ablation comparison (DT ice vs foam) — EOS+opacity material effects isolated
 
 ### Near-term
-- **Generate Xcimer Energy report** summarizing the investigation closeout. Draft in `docs/Xcimer_foam_burn_deficit_report.md`.
+- **Generate Xcimer Energy report** summarizing the investigation closeout. Draft in `docs/Xcimer_PDD_calibration_report.md` (named for symmetry with `Xcimer_HDD_calibration_report.md`; was previously `Xcimer_foam_burn_deficit_report.md` — renamed June 4 2026).
 - **Re-examine FL transition regime:** fab003 (FL_prism=0.003) NO-IGNITION run is the FL saturation knee marker. Worth dumping its energy ledger.
 
 ### Medium-term
@@ -356,5 +356,5 @@ The companion Jupyter notebook (`notebooks/foam_vs_ice_investigation.ipynb`) run
 - Project guide: [CLAUDE.md §"PDD Calibration Scan"](../CLAUDE.md)
 - Tools: [`examples/compare_runs.py`](../examples/compare_runs.py), [`examples/energy_balance_diagnostic.py`](../examples/energy_balance_diagnostic.py), [`examples/verify_zero_d.py`](../examples/verify_zero_d.py)
 - Notebook: [`notebooks/foam_vs_ice_investigation.ipynb`](../notebooks/foam_vs_ice_investigation.ipynb)
-- External report: [`docs/Xcimer_foam_burn_deficit_report.md`](../docs/Xcimer_foam_burn_deficit_report.md)
+- External report: [`docs/Xcimer_PDD_calibration_report.md`](../docs/Xcimer_PDD_calibration_report.md) (renamed June 4 2026 from `Xcimer_foam_burn_deficit_report.md` for symmetry with the HDD report)
 - Figures: `comparisons/compare_foam_vs_ice_{rt,histories,lineouts}.png`, `comparisons/cr_burn_triplet_energy_ledger.png`, `comparisons/zero_d_verification_summary.png`, `comparisons/planar_dtice_vs_foam.png`

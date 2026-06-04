@@ -88,7 +88,7 @@ if [ "$TARGET" = "BOTH" ] || [ "$TARGET" = "HDD" ]; then
 fi
 
 if [ "$TARGET" = "BOTH" ] || [ "$TARGET" = "PDD" ]; then
-  build_one Xcimer_foam_burn_deficit_report \
+  build_one Xcimer_PDD_calibration_report \
     "Helios PDD Calibration: Foam-Burn Deficit and Root-Cause Analysis" \
     "2026-05-28"
 fi

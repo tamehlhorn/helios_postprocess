@@ -432,7 +432,7 @@ Helios shutdown (~4 of 6 runs in this scan). The .exo files are substantially co
 and metrics extract correctly; budget one retry per run for larger scans.
 
 See `notes/foam_vs_ice_investigation.md` §3 dated 2026-05-29-30 for the design study
-narrative; `docs/Xcimer_foam_burn_deficit_report.md` §5 for the external write-up;
+narrative; `docs/Xcimer_PDD_calibration_report.md` §5 for the external write-up (renamed June 4 2026 from `Xcimer_foam_burn_deficit_report.md` for parallel structure with `Xcimer_HDD_calibration_report.md`);
 `comparisons/pdd_design_comparison.png` for the 10-row decision-matrix figure.
 
 ## PDD Calibration Scan (April 2026)
