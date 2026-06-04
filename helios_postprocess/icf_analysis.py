@@ -1378,66 +1378,56 @@ class ICFAnalyzer:
         self.data.shell_velocity_history_kms = shell_vel_cms * 1e-5 # cm/s -> km/s
         self.data.cr_inner_history           = cr_inner
 
-        # --- 4: t_max_shell_velocity_rhino: first dv/dt pos->neg after breakout ---
-        # Numerical derivative on zone-center times. shell_velocity from the
-        # ρ>peak/e shell mask has small-amplitude noise at the timestep scale
-        # (~10 ps), which np.gradient amplifies into spurious zero crossings.
-        # 5-point moving-average smoothing (~50 ps window, much smaller than
-        # implosion timescale) removes the noise without biasing the physical
-        # max-velocity time, then np.gradient gives clean dv/dt sign changes.
+        # --- 4 + 5: t_max_shell_velocity_rhino, stag_time_rhino ---
+        # Earlier implementation used dv/dt sign-change detection (RHINO's
+        # algorithm directly). It produced t_max_v / stag_t gaps of only
+        # 25-66 ps even with smoothing — derivative noise on the shell
+        # velocity history (from mask-boundary jitter) creates spurious
+        # close-together zero crossings near the actual maxima/minima.
+        #
+        # Switched to argmax/argmin on the shell velocity history directly:
+        #   t_max_v = time of MAX shell velocity after breakout (pre-bang)
+        #   stag_t  = time of MIN shell velocity AFTER t_max_v (pre-bang)
+        #
+        # No derivatives needed. Robust to small-amplitude noise. Locks
+        # t_max_v to the same time the standalone implosion_velocity_rhino
+        # uses (argmax on the same v_shell), so the two diagnostics are
+        # internally consistent.
         breakout_t = float(getattr(self.data, 't_breakout_rhino_ns',
                                     self.data.shock_breakout_time_ns or 0.0))
-        # Larger smoothing window (~250 ps) for cleaner dv/dt sign changes
-        # on velocity histories with mask-boundary noise.
-        SMOOTH_WINDOW = 21
-        v_smooth = np.convolve(
-            shell_vel_cms,
-            np.ones(SMOOTH_WINDOW) / SMOOTH_WINDOW,
-            mode='same',
-        )
-        dv_dt = np.gradient(v_smooth, time)
-        t_mid = time
-        post_breakout = t_mid >= breakout_t
-        idx_post = np.where(post_breakout)[0]
-        t_max_v = np.nan
-        if len(idx_post) >= 2:
-            dv_post = dv_dt[idx_post]
-            # First pos -> neg sign change
-            sign_changes = np.where((dv_post[:-1] > 0) & (dv_post[1:] <= 0))[0]
-            if len(sign_changes) > 0:
-                k = int(sign_changes[0])
-                i_loc = idx_post[k]
-                # Linear interpolation between t[i] and t[i+1]
-                t0 = float(time[i_loc])
-                t1 = float(time[i_loc + 1])
-                v0 = float(dv_post[k])
-                v1 = float(dv_post[k + 1])
-                if v0 != v1:
-                    t_max_v = t0 + (t1 - t0) * v0 / (v0 - v1)
-                else:
-                    t_max_v = t1
-        self.data.t_max_shell_velocity_rhino_ns = float(t_max_v) if not np.isnan(t_max_v) else 0.0
+        bang_t = float(getattr(self.data, 'bang_time', 0.0) or time[-1])
+        bang_idx = int(np.argmin(np.abs(time - bang_t)))
 
-        # --- 5: stag_time_rhino: first dv/dt neg->pos after t_max_shell_velocity ---
-        stag_t_rhino = np.nan
-        if not np.isnan(t_max_v):
-            post_max = t_mid >= t_max_v
-            idx_post_max = np.where(post_max)[0]
-            if len(idx_post_max) >= 2:
-                dv_post = dv_dt[idx_post_max]
-                sign_changes = np.where((dv_post[:-1] <= 0) & (dv_post[1:] > 0))[0]
-                if len(sign_changes) > 0:
-                    k = int(sign_changes[0])
-                    i_loc = idx_post_max[k]
-                    t0 = float(time[i_loc])
-                    t1 = float(time[i_loc + 1])
-                    v0 = float(dv_post[k])
-                    v1 = float(dv_post[k + 1])
-                    if v1 != v0:
-                        stag_t_rhino = t0 + (t1 - t0) * (-v0) / (v1 - v0)
-                    else:
-                        stag_t_rhino = t1
-        self.data.stag_time_rhino_ns = float(stag_t_rhino) if not np.isnan(stag_t_rhino) else 0.0
+        # Restrict search to post-breakout, pre-bang window
+        post_breakout_idx = np.where(time >= breakout_t)[0]
+        if len(post_breakout_idx) >= 2:
+            in_flight_idx = post_breakout_idx[post_breakout_idx < bang_idx]
+            if len(in_flight_idx) >= 2:
+                # argmax on v_shell over in-flight window
+                k_max = int(np.argmax(shell_vel_cms[in_flight_idx]))
+                t_max_v_idx = int(in_flight_idx[k_max])
+                t_max_v = float(time[t_max_v_idx])
+                self.data.t_max_shell_velocity_rhino_ns = t_max_v
+
+                # argmin on v_shell in [t_max_v, t_bang]
+                post_max_idx = np.where(
+                    (time > t_max_v) & (time <= bang_t)
+                )[0]
+                if len(post_max_idx) >= 1:
+                    k_min = int(np.argmin(shell_vel_cms[post_max_idx]))
+                    self.data.stag_time_rhino_ns = float(
+                        time[post_max_idx[k_min]]
+                    )
+                else:
+                    self.data.stag_time_rhino_ns = 0.0
+            else:
+                self.data.t_max_shell_velocity_rhino_ns = 0.0
+                self.data.stag_time_rhino_ns = 0.0
+        else:
+            self.data.t_max_shell_velocity_rhino_ns = 0.0
+            self.data.stag_time_rhino_ns = 0.0
+        t_max_v = self.data.t_max_shell_velocity_rhino_ns
+        stag_t_rhino = self.data.stag_time_rhino_ns
 
         # --- 6: assembled_mass at RHINO stagnation_time ---
         # Mass enclosed within shell_outer at t = stag_time_rhino
