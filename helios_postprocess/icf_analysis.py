@@ -1379,55 +1379,64 @@ class ICFAnalyzer:
         self.data.cr_inner_history           = cr_inner
 
         # --- 4 + 5: t_max_shell_velocity_rhino, stag_time_rhino ---
-        # Earlier implementation used dv/dt sign-change detection (RHINO's
-        # algorithm directly). It produced t_max_v / stag_t gaps of only
-        # 25-66 ps even with smoothing — derivative noise on the shell
-        # velocity history (from mask-boundary jitter) creates spurious
-        # close-together zero crossings near the actual maxima/minima.
+        # Two previous attempts (dv/dt zero-crossings; argmax/argmin on
+        # v_shell) hit the same root issue: the ρ>peak/e shell mask
+        # becomes DEGENERATE at late times — focuses on a handful of
+        # super-compressed core zones whose sqrt(2 KE/m) artificially
+        # blows up. argmax over the full pre-bang window catches that
+        # spike instead of the in-flight peak (16-17 ns vs the actual
+        # ~15.5 ns in-flight peak on picket_012).
         #
-        # Switched to argmax/argmin on the shell velocity history directly:
-        #   t_max_v = time of MAX shell velocity after breakout (pre-bang)
-        #   stag_t  = time of MIN shell velocity AFTER t_max_v (pre-bang)
-        #
-        # No derivatives needed. Robust to small-amplitude noise. Locks
-        # t_max_v to the same time the standalone implosion_velocity_rhino
-        # uses (argmax on the same v_shell), so the two diagnostics are
-        # internally consistent.
+        # Adopting the same approach proven in
+        # _compute_implosion_velocity_rhino:
+        #   1. Restrict search to t < (stag_time - 1.5 ns) -- excludes
+        #      the late-time shell-collapse window
+        #   2. Use scipy.signal.find_peaks with prominence threshold
+        #      to identify significant local maxima
+        #   3. First peak found = in-flight max
+        # Then for stagnation_time:
+        #   argmin of v_shell over [t_max_v, t_bang]
         breakout_t = float(getattr(self.data, 't_breakout_rhino_ns',
                                     self.data.shock_breakout_time_ns or 0.0))
         bang_t = float(getattr(self.data, 'bang_time', 0.0) or time[-1])
-        bang_idx = int(np.argmin(np.abs(time - bang_t)))
+        # Use the pipeline's existing HS-radius-min stag_time as a buffer
+        # reference. RHINO stag_time should come BEFORE this (shell
+        # rebound precedes HS radius minimum).
+        existing_stag_t = float(getattr(self.data, 'stag_time', 0.0) or bang_t)
+        stag_buffer = 1.5  # ns
+        end_t = existing_stag_t - stag_buffer
+        if end_t <= breakout_t:
+            end_t = bang_t
+        end_idx = int(np.argmin(np.abs(time - end_t)))
+        start_idx = int(np.argmin(np.abs(time - breakout_t)))
+        in_flight_idx = np.arange(max(start_idx, 0), max(end_idx + 1, start_idx + 2))
+        in_flight_idx = in_flight_idx[in_flight_idx < n_times]
 
-        # Restrict search to post-breakout, pre-bang window
-        post_breakout_idx = np.where(time >= breakout_t)[0]
-        if len(post_breakout_idx) >= 2:
-            in_flight_idx = post_breakout_idx[post_breakout_idx < bang_idx]
-            if len(in_flight_idx) >= 2:
-                # argmax on v_shell over in-flight window
-                k_max = int(np.argmax(shell_vel_cms[in_flight_idx]))
-                t_max_v_idx = int(in_flight_idx[k_max])
-                t_max_v = float(time[t_max_v_idx])
-                self.data.t_max_shell_velocity_rhino_ns = t_max_v
-
-                # argmin on v_shell in [t_max_v, t_bang]
-                post_max_idx = np.where(
-                    (time > t_max_v) & (time <= bang_t)
-                )[0]
-                if len(post_max_idx) >= 1:
-                    k_min = int(np.argmin(shell_vel_cms[post_max_idx]))
-                    self.data.stag_time_rhino_ns = float(
-                        time[post_max_idx[k_min]]
-                    )
-                else:
-                    self.data.stag_time_rhino_ns = 0.0
+        t_max_v = 0.0
+        if len(in_flight_idx) >= 3:
+            v_window = shell_vel_cms[in_flight_idx]
+            try:
+                from scipy.signal import find_peaks
+                prom_threshold = 0.10 * float(v_window.max())
+                peaks, _ = find_peaks(v_window, prominence=prom_threshold)
+            except Exception:
+                peaks = np.array([], dtype=int)
+            if len(peaks) > 0:
+                k_max = int(peaks[0])  # FIRST significant local max
             else:
-                self.data.t_max_shell_velocity_rhino_ns = 0.0
-                self.data.stag_time_rhino_ns = 0.0
-        else:
-            self.data.t_max_shell_velocity_rhino_ns = 0.0
-            self.data.stag_time_rhino_ns = 0.0
-        t_max_v = self.data.t_max_shell_velocity_rhino_ns
-        stag_t_rhino = self.data.stag_time_rhino_ns
+                k_max = int(np.argmax(v_window))
+            t_max_v_idx = int(in_flight_idx[k_max])
+            t_max_v = float(time[t_max_v_idx])
+        self.data.t_max_shell_velocity_rhino_ns = t_max_v
+
+        # Stagnation_time RHINO = argmin of v_shell in [t_max_v, t_bang]
+        stag_t_rhino = 0.0
+        if t_max_v > 0:
+            post_max_idx = np.where((time > t_max_v) & (time <= bang_t))[0]
+            if len(post_max_idx) >= 1:
+                k_min = int(np.argmin(shell_vel_cms[post_max_idx]))
+                stag_t_rhino = float(time[post_max_idx[k_min]])
+        self.data.stag_time_rhino_ns = stag_t_rhino
 
         # --- 6: assembled_mass at RHINO stagnation_time ---
         # Mass enclosed within shell_outer at t = stag_time_rhino
