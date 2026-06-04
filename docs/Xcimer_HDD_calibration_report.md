@@ -18,7 +18,7 @@ Three independent calibration knobs were identified and characterized:
 
 A picket-vs-FL isolation experiment (`picket_015` vs `picket_012`) confirmed that **the picket is the primary lever and FL is fine-tuning**. With the picket applied, FL changes of ±0.003 produce only ±4% yield difference; without the picket, the same FL change is regime-determining.
 
-Both RHINO conventions used by Will Trickey's postprocessor (implosion velocity, min shell adiabat at CR=1.5) have been clean-room re-implemented in `helios_postprocess/icf_analysis.py` from the RHINO source (`wtrickey27/RHINO`). Direct cross-check by running RHINO 1.5.1 native on the same `.exo` confirms our velocity convention matches to within 2%; our adiabat convention matches Thomas reference to ±7% but reads ~36% higher than RHINO native due to a documented aggregation-order systematic (per-timestep time-interpolated min vs single-snapshot min).
+Both RHINO conventions used by Will Trickey's postprocessor (implosion velocity, min shell adiabat at CR=1.5) have been clean-room re-implemented in `helios_postprocess/icf_analysis.py` from the RHINO source (`wtrickey27/RHINO`). Direct cross-check by running RHINO 1.5.1 native on the same `.exo` confirms our velocity convention matches to within 2%; our adiabat convention matches Thomas reference to ±7%. We initially reported a ~+36% systematic vs RHINO native — that has now been **resolved**: it was an electron-density convention difference (RHINO's `fully_ionized_dt` default assumes Z̄=1; our `partially_ionized` mode uses actual n_e per zone). Adding the `fully_ionized_dt` parallel method reproduces RHINO native to 0.1% (4.13 vs 4.125 on baseline.exo).
 
 **Bottom line: WT_cthomas_baseline_picket_012 is the HDD production calibration anchor**, structurally analogous to fab007 on the PDD side. Cross-tool comparability is established via the RHINO conventions, with a documented +30-40% offset for RHINO-native adiabat comparisons.
 
@@ -306,7 +306,7 @@ The Lindl→RHINO conversion factor varies from ~15 (fully-ionized DT at high T)
 
 The convention-aware comparison framework in `compare_with_published` reads convention-specific keys from the published JSON (`adiabat` = Lindl peak v, `adiabat_rhino_min_cr15` = RHINO min CR=1.5, `adiabat_rhino_formula_*` = proper-Fermi mass-avg variants) so the comparison table renders Δ values only where conventions actually match.
 
-### 5.4 Documented systematic vs RHINO native — same-`.exo` cross-check
+### 5.4 Same-`.exo` cross-check + convention resolution (RESOLVED)
 
 Direct postprocess of `WT_cthomas_baseline.exo` (Will Trickey's original Helios run) by both pipelines independently. Same simulation, same data, two postprocessors:
 
@@ -321,29 +321,31 @@ Direct postprocess of `WT_cthomas_baseline.exo` (Will Trickey's original Helios 
 | Breakout time (ns) | 11.16 | 11.16 | 0% ✓ | — |
 | t at CR=1.5 (ns) | 13.80 | 13.80 | 0% ✓ | — |
 | Shell inner at CR=1.5 (cm) | 0.1224 | matches | <1% ✓ | — |
-| **Where we systematically disagree** | | | | |
-| **RHINO α_min at CR=1.5** | **5.62** | **4.125** | **+36%** | **6.00 ± 0.50** |
-| Δ from Thomas α | −6% ✓ inside band | −31% outside band | — | — |
-| Stagnation time (ns) | 16.81 | 15.47 | +9% | — |
+| **α_min at CR=1.5 — convention resolved (June 2026)** | | | | |
+| Our partially_ionized (actual n_e from EXODUS) | **5.62** | — | — | 6.00 ± 0.50 |
+| Our fully_ionized_dt (n_e = ρ/m_avg_ion) | **4.13** | **4.125** | **0.1%** ✓ | 6.00 ± 0.50 |
+| Δ from Thomas α | −6% (partial) | −31% (fully) | — | — |
+| **Where we still differ (stagnation_time)** | | | | |
+| Stagnation time interpretation | HS-radius-min: 16.81 | shell-velocity-min: 15.47 | +9% | — |
 
-**Two distinct observations:**
+**Convention resolution.** The initially-reported "+36% systematic" on `min_shell_adiabat` (5.62 vs RHINO 4.125) was **NOT** an aggregation-order difference (an earlier hypothesis we explored). Will Trickey's response to a draft of this report, with a min-shell-adiabat-vs-time plot showing his min is ~4 throughout the CR=1.5 timestep neighborhood (not transiently ~5), refuted the aggregation-order hypothesis. The actual cause is the **electron density source** in the per-zone Fermi pressure:
 
-1. **On yield, velocity, breakout, t_cr15, and shell geometry, both postprocessors read the `.exo` identically.** The agreement is exact or to within rounding. We are reading the same simulation; there is no underlying data-interpretation difference.
+- **RHINO's default `fully_ionized_dt` mode** computes n_e = ρ/m_avg_ion (assumes Z̄=1 for every zone, equivalent to n_e = n_ion at full ionization).
+- **Our pipeline's default `partially_ionized` mode** uses `data.electron_density` from EXODUS per zone (accounts for actual ionization state).
 
-2. **On `min_shell_adiabat`, the +36% gap is purely a postprocess aggregation-order difference**, not a simulation or data-reading difference:
+For pure DT zones (Z̄=1 at full ionization) the two are identical. For the multi-material DT/CD foam zones that make up the WT_cthomas shell at CR=1.5, they diverge by the local Z̄ factor. Higher actual Z̄ → higher actual n_e → higher actual P_Fermi → lower actual α relative to the Z̄=1-assumed value.
 
-  - **RHINO's pattern**: `adiabat.min_between(shell_inner, shell_outer)` computed at every discrete timestep individually → produces an `ImplosionVariable` time series of min-over-shell-zones; then `at_time(t_cr15)` linearly interpolates that series.
-  - **Our pipeline's pattern**: pick the discrete timestep nearest `t_cr15`; compute the shell at that single snapshot; take min over zones in it once.
+We added `data.adiabat_min_rhino_fully_ionized` mirroring RHINO's default convention. On `WT_cthomas_baseline.exo`: **4.13 vs Will's RHINO native 4.125 — match to 0.1%.** The convention story is fully closed.
 
-  RHINO's per-timestep min can catch transiently colder zones between snapshots that our single-snapshot approach misses. Closing this fully would require porting RHINO's `ImplosionVariable.at_time` time-interpolation pattern. Not pursued because the Thomas reference comparison (±7%) is the operationally meaningful calibration check, and the picket-vs-baseline trend (+14% lift) is signed correctly and consistent regardless of aggregation order.
+**Disposition of Will's "mass-avg might match Thomas" hypothesis.** Will noted Thomas may have reported mass-averaged α rather than min. Implemented `data.adiabat_mass_avg_rhino_fully_ionized` — on `picket_012` gives 9.66, on `baseline` gives 7.02. Neither matches Thomas's 6.0. So Thomas's α=6.0 is not mass-avg-fully-ionized either.
 
-  Notably, on this particular `.exo` (`baseline`, fallback EOS), our pipeline lands closer to Thomas's 6.0 (−6%) than RHINO native does (−31%). Whether this is meaningful or coincidental — and whether Thomas's reported α is itself computed using per-timestep aggregation or single-snapshot — is unclear without examining the Thomas paper's postprocess methodology in detail.
+**Best guess on Thomas's reporting convention.** Most modern multi-physics radiation-hydrodynamics codes (including HYDRA) track ionization state per zone. Thomas's reported α=6.0 most likely uses min shell adiabat with the per-zone actual electron density — i.e., the `partially_ionized` convention. Our pipeline gives 6.43 on `picket_012` in that convention, matching Thomas to +7% (well within the published ±0.5 uncertainty). Awaiting Will's discussion with Cliff to confirm what n_e treatment HYDRA reports α with.
 
-**Documented systematic offset**: `data.adiabat_min_rhino` reads ~30–40% higher than RHINO native on the same `.exo`. Use as:
+**Practical guidance** (now that the convention is identified):
 
-- Direct value for Thomas / publication comparison (matches to ±7% across all four WT_cthomas configurations).
-- Subtract ~30–40% for direct RHINO-native comparison (e.g. against Will's published RHINO postprocess outputs).
-- Trend direction + ratios for picket-shaping diagnostics (picket effect = +14% Helios pipeline; same direction in RHINO native if recomputed there).
+- For Thomas / Olson / publication comparison: use `data.adiabat_min_rhino` (partially_ionized) — matches the per-zone-n_e convention most modern codes appear to use.
+- For direct RHINO-native cross-check on the same `.exo`: use `data.adiabat_min_rhino_fully_ionized` — matches Will's RHINO output to 0.1%.
+- For multi-material foam targets with non-DT components: the two conventions diverge by ~10–40% depending on local Z̄.
 
 ---
 
@@ -385,7 +387,7 @@ These are the **same family of residuals documented for the PDD fab007 calibrati
 
 ### 7.4 Open items deferred
 
-- Port RHINO's per-timestep min-shell-adiabat time-interpolation to close the +36% RHINO-native systematic (~1 hour; improves cross-tool comparability without changing Thomas conclusions).
+- **RESOLVED June 2026**: Port RHINO's per-timestep min-shell-adiabat time-interpolation (hypothesized as the source of the +36% systematic, now disproven). The actual cause was the n_e source convention (`fully_ionized_dt` vs `partially_ionized`). `data.adiabat_min_rhino_fully_ionized` now reproduces RHINO native to 0.1%. See §5.4.
 - Investigate RHINO `stagnation_time` definition (RHINO reports 15.47 ns on baseline, ours 16.81 ns).
 - Apply the proper-degenerate-electron-gas Fermi pressure formula (used in RHINO α_min) more broadly to the existing Lindl-convention adiabat methods, to see how it shifts the historical PDD calibration numbers.
 

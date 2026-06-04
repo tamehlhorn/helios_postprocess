@@ -198,9 +198,9 @@ Validation across four WT_cthomas configurations:
 
 `data.implosion_velocity_rhino_kms` is the production-ready cross-tool metric.
 
-### 5.2 Min shell adiabat convention — VALIDATED to Thomas; +36% systematic vs RHINO native
+### 5.2 Min shell adiabat convention — RESOLVED June 2026 (n_e source, not aggregation)
 
-**Same-`.exo` direct cross-check on `WT_cthomas_baseline.exo`** (June 2026, code rev 8986f50, both postprocessors reading the same file):
+**Same-`.exo` cross-check on `WT_cthomas_baseline.exo`** (both postprocessors reading the same file):
 
 | Metric | Helios pipeline | RHINO native | Δ | Thomas |
 |---|---:|---:|---:|---:|
@@ -211,11 +211,19 @@ Validation across four WT_cthomas configurations:
 | Breakout time (ns) | 11.16 | 11.16 | 0% ✓ | — |
 | t at CR=1.5 (ns) | 13.80 | 13.80 | 0% ✓ | — |
 | Shell inner at CR=1.5 (cm) | 0.1224 | matches | <1% ✓ | — |
-| **Where we disagree** | | | | |
-| **RHINO α_min at CR=1.5** | **5.62** | **4.125** | **+36%** | **6.0 ± 0.5** |
-| Stagnation time (ns) | 16.81 | 15.47 | +9% | — |
+| **α_min CR=1.5 — convention resolved** | | | | |
+| `partially_ionized` (actual n_e) | **5.62** | — | — | 6.0 ± 0.5 |
+| `fully_ionized_dt` (n_e = ρ/m_avg) | **4.13** | **4.125** | **0.1%** ✓ | 6.0 ± 0.5 |
+| **Where we still differ** | | | | |
+| Stagnation time interpretation | 16.81 (HS rad min) | 15.47 (shell v min) | +9% | — |
 
-Both postprocessors read the same `.exo` identically on yield, velocity, breakout, t_cr15, and shell geometry. The +36% gap on α_min is purely a postprocess aggregation-order difference (see below). Our pipeline value (5.62) lands closer to Thomas's published α=6.0 (−6%) than RHINO native (4.125, −31%).
+**Initial hypothesis (aggregation-order difference) was WRONG.** Will Trickey's response to the report draft included a min-shell-adiabat-vs-time plot showing his min is ~4 throughout the t_cr=1.5 neighborhood, not transiently ~5 — refuting the per-timestep-vs-snapshot story.
+
+**Actual cause: electron density source.** RHINO's default `fully_ionized_dt` mode uses n_e = ρ/m_avg_ion (assumes Z̄=1 for every zone). Our default `partially_ionized` mode uses `data.electron_density` from EXODUS per zone. For pure DT they're identical; for multi-material DT/CD foam shells they diverge by local Z̄.
+
+Added `data.adiabat_min_rhino_fully_ionized` mirroring RHINO's default — reproduces RHINO native to **0.1%** (4.13 vs 4.125 on `baseline.exo`). Convention story fully closed.
+
+Will's "mass-avg might match Thomas" hypothesis also tested: mass-avg fully_ionized gives 9.66 on picket_012, 7.02 on baseline. Neither is Thomas's 6.0. Most likely Thomas's α uses per-zone actual n_e (HYDRA tracks ionization state per zone like most modern codes) — matching our partially_ionized mode, which gives 6.43 on picket_012 (+7% vs Thomas). Awaiting Will's confirmation from Cliff.
 
 
 Algorithm (from RHINO source, clean-room reimpl in `_compute_adiabat_min_rhino`):
@@ -244,7 +252,7 @@ Algorithm (from RHINO source, clean-room reimpl in `_compute_adiabat_min_rhino`)
 
 - **Helios vs Thomas (publication reference):** All runs match Thomas within ±7% (with picket_012 the closest at +7%). Operationally meaningful: this is the actual calibration target.
 
-- **Helios vs RHINO native (postprocessor comparison):** ~36% systematic offset traced to aggregation order. RHINO computes `min_shell_adiabat` per timestep then `at_time(t)` interpolates the time series; our pipeline picks the discrete timestep nearest `t_cr15` and takes min over that snapshot. RHINO's per-timestep min catches transiently colder zones between snapshots. Not pursued because the Thomas comparison is the actual calibration check.
+- **Helios vs RHINO native (postprocessor comparison):** initially appeared as +36% systematic; **RESOLVED June 2026** as electron-density convention difference (see §5.2). Adding the `fully_ionized_dt` variant matches RHINO native to 0.1%.
 
 **Documented systematic offset**: `data.adiabat_min_rhino` reads ~30-40% higher than RHINO native on the same `.exo`. Use as: direct value for Thomas comparison, subtract ~30-40% for direct RHINO-native comparison, trend direction + ratios for picket-shaping diagnostics.
 
@@ -271,14 +279,14 @@ The 7× max ratio is intrinsic to spherical geometry at r=0 (full sphere of widt
 
 ### 6.3 "Will's reported α=4.13 differs from ours because of different EOS state" — WRONG
 
-Re-extracted both baseline (fallback EOS) and baseline_tm (proper EOS) with the updated RHINO algorithm. Both give α_min = 5.62 — the EOS doesn't affect this metric at CR=1.5 (in-flight phase, well before EOS-sensitive stagnation bounce). The ~36% gap vs Will's RHINO native 4.125 is entirely in aggregation order (see §5.2).
+Re-extracted both baseline (fallback EOS) and baseline_tm (proper EOS) with the updated RHINO algorithm. Both give α_min = 5.62 — the EOS doesn't affect this metric at CR=1.5 (in-flight phase, well before EOS-sensitive stagnation bounce). The ~36% gap vs Will's RHINO native 4.125 is from electron density convention (`fully_ionized_dt` vs `partially_ionized`); RESOLVED June 2026 (see §5.2).
 
 ---
 
 ## 7. Open items (deferred — not calibration-blockers)
 
-1. **RHINO `min_shell_adiabat` per-timestep aggregation** — close the 36% systematic by porting RHINO's `ImplosionVariable.at_time` time-interpolation of the per-timestep min. ~1 hour. Improves cross-tool comparability but doesn't change any Thomas-comparison conclusions.
-2. ~~**WT_cthomas_baseline_picket_015 validation**~~ — **DONE June 2.** Result: yield 245.3 MJ (-4% Thomas), hydro eff 8.3% (matches), α_min RHINO 6.49 (+8% Thomas). **Picket is the dominant lever; FL is secondary** (yield difference picket_015 vs picket_012 is only ±4%; without picket, FL changes are regime-determining). Captured in §3 Knob 2b.
+1. **DONE June 2026: RHINO `min_shell_adiabat` cross-tool match.** Initial hypothesis (port per-timestep aggregation) was tested and DISPROVEN. The +36% systematic was the n_e source convention (`fully_ionized_dt` vs `partially_ionized`), not aggregation order. `data.adiabat_min_rhino_fully_ionized` now reproduces RHINO native to 0.1%. See §5.2.
+2. **DONE June 2: WT_cthomas_baseline_picket_015 validation.** Result: yield 245.3 MJ (-4% Thomas), hydro eff 8.3% (matches), α_min RHINO 6.49 (+8% Thomas). **Picket is the dominant lever; FL is secondary** (yield difference picket_015 vs picket_012 is only ±4%; without picket, FL changes are regime-determining). Captured in §3 Knob 2b.
 3. **RHINO `stagnation_time` definition** — RHINO reports 15.47 ns on baseline, ours 16.81 ns. Doesn't affect adiabat result (t_cr15 matches), but worth understanding which physical event RHINO pins to. Background TODO.
 4. **PDF report HDD section** — add a dedicated HDD calibration figure to the Xcimer report, mirroring the PDD design-comparison plot. `examples/hdd_design_comparison.py` produces the multi-panel figure; needs to be embedded in the report narrative.
 5. **Persistent 1D residuals** (imploded DT mass, T_hs overshoot, fraction absorbed) — same gaps documented on the PDD side; not closeable inside Helios 1D. Documented as known limitations.
