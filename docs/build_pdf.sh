@@ -7,9 +7,10 @@
 # a temp pdfsafe copy of the markdown before xelatex runs.
 #
 # Usage:
-#   bash docs/build_pdf.sh                  # build both reports
+#   bash docs/build_pdf.sh                  # build both calibration reports
 #   bash docs/build_pdf.sh HDD              # build only HDD report
 #   bash docs/build_pdf.sh PDD              # build only PDD report
+#   bash docs/build_pdf.sh KYLE             # build Kyle's onboarding doc
 #
 # Requirements:
 #   - MacTeX (xelatex) at /Library/TeX/texbin
@@ -91,6 +92,12 @@ if [ "$TARGET" = "BOTH" ] || [ "$TARGET" = "PDD" ]; then
   build_one Xcimer_PDD_calibration_report \
     "Helios PDD Calibration: Foam-Burn Deficit and Root-Cause Analysis" \
     "2026-05-28"
+fi
+
+if [ "$TARGET" = "KYLE" ]; then
+  build_one Kyle_summer_onboarding \
+    "Coordinating with the helios_postprocess Project -- Summer 2026" \
+    "2026-06-04"
 fi
 
 echo "Done."
