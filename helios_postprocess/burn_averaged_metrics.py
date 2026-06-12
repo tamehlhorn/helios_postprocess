@@ -411,6 +411,14 @@ def extract_histories_from_run_data(data) -> Dict:
         't_foot_shock_breakout_ns': float(getattr(data, 't_foot_shock_ns', float('nan'))),
         't_ramp_shock_breakout_ns': float(getattr(data, 't_ramp_shock_ns', float('nan'))),
         't_peak_shock_breakout_ns': float(getattr(data, 't_peak_shock_ns', float('nan'))),
+        # ── Will list extensions (June 4 2026) ───────────────────
+        'cr_outer':                       getattr(data, 'cr_outer', 0.0),
+        'laser_overlapped_intensity_Wcm2': getattr(data, 'laser_overlapped_intensity_Wcm2', 0.0),
+        'shell_mass_at_stagnation_mg':    getattr(data, 'shell_mass_at_stagnation_mg', 0.0),
+        'hot_spot_mass_at_stagnation_mg': getattr(data, 'hot_spot_mass_at_stagnation_mg', 0.0),
+        'stag_time_areal_density':        getattr(data, 'stag_time_areal_density', 0.0),
+        'stag_time_fuel_areal_density':   getattr(data, 'stag_time_fuel_areal_density', 0.0),
+        'neutron_ave_electron_temperature': getattr(data, 'neutron_ave_electron_temperature', 0.0),
     }
 
 
@@ -572,6 +580,14 @@ def calculate_burn_averaged_metrics(histories: Dict,
         't_foot_shock_breakout_ns': histories.get('t_foot_shock_breakout_ns', float('nan')),
         't_ramp_shock_breakout_ns': histories.get('t_ramp_shock_breakout_ns', float('nan')),
         't_peak_shock_breakout_ns': histories.get('t_peak_shock_breakout_ns', float('nan')),
+        # Will list extensions (pass through)
+        'cr_outer':                          histories.get('cr_outer', 0.0),
+        'laser_overlapped_intensity_Wcm2':   histories.get('laser_overlapped_intensity_Wcm2', 0.0),
+        'shell_mass_at_stagnation_mg':       histories.get('shell_mass_at_stagnation_mg', 0.0),
+        'hot_spot_mass_at_stagnation_mg':    histories.get('hot_spot_mass_at_stagnation_mg', 0.0),
+        'stag_time_areal_density':           histories.get('stag_time_areal_density', 0.0),
+        'stag_time_fuel_areal_density':      histories.get('stag_time_fuel_areal_density', 0.0),
+        'neutron_ave_electron_temperature':  histories.get('neutron_ave_electron_temperature', 0.0),
         # Burn-rate weighting profile
         'burn_fraction':    burn_fraction,
         'burn_rate':        burn_rate,
@@ -834,6 +850,28 @@ def compare_with_published(sim_metrics: Dict,
           if np.isfinite(sim_metrics.get('t_peak_shock_breakout_ns', float('nan')))
           else -1.0),
          't_peak_shock_breakout_ns', None, '.2f'),
+        # --- Will list extensions (June 4 2026) ---
+        ('Outer convergence ratio',
+         sim_metrics.get('cr_outer', 0.0),
+         'cr_outer', None, '.2f'),
+        ('Laser overlapped intensity (W/cm²)',
+         sim_metrics.get('laser_overlapped_intensity_Wcm2', 0.0),
+         'laser_overlapped_intensity_Wcm2', None, '.2e'),
+        ('Shell mass at stagnation (mg)',
+         sim_metrics.get('shell_mass_at_stagnation_mg', 0.0),
+         'shell_mass_at_stagnation_mg', None, '.3f'),
+        ('Hot-spot mass at stagnation (mg)',
+         sim_metrics.get('hot_spot_mass_at_stagnation_mg', 0.0),
+         'hot_spot_mass_at_stagnation_mg', None, '.4f'),
+        ('Total ρR at stagnation (g/cm²)',
+         sim_metrics.get('stag_time_areal_density', 0.0),
+         'stag_time_areal_density', None, '.3f'),
+        ('Cold-fuel ρR at stagnation (g/cm²)',
+         sim_metrics.get('stag_time_fuel_areal_density', 0.0),
+         'stag_time_fuel_areal_density', None, '.3f'),
+        ('Neutron-averaged T_e (keV)',
+         sim_metrics.get('neutron_ave_electron_temperature', 0.0),
+         'neutron_ave_electron_temperature', None, '.2f'),
     ]
 
     has_implosion = False

@@ -285,6 +285,37 @@ class ICFRunData:
         self.ablation_pressure_at_cr_3p5_Mbar: float = 0.0  # Vulcan HDD
                                                 # design convention
         self.t_at_cr_3p5_ns: float = 0.0       # audit
+
+        # ── Will list extensions (June 4 2026) ───────────────────
+        # Items from W. Trickey's variable list (June 2026) that were
+        # not previously named scalars. Definitions independent of the
+        # five open convention questions ("shell" / "hotspot" /
+        # hydro-efficiency denominator / stag-time / bang-time-burn-off);
+        # the convention-dependent items wait on Will's response.
+        self.cr_outer: float = 0.0             # outer convergence ratio
+                                               # R_outer(t=0) / R_outer(t_stag)
+                                               # using shell_outer_pos_history_cm
+                                               # (rho > rho_peak/e). RHINO equiv:
+                                               # derivable from sim.shell_outer.
+        self.laser_overlapped_intensity_Wcm2: float = 0.0  # peak power /
+                                               # (4π R0²), where R0 is the
+                                               # initial capsule outer radius.
+                                               # Will's "overlapped intensity".
+        self.shell_mass_at_stagnation_mg: float = 0.0     # shell_mass_history
+                                               # evaluated at stag_time_rhino_ns
+        self.hot_spot_mass_at_stagnation_mg: float = 0.0  # Σ zone_mass[stag,
+                                               # 0:ri[stag, 0]] -- mass inside
+                                               # gas/cold-fuel boundary at stag
+        self.stag_time_areal_density: float = 0.0        # g/cm² -- total ρR
+                                               # at stagnation (parallel to
+                                               # bang_time_areal_density)
+        self.stag_time_fuel_areal_density: float = 0.0   # g/cm² -- cold-fuel ρR
+                                               # at stagnation
+        self.neutron_ave_electron_temperature: float = 0.0  # keV -- mirror of
+                                               # neutron_ave_ion_temperature
+                                               # using elec_temperature in the
+                                               # same neutron-rate-weighted
+                                               # average
         # Adiabat using RHINO's fully_ionized_dt convention (n_e = ρ/m_avg_ion
         # instead of actual electron_density). This is RHINO's default --
         # matches Will Trickey's RHINO native output. Pure DT zones give

@@ -1498,6 +1498,76 @@ class ICFAnalyzer:
             f"(at t={self.data.t_at_cr_3p5_ns:.3f} ns)"
         )
 
+        # ── Will list extensions (June 4 2026) ───────────────────
+        # Items below depend on the shell histories computed above plus
+        # stag_time_rhino_ns. Convention-dependent items wait on Will's
+        # response (see Tom email June 4); these are the ones that have
+        # unambiguous physics definitions.
+
+        # Outer convergence ratio: R_outer(t=0) / R_outer(t_stag_rhino)
+        self.data.cr_outer = 0.0
+        if (stag_t_rhino > 0
+                and not np.isnan(shell_outer_pos[0])
+                and shell_outer_pos[0] > 0):
+            stag_idx_rhino = int(np.argmin(np.abs(time - stag_t_rhino)))
+            so_at_stag = shell_outer_pos[stag_idx_rhino]
+            if not np.isnan(so_at_stag) and so_at_stag > 0:
+                self.data.cr_outer = float(shell_outer_pos[0] / so_at_stag)
+
+        # Shell mass at stagnation (RHINO convention) -- mg
+        self.data.shell_mass_at_stagnation_mg = 0.0
+        if stag_t_rhino > 0:
+            stag_idx_rhino = int(np.argmin(np.abs(time - stag_t_rhino)))
+            self.data.shell_mass_at_stagnation_mg = float(shell_mass_g[stag_idx_rhino]) * 1e3
+
+        # Hot-spot mass at stagnation -- mg. HS boundary = ri[stag, 0]
+        # (Lagrangian gas/cold-fuel interface). Will's "hotspot" definition
+        # is one of the open convention questions; this uses our default.
+        self.data.hot_spot_mass_at_stagnation_mg = 0.0
+        ri = self.data.region_interfaces_indices
+        if stag_t_rhino > 0 and ri is not None and ri.shape[1] >= 1:
+            stag_idx_rhino = int(np.argmin(np.abs(time - stag_t_rhino)))
+            hs_bnd = int(ri[stag_idx_rhino, 0])
+            self.data.hot_spot_mass_at_stagnation_mg = float(
+                np.sum(zmass[stag_idx_rhino, :hs_bnd])
+            ) * 1e3
+
+        # Stag-time areal densities (total + cold-fuel) -- parallel to the
+        # existing bang_time_* variants. Capsule outer = ri[:, fuel_ablator_idx]
+        # for capsule targets; for halfraum the capsule_outer_idx helper kicks
+        # in (he gap and Cu liner excluded).
+        self.data.stag_time_areal_density = 0.0
+        self.data.stag_time_fuel_areal_density = 0.0
+        ad_cumul = getattr(self.data, 'areal_density_vs_time', None)
+        if (stag_t_rhino > 0
+                and ad_cumul is not None
+                and ri is not None
+                and ri.shape[1] >= 2):
+            stag_idx_rhino = int(np.argmin(np.abs(time - stag_t_rhino)))
+            hs_bnd = int(ri[stag_idx_rhino, 0])
+            # Capsule outer node (handles halfraum) — fall through to last
+            # column for plain capsules
+            if hasattr(self.data, 'capsule_outer_node'):
+                n_outer = self.data.capsule_outer_node(stag_idx_rhino)
+            else:
+                n_outer = int(ri[stag_idx_rhino, -1])
+            fuel_ablator = int(ri[stag_idx_rhino,
+                                  getattr(self.data, 'fuel_ablator_idx', -2)])
+            self.data.stag_time_areal_density = float(ad_cumul[stag_idx_rhino, n_outer])
+            self.data.stag_time_fuel_areal_density = float(
+                ad_cumul[stag_idx_rhino, fuel_ablator]
+                - ad_cumul[stag_idx_rhino, hs_bnd]
+            )
+
+        logger.info(
+            f"Will list extensions: "
+            f"cr_outer={self.data.cr_outer:.3f}, "
+            f"M_shell@stag={self.data.shell_mass_at_stagnation_mg:.3f} mg, "
+            f"M_hs@stag={self.data.hot_spot_mass_at_stagnation_mg:.4f} mg, "
+            f"rhoR@stag (total)={self.data.stag_time_areal_density:.3f} g/cm², "
+            f"rhoR@stag (fuel)={self.data.stag_time_fuel_areal_density:.3f} g/cm²"
+        )
+
     def _compute_burn_fraction_rhino_late(self):
         """
         Deferred burn_fraction calculation. Runs from analyze_burn_phase
@@ -2665,17 +2735,54 @@ class ICFAnalyzer:
                     f"(at t = {self.data.time[peak_idx]:.3f} ns)")
     
     def _find_bang_time(self):
-        """Find bang time from peak fusion power."""
+        """Find bang time.
+
+        Primary: peak total DT fusion power (mass-weighted sum across zones).
+
+        Burn-off fallback (W. Trickey convention, June 2026): when no DT
+        yield is produced, return the timestep of peak total plasma
+        pressure summed over the capsule. This keeps bang_time meaningful
+        for design-phase (no-burn) runs where Will's variable list wants
+        a defined value.
+        """
         if self.data.fusion_power is None:
             logger.warning("Could not determine bang time: no fusion data")
             self.data.bang_time = self.data.stag_time
             return
-        
-        # Find time of peak fusion power
-        total_fusion = np.sum(self.data.fusion_power, axis=1)
-        bang_idx = np.argmax(total_fusion)
+
+        # Mass-weight per CLAUDE.md §5b (fusion_power is reactions/s/g)
+        zm = self.data.zone_mass
+        if zm is not None and zm.shape == self.data.fusion_power.shape:
+            total_fusion = np.sum(self.data.fusion_power * zm, axis=1)
+        else:
+            total_fusion = np.sum(self.data.fusion_power, axis=1)
+
+        # Burn-off detection: any-fusion threshold ~ machine eps relative
+        # to a notional 1e10 reactions/s/g floor. Anything below that is
+        # numerically zero on the burn-off branch.
+        burn_off = float(np.max(total_fusion)) < 1.0
+        if burn_off and self.data.plasma_pressure is not None:
+            # Peak total plasma pressure summed over capsule zones.
+            # Capsule outer node handles halfraum (excludes He gap + Cu)
+            # while passing through to grid edge for plain capsules.
+            n_t = self.data.plasma_pressure.shape[0]
+            p_sum = np.zeros(n_t)
+            for t in range(n_t):
+                if hasattr(self.data, 'capsule_outer_node'):
+                    z_hi = self.data.capsule_outer_node(t)
+                else:
+                    z_hi = self.data.plasma_pressure.shape[1]
+                p_sum[t] = float(np.sum(self.data.plasma_pressure[t, :z_hi]))
+            bang_idx = int(np.argmax(p_sum))
+            self.data.bang_time = self.data.time[bang_idx]
+            logger.info(
+                f"Bang time (burn-off, peak total pressure convention): "
+                f"{self.data.bang_time:.3f} ns")
+            return
+
+        bang_idx = int(np.argmax(total_fusion))
         self.data.bang_time = self.data.time[bang_idx]
-        
+
         logger.info(f"Bang time: {self.data.bang_time:.3f} ns")
     
     def _compute_hot_spot_properties(self):
@@ -3276,6 +3383,27 @@ class ICFAnalyzer:
         else:
             logger.warning("Ion temperature not available for neutron averaging")
 
+        # ---- Neutron-averaged electron temperature (W. Trickey list, June 2026) ----
+        # Identical convention to ion-T above, swapping elec_temperature for
+        # ion_temperature. T_e and T_i differ in the hotspot during burn
+        # (electrons drag ions through equilibration); neutron-averaged T_e is
+        # the conditions seen by the *electron-mediated* radiation channel.
+        if self.data.elec_temperature is not None:
+            n_times = len(dt_array)
+            n_zones = min(self.data.elec_temperature.shape[1], fusion_rate.shape[1])
+
+            t_e_sum = 0.0
+            for t in range(n_times):
+                dt = dt_array[t]
+                for z in range(n_zones):
+                    t_e_sum += self.data.elec_temperature[t, z] * fusion_rate[t, z] * dt
+
+            self.data.neutron_ave_electron_temperature = t_e_sum / neutron_yield / 1000.0
+            logger.info(f"Neutron-averaged electron temperature: "
+                        f"{self.data.neutron_ave_electron_temperature:.2f} keV")
+        else:
+            logger.warning("Electron temperature not available for neutron averaging")
+
         # ---- Neutron-averaged pressure ----
         if self.data.ion_pressure is not None:
             n_times = len(dt_array)
@@ -3300,11 +3428,34 @@ class ICFAnalyzer:
     def compute_performance_metrics(self):
         """Compute overall performance metrics."""
         logger.info("Computing performance metrics...")
-        
+
         # Target gain
         if self.data.laser_energy > 0 and self.data.energy_output > 0:
             self.data.target_gain = self.data.energy_output / self.data.laser_energy
             logger.info(f"Target gain: {self.data.target_gain:.3f}")
+
+        # Laser overlapped intensity (W. Trickey list, June 2026):
+        # peak laser power / (4π R0²), where R0 is the initial capsule outer
+        # radius. capsule_outer_node(0) handles halfraum geometry (CD outer,
+        # not Cu outer); falls back to grid edge for plain capsules.
+        self.data.laser_overlapped_intensity_Wcm2 = 0.0
+        if (self.data.laser_peak_power_TW > 0
+                and self.data.zone_boundaries is not None):
+            if hasattr(self.data, 'capsule_outer_node'):
+                outer_node_0 = self.data.capsule_outer_node(0)
+            else:
+                outer_node_0 = self.data.zone_boundaries.shape[1] - 1
+            R0_cm = float(self.data.zone_boundaries[0, outer_node_0])
+            if R0_cm > 0:
+                P_peak_W = self.data.laser_peak_power_TW * 1e12
+                area_cm2 = 4.0 * np.pi * R0_cm * R0_cm
+                self.data.laser_overlapped_intensity_Wcm2 = P_peak_W / area_cm2
+                logger.info(
+                    f"Laser overlapped intensity: "
+                    f"{self.data.laser_overlapped_intensity_Wcm2:.3e} W/cm² "
+                    f"(P_peak={self.data.laser_peak_power_TW:.1f} TW, "
+                    f"R0={R0_cm:.4f} cm)"
+                )
         
         # Convergence ratios require a defined hot-spot interface (>= 2 regions).
         # Single-region targets (CH-only slab/sphere flux-limiter tests) have
