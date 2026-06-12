@@ -533,6 +533,12 @@ class ICFAnalyzer:
         # mass-averaged adiabat, sound speed, shell mass with new boundaries.
         self._compute_will_shell_diagnostics()
 
+        # W. Trickey June 2026 ignition-product timing (CLAUDE.md §18d/e):
+        # peak HS quantities sampled at the time the ignition figure-of-
+        # merit peaks, not at a fixed kinematic landmark. Three averaging
+        # methods (volume/mass/neutron) for each of P_hs and T_i.
+        self._compute_will_ignition_diagnostics()
+
         # Compute in-flight aspect ratio
         self._compute_ifar()
         
@@ -2659,6 +2665,121 @@ class ICFAnalyzer:
             f"alpha_mass_avg@CR=1.5={self.data.adiabat_mass_avg_will_cr15:.2f}, "
             f"c_s_shell@CR=1.5={self.data.sound_speed_shell_will_cr15_kms:.1f} km/s "
             f"(t={self.data.t_will_shell_cr15_ns:.3f} ns)"
+        )
+
+    def _compute_will_ignition_diagnostics(self):
+        """
+        W. Trickey June 2026 ignition-product timing (CLAUDE.md §18d/e).
+
+        Peak hotspot quantities are evaluated at the time the ignition
+        product peaks, not at a fixed kinematic landmark (stagnation,
+        ignition threshold, or bang).
+
+        Two products:
+            Lawson:      rhoR_hs(t) x T_i_hs(t)    (volume-avg T_i used)
+            Confinement: P_hs(t)    x R_hs(t)      (volume-avg P_hs used)
+
+        The HS region is the Lagrangian gas/cold-fuel interior
+        (zones [0, ri[t, 0])).
+
+        At each peak-product time, record three averagings of the
+        relevant quantity:
+            Volume-averaged (default per Will): Sum Q V / Sum V
+            Mass-averaged: Sum Q m / Sum m
+            Neutron-averaged: already stored in data.neutron_ave_* globally
+
+        Stored on data: t_peak_rhoR_Ti_ns, peak_rhoR_Ti_gcm2_keV,
+        rhoR_hs_at_peak_rhoR_Ti_gcm2, T_i_volume_avg_at_peak_rhoR_Ti_keV,
+        T_i_mass_avg_at_peak_rhoR_Ti_keV, t_peak_Phs_Rhs_ns,
+        peak_Phs_Rhs_Gbar_um, R_hs_at_peak_Phs_Rhs_um,
+        P_hs_volume_avg_at_peak_Phs_Rhs_Gbar,
+        P_hs_mass_avg_at_peak_Phs_Rhs_Gbar.
+        """
+        if (self.data.region_interfaces_indices is None
+                or self.data.zone_boundaries is None
+                or self.data.zone_mass is None
+                or getattr(self.data, 'plasma_pressure', None) is None
+                or self.data.ion_temperature is None):
+            logger.info("Will ignition diagnostics: missing inputs")
+            return
+
+        ri = self.data.region_interfaces_indices
+        zbnd = self.data.zone_boundaries
+        zmass = self.data.zone_mass
+        plasma_P = self.data.plasma_pressure          # J/cm^3
+        T_i_eV = self.data.ion_temperature            # eV
+        time = self.data.time                         # ns
+        n_times = plasma_P.shape[0]
+
+        if ri.shape[1] < 1:
+            logger.info("Will ignition diagnostics: no HS boundary defined")
+            return
+
+        # HS radius history = zbnd[t, ri[t, 0]] (outer edge of HS region)
+        hs_radius_cm = np.full(n_times, np.nan)
+        # Volume- and mass-averaged P_hs and T_i_hs over [0, ri[t, 0])
+        P_hs_vol_avg_Gbar = np.zeros(n_times)
+        P_hs_mass_avg_Gbar = np.zeros(n_times)
+        T_i_vol_avg_keV = np.zeros(n_times)
+        T_i_mass_avg_keV = np.zeros(n_times)
+
+        for t in range(n_times):
+            hs_bnd = int(ri[t, 0])
+            if hs_bnd <= 0:
+                continue
+            r_outer_zones = zbnd[t, 1:hs_bnd + 1]
+            r_inner_zones = zbnd[t, :hs_bnd]
+            # Spherical zone volumes (cm^3)
+            V_z = (4.0 / 3.0) * np.pi * (r_outer_zones ** 3 - r_inner_zones ** 3)
+            V_tot = float(np.sum(V_z))
+            m_z = zmass[t, :hs_bnd]
+            m_tot = float(np.sum(m_z))
+            P_z_Gbar = plasma_P[t, :hs_bnd] * 1e-8    # J/cm^3 -> Gbar
+            T_z_keV = T_i_eV[t, :hs_bnd] * 1e-3
+            if V_tot > 0:
+                P_hs_vol_avg_Gbar[t] = float(np.sum(P_z_Gbar * V_z) / V_tot)
+                T_i_vol_avg_keV[t]   = float(np.sum(T_z_keV * V_z) / V_tot)
+            if m_tot > 0:
+                P_hs_mass_avg_Gbar[t] = float(np.sum(P_z_Gbar * m_z) / m_tot)
+                T_i_mass_avg_keV[t]   = float(np.sum(T_z_keV * m_z) / m_tot)
+            hs_radius_cm[t] = float(zbnd[t, hs_bnd])
+
+        # Hot-spot areal density history (from analyze_stagnation_phase)
+        rhoR_hs = getattr(self.data, 'hot_spot_rhoR_vs_time', None)
+        if rhoR_hs is None or len(rhoR_hs) != n_times:
+            logger.info("Will ignition diagnostics: hot_spot_rhoR_vs_time "
+                        "unavailable; skipping rhoR x T_i product")
+            rhoR_hs = None
+
+        # Lawson product peak time
+        if rhoR_hs is not None:
+            lawson = np.where(np.isfinite(rhoR_hs) & np.isfinite(T_i_vol_avg_keV),
+                              rhoR_hs * T_i_vol_avg_keV, 0.0)
+            if np.any(lawson > 0):
+                t_law = int(np.argmax(lawson))
+                self.data.t_peak_rhoR_Ti_ns = float(time[t_law])
+                self.data.peak_rhoR_Ti_gcm2_keV = float(lawson[t_law])
+                self.data.rhoR_hs_at_peak_rhoR_Ti_gcm2 = float(rhoR_hs[t_law])
+                self.data.T_i_volume_avg_at_peak_rhoR_Ti_keV = float(T_i_vol_avg_keV[t_law])
+                self.data.T_i_mass_avg_at_peak_rhoR_Ti_keV = float(T_i_mass_avg_keV[t_law])
+
+        # Confinement product peak time (P_hs x R_hs)
+        confinement = np.where(np.isfinite(P_hs_vol_avg_Gbar) & np.isfinite(hs_radius_cm),
+                               P_hs_vol_avg_Gbar * hs_radius_cm * 1e4, 0.0)  # cm -> um
+        if np.any(confinement > 0):
+            t_con = int(np.argmax(confinement))
+            self.data.t_peak_Phs_Rhs_ns = float(time[t_con])
+            self.data.peak_Phs_Rhs_Gbar_um = float(confinement[t_con])
+            self.data.R_hs_at_peak_Phs_Rhs_um = float(hs_radius_cm[t_con] * 1e4)
+            self.data.P_hs_volume_avg_at_peak_Phs_Rhs_Gbar = float(P_hs_vol_avg_Gbar[t_con])
+            self.data.P_hs_mass_avg_at_peak_Phs_Rhs_Gbar = float(P_hs_mass_avg_Gbar[t_con])
+
+        logger.info(
+            f"Will ignition diagnostics: "
+            f"t_peak(rhoR*Ti)={self.data.t_peak_rhoR_Ti_ns:.3f} ns "
+            f"(product={self.data.peak_rhoR_Ti_gcm2_keV:.2f} g/cm²·keV); "
+            f"t_peak(P*R)={self.data.t_peak_Phs_Rhs_ns:.3f} ns "
+            f"(product={self.data.peak_Phs_Rhs_Gbar_um:.0f} Gbar·µm)"
         )
 
     def _compute_ifar(self):

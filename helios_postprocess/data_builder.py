@@ -340,6 +340,25 @@ class ICFRunData:
         self.t_will_shell_cr15_ns: float = 0.0  # audit: timestep at which
                                                # cr_inner=1.5 was found for
                                                # the will-shell metrics above
+
+        # ── W. Trickey ignition-product timing (Phys. Conv. §18d/e) ──
+        # Peak hotspot quantities are evaluated at the time the ignition
+        # PRODUCT peaks, not at a fixed kinematic landmark. Two products:
+        #   Lawson:      rhoR_hs(t) × T_i_hs(t)    (volume-avg T_i)
+        #   Confinement: P_hs(t)    × R_hs(t)      (volume-avg P_hs)
+        # The HS region is the Lagrangian gas/cold-fuel interior
+        # (zones [0, ri[t, 0])) per existing convention.
+        self.t_peak_rhoR_Ti_ns: float = 0.0
+        self.peak_rhoR_Ti_gcm2_keV: float = 0.0       # the product value
+        self.rhoR_hs_at_peak_rhoR_Ti_gcm2: float = 0.0
+        self.T_i_volume_avg_at_peak_rhoR_Ti_keV: float = 0.0
+        self.T_i_mass_avg_at_peak_rhoR_Ti_keV: float = 0.0
+
+        self.t_peak_Phs_Rhs_ns: float = 0.0
+        self.peak_Phs_Rhs_Gbar_um: float = 0.0        # the product value
+        self.R_hs_at_peak_Phs_Rhs_um: float = 0.0
+        self.P_hs_volume_avg_at_peak_Phs_Rhs_Gbar: float = 0.0
+        self.P_hs_mass_avg_at_peak_Phs_Rhs_Gbar: float = 0.0
         # Adiabat using RHINO's fully_ionized_dt convention (n_e = ρ/m_avg_ion
         # instead of actual electron_density). This is RHINO's default --
         # matches Will Trickey's RHINO native output. Pure DT zones give
