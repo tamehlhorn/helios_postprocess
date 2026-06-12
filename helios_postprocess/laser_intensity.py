@@ -141,6 +141,25 @@ def find_critical_radius_from_ne(ne: np.ndarray,
     return r_crit, ncr
 
 
+def find_quarter_critical_radius_from_ne(ne: np.ndarray,
+                                         zcen: np.ndarray,
+                                         lam_um: float) -> tuple:
+    """r_qc = outermost zone where ne >= ncr/4. Returns (r_qc[t] cm, ncr/4).
+
+    Quarter-critical surface is the SBS / TPD / SRS resonance density
+    (n_e = n_crit / 4); peak intensity there is the standard LPI-risk
+    diagnostic referenced in Will's June 2026 variable list.
+    """
+    ncr_qc = (N_CR_COEFF / (lam_um ** 2)) / 4.0
+    nt = ne.shape[0]
+    r_qc = np.full(nt, np.nan)
+    for t in range(nt):
+        idx = np.where(ne[t] >= ncr_qc)[0]
+        if idx.size > 0:
+            r_qc[t] = zcen[t, int(idx.max())]
+    return r_qc, ncr_qc
+
+
 def find_critical_radius_fallback(alpha_zone: np.ndarray,
                                   pwr_src: np.ndarray,
                                   zcen: np.ndarray,
@@ -252,6 +271,17 @@ def analyze_laser_intensity(data, wavelength_um: float = LAMBDA_UM_DEFAULT
 
     I_at_crit_vs_t = _I_at_first_transparent_zone(I2, zcen, r_crit)
 
+    # Quarter-critical surface (n_e = n_crit/4): SBS/TPD/SRS resonance.
+    # Requires electron_density (no analog of the alpha-sentinel fallback
+    # for ne/4); returns NaN history when ne unavailable.
+    if ne is not None:
+        r_qc, ncr_qc = find_quarter_critical_radius_from_ne(ne, zcen, wavelength_um)
+        I_at_qc_vs_t = _I_at_first_transparent_zone(I2, zcen, r_qc)
+    else:
+        r_qc = np.full(nt, np.nan)
+        ncr_qc = ncr / 4.0
+        I_at_qc_vs_t = np.full(nt, np.nan)
+
     I_peak_coronal_vs_t = np.full(nt, np.nan)
     with np.errstate(invalid='ignore'):
         for t in range(nt):
@@ -272,6 +302,12 @@ def analyze_laser_intensity(data, wavelength_um: float = LAMBDA_UM_DEFAULT
     t_peak_ns = (float(data.time[t_peak])
                  if hasattr(data, 'time') and data.time is not None else np.nan)
 
+    # Quarter-critical peak scalars (W. Trickey June 2026 list item #8)
+    peak_I_at_qc = (float(np.nanmax(I_at_qc_vs_t))
+                    if np.any(np.isfinite(I_at_qc_vs_t)) else np.nan)
+    I_at_qc_at_peak_power = (float(I_at_qc_vs_t[t_peak])
+                             if np.isfinite(I_at_qc_vs_t[t_peak]) else np.nan)
+
     return dict(
         I1=I1, I2=I2, I_grid_outer=I_outer, alpha_zone=alpha_zone,
         r_crit=r_crit, ncr=ncr,
@@ -283,4 +319,9 @@ def analyze_laser_intensity(data, wavelength_um: float = LAMBDA_UM_DEFAULT
         I_at_crit_at_peak_power=I_at_crit_at_peak_power,
         t_peak_power_ns=t_peak_ns,
         wavelength_um=wavelength_um,
+        # Quarter-critical (n_e = n_crit/4)
+        r_qc=r_qc, ncr_qc=ncr_qc,
+        I_at_qc_vs_t=I_at_qc_vs_t,
+        peak_I_at_qc=peak_I_at_qc,
+        I_at_qc_at_peak_power=I_at_qc_at_peak_power,
     )

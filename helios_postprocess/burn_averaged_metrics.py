@@ -405,6 +405,10 @@ def extract_histories_from_run_data(data) -> Dict:
         # Laser intensity metrics (from analyze_laser_intensity); 0.0 if skipped
         'I_at_crit_peak_Wcm2':    getattr(data, 'I_at_crit_peak', None) or 0.0,
         'I_grid_outer_peak_Wcm2': getattr(data, 'I_grid_outer_peak', None) or 0.0,
+        # Quarter-critical surface (W. Trickey June 2026 list item #8)
+        'I_at_quarter_crit_peak_Wcm2': getattr(data, 'I_at_quarter_crit_peak', None) or 0.0,
+        'I_at_quarter_crit_at_peak_power_Wcm2':
+            getattr(data, 'I_at_quarter_crit_at_peak_power', None) or 0.0,
         # Shock-train breakouts at gas/ice interface (from _compute_shock_train).
         # NaN sentinel means "not detected"; comparison code treats it as a
         # missing value rather than a real 0.0 ns measurement.
@@ -592,6 +596,10 @@ def calculate_burn_averaged_metrics(histories: Dict,
         # Laser intensity metrics (pass through from histories)
         'I_at_crit_peak_Wcm2':    histories.get('I_at_crit_peak_Wcm2',    0.0),
         'I_grid_outer_peak_Wcm2': histories.get('I_grid_outer_peak_Wcm2', 0.0),
+        # Quarter-critical (pass through)
+        'I_at_quarter_crit_peak_Wcm2': histories.get('I_at_quarter_crit_peak_Wcm2', 0.0),
+        'I_at_quarter_crit_at_peak_power_Wcm2':
+            histories.get('I_at_quarter_crit_at_peak_power_Wcm2', 0.0),
         # Shock-train breakouts (pass through; NaN if not detected)
         't_foot_shock_breakout_ns': histories.get('t_foot_shock_breakout_ns', float('nan')),
         't_ramp_shock_breakout_ns': histories.get('t_ramp_shock_breakout_ns', float('nan')),
@@ -863,6 +871,12 @@ def compare_with_published(sim_metrics: Dict,
         ('I grid outer peak (W/cm²)',
          sim_metrics.get('I_grid_outer_peak_Wcm2', 0.0),
          'I_grid_outer_peak_Wcm2', None, '.2e'),
+        ('I at quarter-critical peak (W/cm²)',
+         sim_metrics.get('I_at_quarter_crit_peak_Wcm2', 0.0),
+         'I_at_quarter_crit_peak_Wcm2', None, '.2e'),
+        ('I at quarter-critical at peak power (W/cm²)',
+         sim_metrics.get('I_at_quarter_crit_at_peak_power_Wcm2', 0.0),
+         'I_at_quarter_crit_at_peak_power_Wcm2', None, '.2e'),
         # --- Shock train breakouts (Task 3 Stage 3 multi-shock tracker) ---
         # NaN sentinel from extract_histories -> mapped to -1.0 so the
         # "<= 0 == missing" skip logic in _emit_row kicks in.

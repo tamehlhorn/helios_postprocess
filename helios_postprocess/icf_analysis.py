@@ -94,7 +94,10 @@ class ICFAnalyzer:
             for k in ('I_grid_outer_peak', 'I_at_crit_peak', 'I_at_crit_at_peak_power',
                       'I_peak_coronal', 't_peak_power_ns', 'ncr_intensity',
                       'r_crit_intensity_history', 'I_at_crit_history',
-                      'I_grid_outer_history'):
+                      'I_grid_outer_history',
+                      'I_at_quarter_crit_peak', 'I_at_quarter_crit_at_peak_power',
+                      'ncr_quarter_intensity', 'r_quarter_crit_intensity_history',
+                      'I_at_quarter_crit_history'):
                 setattr(self.data, k, None)
             self.data._laser_intensity_arrays = None
             return
@@ -124,6 +127,20 @@ class ICFAnalyzer:
         self.data.I_at_crit_history        = result['I_at_crit_vs_t']
         self.data.I_grid_outer_history     = result['I_grid_outer']
 
+        # Quarter-critical surface (Will item #8, June 2026)
+        self.data.I_at_quarter_crit_peak           = result['peak_I_at_qc']
+        self.data.I_at_quarter_crit_at_peak_power  = result['I_at_qc_at_peak_power']
+        self.data.ncr_quarter_intensity            = result['ncr_qc']
+        self.data.r_quarter_crit_intensity_history = result['r_qc']
+        self.data.I_at_quarter_crit_history        = result['I_at_qc_vs_t']
+        # Halfraum guard mirrors the r_crit-at-peak-power filter above:
+        # if peak power and quarter-critical surface refer to different
+        # absorbing regions, the lookup underflows.
+        if (getattr(self.data, 'target_class', 'capsule') == 'halfraum_capsule'
+                and _np.isfinite(self.data.I_at_quarter_crit_at_peak_power)
+                and self.data.I_at_quarter_crit_at_peak_power < 1.0e6):
+            self.data.I_at_quarter_crit_at_peak_power = _np.nan
+
         # Cached 2D arrays for plotter (not persisted)
         self.data._laser_intensity_arrays = dict(
             I1=result['I1'],
@@ -152,6 +169,9 @@ class ICFAnalyzer:
                     f"{result['peak_I_grid_outer']:.3e} W/cm^2")
         logger.info(f"  Peak I at critical surface      : "
                     f"{result['peak_I_at_crit']:.3e} W/cm^2")
+        logger.info(f"  Peak I at quarter-critical      : "
+                    f"{result['peak_I_at_qc']:.3e} W/cm^2  "
+                    f"(n_e = n_crit/4 = {result['ncr_qc']:.3e} cm^-3)")
         if _np.isnan(self.data.I_at_crit_at_peak_power):
             logger.info(f"  I at r_crit at peak laser power : n/a  "
                         f"(halfraum: peak total power not at capsule r_crit)")
