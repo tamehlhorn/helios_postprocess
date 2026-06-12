@@ -2744,24 +2744,29 @@ class ICFAnalyzer:
                 T_i_mass_avg_keV[t]   = float(np.sum(T_z_keV * m_z) / m_tot)
             hs_radius_cm[t] = float(zbnd[t, hs_bnd])
 
-        # Hot-spot areal density history (from analyze_stagnation_phase)
-        rhoR_hs = getattr(self.data, 'hot_spot_rhoR_vs_time', None)
-        if rhoR_hs is None or len(rhoR_hs) != n_times:
-            logger.info("Will ignition diagnostics: hot_spot_rhoR_vs_time "
-                        "unavailable; skipping rhoR x T_i product")
-            rhoR_hs = None
+        # Hot-spot areal density history. data.hot_spot_rhoR_vs_time is
+        # populated by analyze_burn_phase, which runs AFTER us; recompute
+        # inline so this function is self-contained and we can fire the
+        # Lawson product at the right time.
+        rhoR_hs = np.zeros(n_times)
+        for t in range(n_times):
+            hs_bnd = int(ri[t, 0])
+            if hs_bnd <= 0:
+                continue
+            rho_in_hs = self.data.mass_density[t, :hs_bnd]
+            dr = np.diff(zbnd[t, :hs_bnd + 1])
+            rhoR_hs[t] = float(np.sum(rho_in_hs * dr))
 
         # Lawson product peak time
-        if rhoR_hs is not None:
-            lawson = np.where(np.isfinite(rhoR_hs) & np.isfinite(T_i_vol_avg_keV),
-                              rhoR_hs * T_i_vol_avg_keV, 0.0)
-            if np.any(lawson > 0):
-                t_law = int(np.argmax(lawson))
-                self.data.t_peak_rhoR_Ti_ns = float(time[t_law])
-                self.data.peak_rhoR_Ti_gcm2_keV = float(lawson[t_law])
-                self.data.rhoR_hs_at_peak_rhoR_Ti_gcm2 = float(rhoR_hs[t_law])
-                self.data.T_i_volume_avg_at_peak_rhoR_Ti_keV = float(T_i_vol_avg_keV[t_law])
-                self.data.T_i_mass_avg_at_peak_rhoR_Ti_keV = float(T_i_mass_avg_keV[t_law])
+        lawson = np.where(np.isfinite(rhoR_hs) & np.isfinite(T_i_vol_avg_keV),
+                          rhoR_hs * T_i_vol_avg_keV, 0.0)
+        if np.any(lawson > 0):
+            t_law = int(np.argmax(lawson))
+            self.data.t_peak_rhoR_Ti_ns = float(time[t_law])
+            self.data.peak_rhoR_Ti_gcm2_keV = float(lawson[t_law])
+            self.data.rhoR_hs_at_peak_rhoR_Ti_gcm2 = float(rhoR_hs[t_law])
+            self.data.T_i_volume_avg_at_peak_rhoR_Ti_keV = float(T_i_vol_avg_keV[t_law])
+            self.data.T_i_mass_avg_at_peak_rhoR_Ti_keV = float(T_i_mass_avg_keV[t_law])
 
         # Confinement product peak time (P_hs x R_hs)
         confinement = np.where(np.isfinite(P_hs_vol_avg_Gbar) & np.isfinite(hs_radius_cm),
