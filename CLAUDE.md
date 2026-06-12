@@ -343,6 +343,66 @@ Each entry is `[value, uncertainty]`. Entries with `[0.0, 0.0]` are skipped.
     adiabat 1.98) match LILAC well — the burn numbers are inflated by the
     local-α model, not by physics.
 
+18. **W. Trickey June 2026 conventions (response to Tom's 5 questions)**:
+    canonical definitions adopted across the postprocess for cross-tool
+    comparison with RHINO and any HYDRA postprocess that follows the same
+    physics motivation.
+
+    **(a) Stagnation time** = shell-velocity minimum (`data.stag_time_rhino_ns`).
+    Will: "I prefer not to use hotspot radius as a dependence for key
+    parameters. At stagnation (especially with burn on), the fuel assembly
+    rapidly changes shape, and the hotspot radius becomes sensitive and ill
+    defined." Legacy HS-radius-min stagnation (`data.stag_time`) is retained
+    as an audit value and routes the existing engine to avoid shifting
+    calibration history, but the summary and any cross-tool comparison
+    should source from `stag_time_rhino_ns`. Confirmed in
+    `icf_output.py` TIMING block (labeled "RHINO, shell-v min" as
+    canonical, "HS-radius min, audit").
+
+    **(b) Shell boundaries** = inner: 1% (pre-breakout) / 1/e (post-
+    breakout) of peak density, outer: inflection point in the density
+    profile (d²ρ/dr² = 0 going outward from ρ_peak). Will: "During shock
+    breakout, some of the foam/fuel layer is inevitably ablated into the
+    inner gas region. Which makes the gas/fuel interface a poor measure
+    of the shell." Captured as `data.shell_inner_will_history_cm` and
+    `data.shell_outer_will_history_cm`. Downstream consumers (mass-
+    averaged shell adiabat, sound speed in shell at CR=1.5, shell mass
+    at stagnation) gain `*_will` variants alongside the legacy
+    Lagrangian-region versions for back-compat.
+
+    **(c) Hydro efficiency denominator** = absorbed laser energy (matches
+    existing `data.hydro_efficiency_pct`). Will: "absorbed energy should
+    be the used denominator." Helios reports all three (delivered,
+    absorbed, on-target) on `data.laser_energy_delivered_MJ`,
+    `data.laser_energy_absorbed_MJ`, and the integral of
+    `data.laser_power_on_target` — they differ by laser coupling losses
+    plus 1D ray-trace miss. No code change; documented.
+
+    **(d) Peak hotspot quantities** = evaluated at the **time the
+    ignition product peaks**, not at a fixed kinematic landmark.
+
+    - `data.t_peak_rhoR_Ti_ns` = argmax_t ( ρR_hs(t) × T_i_hs(t) )
+      — Lawson product peak time
+    - `data.t_peak_Phs_Rhs_ns` = argmax_t ( P_hs(t) × R_hs(t) )
+      — burn-confinement product peak time
+
+    All "peak HS" snapshot scalars below are taken at the respective
+    peak-product timestamp.
+
+    **(e) Hotspot pressure / temperature averaging** = three methods,
+    default volume-averaged. For each of `P_hs` and `T_i_hs`:
+
+    - Volume-averaged (default): ⟨Q⟩ = ∫ Q dV / V_hs over the hotspot
+      Lagrangian region; spherical shells dV = 4π r² dr.
+    - Mass-averaged: ⟨Q⟩ = ∫ Q ρ dV / m_hs.
+    - Neutron-averaged (existing `data.neutron_ave_*`): time- and
+      space-integrated by the DT fusion rate.
+
+    Will: "I would include all of these but probably default to volume
+    averaged. No real reason, that just feels right to me." Stored as
+    `data.peak_HS_pressure_volume_avg_Gbar` (etc.) with parallel naming
+    for the three averaging methods.
+
 ## Laser Deposition Model (Helios vs reference codes)
 
 Helios uses a 1D spherical ray-trace with refraction (Snell's law, geometrical optics).

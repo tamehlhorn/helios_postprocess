@@ -145,9 +145,17 @@ class ICFOutputGenerator:
         _a('')
 
         # ---- Timing ----
+        # Two stagnation conventions; RHINO (shell-v min) is canonical per
+        # W. Trickey June 2026 — see CLAUDE.md Physics Convention §18.
+        # HS-radius-min retained as audit value because the burn-on
+        # assembly rapidly changes shape and HS-radius becomes
+        # ill-defined; shell-v-min is robust through ignition.
         _a('TIMING')
         _a('-' * width)
-        _a(self._metric('Stagnation time',      d.stag_time,   'ns',   fmt='.3f'))
+        _a(self._metric('Stagnation time (RHINO, shell-v min)',
+                        getattr(d, 'stag_time_rhino_ns', 0.0), 'ns', fmt='.3f'))
+        _a(self._metric('Stagnation time (HS-radius min, audit)',
+                        d.stag_time,   'ns',   fmt='.3f'))
         _a(self._metric('Bang time',            d.bang_time,   'ns',   fmt='.3f'))
         _a(self._metric('Peak velocity time',   d.t_peak_velocity_ns, 'ns', fmt='.3f'))
         _a(self._metric('Burn width (FWHM)',    d.burn_width,  'ns',   fmt='.4f'))
