@@ -316,6 +316,30 @@ class ICFRunData:
                                                # using elec_temperature in the
                                                # same neutron-rate-weighted
                                                # average
+
+        # ── W. Trickey June 2026 shell convention (Phys. Conv. §18b) ──
+        # Inner = 1% pre-breakout / (1/e) post-breakout of peak density.
+        # Outer = first inflection point in ρ(r) going outward from ρ_peak
+        # (d²ρ/dr² = 0). Replaces Lagrangian gas/foam interface because foam
+        # ablates inward during shock breakout, making the Lagrangian
+        # boundary a poor measure of the dense shell.
+        self.shell_inner_will_history_cm:  Optional[np.ndarray] = None  # (n_times,) cm
+        self.shell_outer_will_history_cm:  Optional[np.ndarray] = None  # (n_times,) cm
+        self.shell_thickness_will_history_cm: Optional[np.ndarray] = None
+        self.shell_mass_will_history_mg:   Optional[np.ndarray] = None  # (n_times,) mg
+        self.shell_mass_will_at_stagnation_mg: float = 0.0  # at stag_time_rhino_ns
+        self.adiabat_mass_avg_will_cr15: float = 0.0  # mass-avg adiabat
+                                               # (RHINO partially_ionized
+                                               # formula) over Will-shell at
+                                               # cr_inner = 1.5
+        self.sound_speed_shell_will_cr15_kms: float = 0.0  # mass-avg
+                                               # c_s = sqrt(γP/ρ), γ=5/3
+                                               # (ideal-gas approx for shell
+                                               # conditions), over Will-shell
+                                               # at cr_inner = 1.5
+        self.t_will_shell_cr15_ns: float = 0.0  # audit: timestep at which
+                                               # cr_inner=1.5 was found for
+                                               # the will-shell metrics above
         # Adiabat using RHINO's fully_ionized_dt convention (n_e = ρ/m_avg_ion
         # instead of actual electron_density). This is RHINO's default --
         # matches Will Trickey's RHINO native output. Pure DT zones give

@@ -526,6 +526,13 @@ class ICFAnalyzer:
         # Will Trickey's RHINO native value of ~4.13 on WT_cthomas_baseline.
         self._compute_adiabat_min_rhino_fully_ionized()
 
+        # W. Trickey June 2026 shell convention (CLAUDE.md Physics Conv. §18b):
+        # inner = 1%/(1/e) of peak density, outer = inflection point in ρ(r).
+        # Replaces Lagrangian gas/foam boundary as the outer shell edge
+        # because foam ablates inward during shock breakout. Downstream:
+        # mass-averaged adiabat, sound speed, shell mass with new boundaries.
+        self._compute_will_shell_diagnostics()
+
         # Compute in-flight aspect ratio
         self._compute_ifar()
         
@@ -2476,6 +2483,183 @@ class ICFAnalyzer:
                     f"R_shell={R_shell*1e4:.1f} um, dR={delta_R*1e4:.1f} um, "
                     f"rho_peak={rho_peak:.2f} g/cc, zones {z_inner}-{z_outer})")
         return (ifar, R_shell * 1e4, delta_R * 1e4, rho_peak)
+
+    def _compute_will_shell_diagnostics(self):
+        """
+        W. Trickey June 2026 shell-convention diagnostics.
+
+        Shell boundaries:
+            inner = innermost zone where rho > threshold (1% pre-breakout,
+                    1/e post-breakout); matches RHINO's time-dependent
+                    convention also used by _compute_adiabat_min_rhino.
+            outer = first inflection point in rho(r) going outward from
+                    rho_peak (d^2 rho / dr^2 changes from <= 0 to > 0).
+
+        Reason for the new outer boundary (Will, June 2026 email): "During
+        shock breakout, some of the foam/fuel layer is inevitably ablated
+        into the inner gas region. Which makes the gas/fuel interface a
+        poor measure of the shell." The density-profile inflection point
+        tracks the physical outer edge of the dense shell regardless of
+        Lagrangian rezoning.
+
+        Computes:
+          shell_inner_will_history_cm        (n_times,) cm
+          shell_outer_will_history_cm        (n_times,) cm
+          shell_thickness_will_history_cm    (n_times,) cm
+          shell_mass_will_history_mg         (n_times,) mg
+          shell_mass_will_at_stagnation_mg   scalar mg @ stag_time_rhino_ns
+          adiabat_mass_avg_will_cr15         scalar @ cr_inner=1.5
+                                             (RHINO partially_ionized P_F)
+          sound_speed_shell_will_cr15_kms    scalar @ cr_inner=1.5
+                                             c_s = sqrt(gamma P / rho)
+                                             gamma=5/3, mass-averaged
+          t_will_shell_cr15_ns               audit timestamp
+        """
+        if (self.data.mass_density is None
+                or self.data.zone_boundaries is None
+                or self.data.zone_mass is None):
+            logger.info("Will shell diagnostics: missing inputs (rho/zbnd/zone_mass)")
+            return
+
+        rho = self.data.mass_density
+        zbnd = self.data.zone_boundaries
+        zmass = self.data.zone_mass
+        time = self.data.time
+        n_times, n_zones = rho.shape
+
+        breakout_t = float(getattr(self.data, 't_breakout_rhino_ns', 0.0) or 0.0)
+
+        i_peak = rho.argmax(axis=1)
+        rho_peak = rho.max(axis=1)
+
+        shell_inner_pos = np.full(n_times, np.nan)
+        shell_outer_pos = np.full(n_times, np.nan)
+        shell_mass_g    = np.zeros(n_times)
+        shell_inner_idx = np.full(n_times, -1, dtype=int)
+        shell_outer_idx = np.full(n_times, -1, dtype=int)
+
+        for t in range(n_times):
+            rho_t = rho[t]
+            rho_pk = float(rho_peak[t])
+            if rho_pk <= 0:
+                continue
+            ip = int(i_peak[t])
+
+            is_pre = (breakout_t > 0) and (time[t] < breakout_t)
+            inner_frac = 0.01 if is_pre else (1.0 / np.e)
+            inner_thresh = inner_frac * rho_pk
+
+            # Inner index: going inward from peak, first zone below threshold
+            # marks the boundary; shell_inner_idx is one outward of that.
+            inner_idx = 0
+            for j in range(ip, -1, -1):
+                if rho_t[j] < inner_thresh:
+                    inner_idx = j + 1
+                    break
+            shell_inner_idx[t] = inner_idx
+
+            # Outer index: inflection point in rho(r) going outward from
+            # ip. Use numpy.gradient (central differences) on the outward-
+            # of-peak slice. First sign change from <=0 to >0 in d2rho.
+            outer_idx = -1
+            if ip < n_zones - 3:
+                z_c = 0.5 * (zbnd[t, ip:n_zones] + zbnd[t, ip + 1:n_zones + 1])
+                rho_out = rho_t[ip:]
+                if len(z_c) >= 3:
+                    try:
+                        d1 = np.gradient(rho_out, z_c)
+                        d2 = np.gradient(d1, z_c)
+                    except Exception:
+                        d2 = None
+                    if d2 is not None and np.any(np.isfinite(d2)):
+                        sign = np.sign(np.nan_to_num(d2, nan=0.0))
+                        # Skip k=0 (right at peak; gradient endpoint).
+                        for k in range(1, len(sign) - 1):
+                            if sign[k] <= 0 and sign[k + 1] > 0:
+                                outer_idx = ip + k + 1
+                                break
+            # Fallback: outermost zone above 1/e of peak (legacy RHINO
+            # outer-shell convention) if no inflection found.
+            if outer_idx <= inner_idx:
+                above = rho_t > rho_pk / np.e
+                if np.any(above):
+                    outer_idx = int(np.where(above)[0][-1])
+            shell_outer_idx[t] = outer_idx
+
+            if outer_idx <= inner_idx or outer_idx >= n_zones:
+                continue
+
+            shell_inner_pos[t] = float(zbnd[t, inner_idx])
+            shell_outer_pos[t] = float(zbnd[t, outer_idx + 1])
+            shell_mass_g[t] = float(np.sum(zmass[t, inner_idx:outer_idx + 1]))
+
+        shell_thick = shell_outer_pos - shell_inner_pos
+        shell_mass_mg = shell_mass_g * 1e3
+
+        self.data.shell_inner_will_history_cm     = shell_inner_pos
+        self.data.shell_outer_will_history_cm     = shell_outer_pos
+        self.data.shell_thickness_will_history_cm = shell_thick
+        self.data.shell_mass_will_history_mg      = shell_mass_mg
+
+        # Shell mass at RHINO stagnation time
+        stag_t = float(getattr(self.data, 'stag_time_rhino_ns', 0.0) or 0.0)
+        if stag_t > 0:
+            i_stag = int(np.argmin(np.abs(time - stag_t)))
+            sm = shell_mass_mg[i_stag]
+            if np.isfinite(sm) and sm > 0:
+                self.data.shell_mass_will_at_stagnation_mg = float(sm)
+
+        # Mass-averaged adiabat and sound speed at cr_inner = 1.5
+        cr_inner = getattr(self.data, 'cr_inner_history', None)
+        plasma_P = getattr(self.data, 'plasma_pressure', None)
+        n_e = self.data.electron_density
+        if cr_inner is not None and plasma_P is not None and n_e is not None:
+            valid_cr = np.isfinite(cr_inner)
+            crossings = np.where(valid_cr & (cr_inner >= 1.5))[0]
+            if len(crossings) > 0:
+                t_cr15 = int(crossings[0])
+                self.data.t_will_shell_cr15_ns = float(time[t_cr15])
+
+                i_in = int(shell_inner_idx[t_cr15])
+                i_out = int(shell_outer_idx[t_cr15])
+                if 0 <= i_in < i_out < n_zones:
+                    # RHINO partially_ionized Fermi pressure (matches
+                    # _compute_adiabat_min_rhino).
+                    FERMI_PREFACTOR_JCC = 2.337e-34
+                    P_z = plasma_P[t_cr15, i_in:i_out + 1]
+                    n_e_z = n_e[t_cr15, i_in:i_out + 1]
+                    m_z = zmass[t_cr15, i_in:i_out + 1]
+                    with np.errstate(invalid='ignore'):
+                        n_e_safe = np.where(n_e_z > 0, n_e_z, np.nan)
+                        P_F = FERMI_PREFACTOR_JCC * n_e_safe ** (5.0 / 3.0)
+                        alpha = np.where(P_F > 0, P_z / P_F, np.nan)
+                    ok = np.isfinite(alpha) & (m_z > 0)
+                    if np.any(ok):
+                        self.data.adiabat_mass_avg_will_cr15 = float(
+                            np.average(alpha[ok], weights=m_z[ok])
+                        )
+
+                    # Sound speed c_s = sqrt(gamma P / rho), gamma = 5/3.
+                    # P in J/cm^3 = 1e7 erg/cm^3; rho in g/cm^3 -> cgs.
+                    # c_s (cm/s) -> km/s with 1e-5.
+                    rho_z = rho[t_cr15, i_in:i_out + 1]
+                    with np.errstate(invalid='ignore', divide='ignore'):
+                        rho_safe = np.where(rho_z > 0, rho_z, np.nan)
+                        cs_cgs = np.sqrt((5.0 / 3.0) * P_z * 1.0e7 / rho_safe)
+                        cs_kms = cs_cgs * 1.0e-5
+                    ok_cs = np.isfinite(cs_kms) & (m_z > 0)
+                    if np.any(ok_cs):
+                        self.data.sound_speed_shell_will_cr15_kms = float(
+                            np.average(cs_kms[ok_cs], weights=m_z[ok_cs])
+                        )
+
+        logger.info(
+            f"Will shell diagnostics: "
+            f"M_shell@stag_rhino={self.data.shell_mass_will_at_stagnation_mg:.3f} mg, "
+            f"alpha_mass_avg@CR=1.5={self.data.adiabat_mass_avg_will_cr15:.2f}, "
+            f"c_s_shell@CR=1.5={self.data.sound_speed_shell_will_cr15_kms:.1f} km/s "
+            f"(t={self.data.t_will_shell_cr15_ns:.3f} ns)"
+        )
 
     def _compute_ifar(self):
         """

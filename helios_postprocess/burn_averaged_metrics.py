@@ -419,6 +419,11 @@ def extract_histories_from_run_data(data) -> Dict:
         'stag_time_areal_density':        getattr(data, 'stag_time_areal_density', 0.0),
         'stag_time_fuel_areal_density':   getattr(data, 'stag_time_fuel_areal_density', 0.0),
         'neutron_ave_electron_temperature': getattr(data, 'neutron_ave_electron_temperature', 0.0),
+        # ── Will shell-convention scalars (June 2026, Phys. Conv. §18b) ──
+        'shell_mass_will_at_stagnation_mg': getattr(data, 'shell_mass_will_at_stagnation_mg', 0.0),
+        'adiabat_mass_avg_will_cr15':       getattr(data, 'adiabat_mass_avg_will_cr15', 0.0),
+        'sound_speed_shell_will_cr15_kms':  getattr(data, 'sound_speed_shell_will_cr15_kms', 0.0),
+        't_will_shell_cr15_ns':             getattr(data, 't_will_shell_cr15_ns', 0.0),
     }
 
 
@@ -588,6 +593,10 @@ def calculate_burn_averaged_metrics(histories: Dict,
         'stag_time_areal_density':           histories.get('stag_time_areal_density', 0.0),
         'stag_time_fuel_areal_density':      histories.get('stag_time_fuel_areal_density', 0.0),
         'neutron_ave_electron_temperature':  histories.get('neutron_ave_electron_temperature', 0.0),
+        # Will shell-convention (June 2026)
+        'shell_mass_will_at_stagnation_mg':  histories.get('shell_mass_will_at_stagnation_mg', 0.0),
+        'adiabat_mass_avg_will_cr15':        histories.get('adiabat_mass_avg_will_cr15', 0.0),
+        'sound_speed_shell_will_cr15_kms':   histories.get('sound_speed_shell_will_cr15_kms', 0.0),
         # Burn-rate weighting profile
         'burn_fraction':    burn_fraction,
         'burn_rate':        burn_rate,
@@ -872,6 +881,16 @@ def compare_with_published(sim_metrics: Dict,
         ('Neutron-averaged T_e (keV)',
          sim_metrics.get('neutron_ave_electron_temperature', 0.0),
          'neutron_ave_electron_temperature', None, '.2f'),
+        # --- Will shell convention (June 2026, Phys. Conv. §18b) ---
+        ('Shell mass at stag (Will, mg)',
+         sim_metrics.get('shell_mass_will_at_stagnation_mg', 0.0),
+         'shell_mass_will_at_stagnation_mg', None, '.3f'),
+        ('Mass-avg shell adiabat at CR=1.5 (Will)',
+         sim_metrics.get('adiabat_mass_avg_will_cr15', 0.0),
+         'adiabat_mass_avg_will_cr15', None, '.2f'),
+        ('Sound speed in shell at CR=1.5 (km/s, Will)',
+         sim_metrics.get('sound_speed_shell_will_cr15_kms', 0.0),
+         'sound_speed_shell_will_cr15_kms', None, '.1f'),
     ]
 
     has_implosion = False
