@@ -3,8 +3,9 @@ fix_json_rhw_geometry.py
 ========================
 
 Patch laser-beam geometry fields (``Spot size``, ``Half cone angle``,
-optional ``Focus position``) in a Helios 11.1.0+ JSON workspace .rhw file.
-Writes the result to a new output path (refuses to overwrite the input).
+optional ``Focus position``, optional ``Laser wavelength``) in a Helios
+11.1.0+ JSON workspace .rhw file. Writes the result to a new output
+path (refuses to overwrite the input).
 
 Designed for the FL transition work (June 2026): the 11.1.0 GUI saves
 .rhw as JSON, and we frequently need to re-anchor an inherited workspace
@@ -13,10 +14,13 @@ to PDD_20_s016 geometry (cone=20 deg, spot=0.16 cm) before running.
 Usage
 -----
     python examples/fix_json_rhw_geometry.py <in.rhw> <out.rhw> \\
-        --spot 0.16 --cone 20 [--focus 0.22] [--beam N] [--dry-run]
+        --spot 0.16 --cone 20 [--focus 0.22] [--wavelength 0.35] \\
+        [--beam N] [--dry-run]
 
 If ``--beam N`` is omitted, the patch applies to ALL beams in the file.
-``--focus`` is optional — omit it to leave the focus position unchanged.
+``--focus`` and ``--wavelength`` are optional — omit them to leave those
+fields untouched. At least one of --spot / --cone / --focus /
+--wavelength is required.
 
 Numeric values are written with 4 decimal places (matches the precision
 Helios uses in JSON output). Region/structural keys are left untouched.
@@ -35,9 +39,10 @@ from typing import Optional
 
 
 # JSON keys within "Laser beam element[N]"
-_KEY_SPOT  = 'Spot size'
-_KEY_CONE  = 'Half cone angle'
-_KEY_FOCUS = 'Focus position'
+_KEY_SPOT       = 'Spot size'
+_KEY_CONE       = 'Half cone angle'
+_KEY_FOCUS      = 'Focus position'
+_KEY_WAVELENGTH = 'Laser wavelength'
 
 
 def _format_value(v: float) -> str:
@@ -48,12 +53,13 @@ def _format_value(v: float) -> str:
 def _patch_beam(beam: dict,
                 spot_cm: Optional[float],
                 cone_deg: Optional[float],
-                focus_cm: Optional[float]) -> dict:
+                focus_cm: Optional[float],
+                wavelength_um: Optional[float]) -> dict:
     """Return a dict describing the changes made to a single beam block.
 
     The beam dict is mutated in place. The returned dict is for reporting
-    and contains keys 'spot', 'cone', 'focus' each mapping to (old, new)
-    when changed, omitted when not changed.
+    and contains keys 'spot', 'cone', 'focus', 'wavelength' each mapping
+    to (old, new) when changed, omitted when not changed.
     """
     changes = {}
     if spot_cm is not None and _KEY_SPOT in beam:
@@ -71,6 +77,11 @@ def _patch_beam(beam: dict,
         if old != focus_cm:
             beam[_KEY_FOCUS] = focus_cm
             changes['focus'] = (old, focus_cm)
+    if wavelength_um is not None and _KEY_WAVELENGTH in beam:
+        old = float(beam[_KEY_WAVELENGTH])
+        if old != wavelength_um:
+            beam[_KEY_WAVELENGTH] = wavelength_um
+            changes['wavelength'] = (old, wavelength_um)
     return changes
 
 
@@ -79,6 +90,7 @@ def fix_json_rhw_geometry(in_path: Path,
                           spot_cm: Optional[float] = None,
                           cone_deg: Optional[float] = None,
                           focus_cm: Optional[float] = None,
+                          wavelength_um: Optional[float] = None,
                           beam_id: Optional[int] = None,
                           dry_run: bool = False) -> int:
     """
@@ -90,7 +102,7 @@ def fix_json_rhw_geometry(in_path: Path,
         Input .rhw file (must be JSON workspace format).
     out_path : Path
         Output .rhw file path (must differ from input).
-    spot_cm, cone_deg, focus_cm : float | None
+    spot_cm, cone_deg, focus_cm, wavelength_um : float | None
         New values; None means "leave this field untouched".
     beam_id : int | None
         If given, patch only ``Laser beam element[beam_id]``; otherwise
@@ -140,12 +152,13 @@ def fix_json_rhw_geometry(in_path: Path,
     print(f"Beams in file: {[bid for (bid, _) in _collect_all_beams(data)]}")
     print(f"Patching:      {[bid for (bid, _) in targets]}")
     print(f"Updates:       "
-          f"spot={spot_cm}, cone={cone_deg}, focus={focus_cm}")
+          f"spot={spot_cm}, cone={cone_deg}, focus={focus_cm}, "
+          f"wavelength={wavelength_um}")
     print()
 
     n_changed = 0
     for bid, beam in targets:
-        changes = _patch_beam(beam, spot_cm, cone_deg, focus_cm)
+        changes = _patch_beam(beam, spot_cm, cone_deg, focus_cm, wavelength_um)
         if changes:
             n_changed += 1
             print(f"  Beam {bid}:")
@@ -209,27 +222,32 @@ def main():
     ap.add_argument('in_rhw',  type=Path, help="Input JSON .rhw file path.")
     ap.add_argument('out_rhw', type=Path,
                     help="Output .rhw file path (must differ from input).")
-    ap.add_argument('--spot',  type=float, default=None, metavar='CM',
+    ap.add_argument('--spot',       type=float, default=None, metavar='CM',
                     help="New spot size in cm.")
-    ap.add_argument('--cone',  type=float, default=None, metavar='DEG',
+    ap.add_argument('--cone',       type=float, default=None, metavar='DEG',
                     help="New half cone angle in degrees.")
-    ap.add_argument('--focus', type=float, default=None, metavar='CM',
+    ap.add_argument('--focus',      type=float, default=None, metavar='CM',
                     help="New focus position in cm (optional).")
-    ap.add_argument('--beam',  type=int, default=None, metavar='N',
+    ap.add_argument('--wavelength', type=float, default=None, metavar='UM',
+                    help="New laser wavelength in micrometers (optional).")
+    ap.add_argument('--beam',       type=int, default=None, metavar='N',
                     help="If given, patch only Laser beam element[N]; "
                          "otherwise patch every beam in the file.")
     ap.add_argument('--dry-run', action='store_true',
                     help="Show intended changes but do not write output.")
     args = ap.parse_args()
 
-    if args.spot is None and args.cone is None and args.focus is None:
-        ap.error("At least one of --spot, --cone, --focus is required.")
+    if (args.spot is None and args.cone is None and args.focus is None
+            and args.wavelength is None):
+        ap.error("At least one of --spot, --cone, --focus, --wavelength "
+                  "is required.")
 
     try:
         n = fix_json_rhw_geometry(args.in_rhw, args.out_rhw,
                                    spot_cm=args.spot,
                                    cone_deg=args.cone,
                                    focus_cm=args.focus,
+                                   wavelength_um=args.wavelength,
                                    beam_id=args.beam,
                                    dry_run=args.dry_run)
     except (FileNotFoundError, ValueError) as e:
