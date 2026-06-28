@@ -8,6 +8,7 @@ Extracts configuration information including:
 """
 
 import numpy as np
+import json
 from pathlib import Path
 from typing import Tuple, Optional
 from dataclasses import dataclass
@@ -47,10 +48,6 @@ class RHWConfiguration:
     drive_temperature: Optional[np.ndarray] = None
     drive_location: str = ""                  # "Rmin" or "Rmax"; empty if no radiation drive
     drive_flux_multiplier: float = 1.0        # scales effective sigma*T^4 (Helios convention)
-    # Individual rad-source flags (May 2026 -- previously discarded after the
-    # Rmin/Rmax winner was chosen). Used by data.n_active_idd_sources.
-    rad_source_rmin_on: bool = False
-    rad_source_rmax_on: bool = False
     source_file: Optional[str] = None
     
     @property
@@ -78,16 +75,25 @@ class RHWParser:
     def parse(self) -> RHWConfiguration:
         """
         Parse RHW file and extract configuration.
-        
-        Returns
-        -------
-        RHWConfiguration
-            Parsed configuration data
+
+        Auto-detects file format:
+          * ``{ ...``  → JSON workspace format (Helios 11.1.0 and later GUI saves)
+          * otherwise → legacy text format (Helios 11.0.0 and earlier)
+
+        Both formats return the same ``RHWConfiguration`` dataclass.
         """
         logger.info(f"Parsing RHW file: {self.file_path}")
-        
+
         with open(self.file_path, 'r') as f:
-            lines = f.readlines()
+            text = f.read()
+
+        first_char = text.lstrip()[:1] if text.lstrip() else ''
+        if first_char == '{':
+            logger.info("Detected JSON workspace format")
+            return self._parse_json_format(text)
+
+        # Legacy text format — original line-based parser
+        lines = text.splitlines(keepends=True)
         
         # Extract configuration flags
         is_direct_drive = self._parse_direct_drive(lines)
@@ -102,11 +108,7 @@ class RHWParser:
         # Extract drive temperature data (radiation source from [Rad Source Data] block)
         drive_time, drive_temp, drive_location, drive_flux_mult = \
             self._parse_drive_temperature(lines)
-
-        # Per-position rad-source flags (preserved separately so downstream
-        # code can count active IDD sources without re-parsing).
-        rmin_on, rmax_on = self._parse_rad_source_flags(lines)
-
+        
         config = RHWConfiguration(
             is_direct_drive=is_direct_drive,
             burn_enabled=burn_enabled,
@@ -134,8 +136,6 @@ class RHWParser:
             flux_limiter=flux_value,
             flux_limiter_enabled=flux_enabled,
             flux_limiter_per_region=flux_per_region if flux_per_region else None,
-            rad_source_rmin_on=rmin_on,
-            rad_source_rmax_on=rmax_on,
         )
         
         logger.info(f"Configuration: {config.drive_type}, "
@@ -148,6 +148,309 @@ class RHWParser:
         
         return config
     
+    # ──────────────────────────────────────────────────────────────────
+    # JSON workspace format (Helios 11.1.0+)
+    # ──────────────────────────────────────────────────────────────────
+
+    @staticmethod
+    def _json_walk(obj, prefix=''):
+        """Recursively yield (parent_path, key, value) for every dict entry."""
+        if isinstance(obj, dict):
+            for k, v in obj.items():
+                yield prefix, k, v
+                if isinstance(v, (dict, list)):
+                    yield from RHWParser._json_walk(v, prefix + '/' + k)
+        elif isinstance(obj, list):
+            for i, v in enumerate(obj):
+                if isinstance(v, (dict, list)):
+                    yield from RHWParser._json_walk(v, prefix + f'[{i}]')
+
+    @staticmethod
+    def _json_to_float(val, default=0.0):
+        """JSON numeric values arrive sometimes as float, sometimes as strings."""
+        if val is None:
+            return default
+        if isinstance(val, (int, float)):
+            return float(val)
+        try:
+            return float(val)
+        except (TypeError, ValueError):
+            return default
+
+    def _parse_json_format(self, text: str) -> RHWConfiguration:
+        """
+        Parse the JSON workspace format introduced in Helios 11.1.0.
+
+        Top-level layout (illustrative):
+
+            {
+              "Workspace Format ID": 1001,
+              "Header data": {...},
+              "Spatial grid data": {
+                 "Spatial region element[1]": {... 'Use flux limiter', 'Flux limiter mult',
+                                                   'Fusion reactions on', 'Fusion transport on' ...},
+                 ...
+              },
+              "Laser source data": {
+                 "Num laser beams": 3,
+                 "Laser beam element[1]": {... 'Laser power model is on', 'Laser wavelength',
+                                                'Spot size', 'Half cone angle', 'Focus position',
+                                                'Time-dependent laser powers-Values Col 1/2' ...},
+                 ...
+              },
+              "Rad Source Data": {...},
+              ...
+            }
+
+        Most fields are read by walking the entire tree (keys are deeply nested).
+        Burn semantics are per-region in the JSON format: burn is enabled if
+        any DT-containing region has ``Fusion reactions on = 1``.
+        """
+        data = json.loads(text)
+
+        # ── Laser beams ─────────────────────────────────────────────────
+        beams = []
+        active_beam_pulse = None    # (times_s, powers_TW) from first beam with power_on
+        for _, k, v in self._json_walk(data):
+            if not (isinstance(k, str) and k.startswith('Laser beam element[')
+                    and isinstance(v, dict)):
+                continue
+            try:
+                beam_id = int(k[len('Laser beam element['):-1])
+            except ValueError:
+                continue
+
+            power_on = bool(v.get('Laser power model is on', 0))
+            spatial_model = v.get('Laser spatial profile model', 0)
+            beam_dict = {
+                'beam_id': beam_id,
+                'name': v.get('Laser beam name', f'LaserBeam_{beam_id}'),
+                'power_on': power_on,
+                'wavelength': self._json_to_float(v.get('Laser wavelength'), 0.35),
+                'spot_size': self._json_to_float(v.get('Spot size'), 0.0),
+                'half_cone_angle': self._json_to_float(v.get('Half cone angle'), 1.0),
+                'focus_position': self._json_to_float(v.get('Focus position'), 0.0),
+                'power_multiplier': self._json_to_float(v.get('Power table multiplier'), 1.0),
+                'spatial_profile': 'Gaussian' if spatial_model == 1 else 'Uniform',
+            }
+            beams.append(beam_dict)
+
+            # Extract pulse table from the first beam that has power_on
+            if active_beam_pulse is None and power_on:
+                n_rows = int(v.get('Time-dependent laser powers-Num rows', 0))
+                col1   = v.get('Time-dependent laser powers-Values Col 1', [])
+                col2   = v.get('Time-dependent laser powers-Values Col 2', [])
+                if n_rows > 0 and len(col1) == n_rows and len(col2) == n_rows:
+                    try:
+                        times_s   = np.array([float(t) for t in col1])
+                        powers_TW = np.array([float(p) for p in col2])
+                        active_beam_pulse = (times_s, powers_TW)
+                    except (TypeError, ValueError):
+                        pass
+
+        # Sort beams by id and find active (lowest-id beam with power_on)
+        beams.sort(key=lambda b: b['beam_id'])
+        active = next((b for b in beams if b['power_on']), beams[0] if beams else None)
+
+        # Derive pulse shape from the table — find plateau structure
+        foot_start_ns = foot_end_ns = peak_start_ns = peak_end_ns = 0.0
+        foot_power_TW = peak_power_TW = 0.0
+        pulse_duration_ns = 0.0
+        if active_beam_pulse is not None:
+            t_ns = active_beam_pulse[0] * 1e9
+            P    = active_beam_pulse[1]
+            # Identify plateaus (runs of consecutive identical non-zero powers)
+            plateaus = []  # list of (P_level, t_start_ns, t_end_ns)
+            i = 0
+            while i < len(P):
+                if P[i] > 0:
+                    j = i
+                    while j + 1 < len(P) and P[j+1] == P[i]:
+                        j += 1
+                    if j > i:   # at least 2 consecutive samples → plateau
+                        plateaus.append((float(P[i]), float(t_ns[i]), float(t_ns[j])))
+                    i = j + 1
+                else:
+                    i += 1
+            # Foot = first plateau, peak = highest-power plateau
+            if plateaus:
+                plateaus.sort(key=lambda x: x[1])
+                foot = plateaus[0]
+                peak = max(plateaus, key=lambda x: x[0])
+                foot_power_TW = foot[0]
+                foot_start_ns = foot[1]
+                foot_end_ns   = foot[2]
+                peak_power_TW = peak[0]
+                peak_start_ns = peak[1]
+                peak_end_ns   = peak[2]
+            # Pulse duration = end of peak plateau (Helios convention)
+            pulse_duration_ns = peak_end_ns if peak_end_ns > 0 else float(t_ns[-1])
+
+        # ── Per-region flux limiter + fusion flags ─────────────────────
+        regions = []        # one dict per region, ordered by element index
+        fusion_anywhere = False
+        for _, k, v in self._json_walk(data):
+            if not (isinstance(k, str) and k.startswith('Spatial region element[')
+                    and isinstance(v, dict)):
+                continue
+            try:
+                region_id = int(k[len('Spatial region element['):-1])
+            except ValueError:
+                continue
+            name = v.get('Region name', f'Region {region_id}')
+            use_fl  = bool(v.get('Use flux limiter', 0))
+            fl_val  = self._json_to_float(v.get('Flux limiter mult'), 0.0)
+            fusion_on = bool(v.get('Fusion reactions on', 0))
+            if fusion_on:
+                fusion_anywhere = True
+            regions.append({
+                'region_id': region_id,
+                'region': name,
+                'enabled': use_fl,
+                'value': fl_val,
+            })
+        regions.sort(key=lambda r: r['region_id'])
+        flux_per_region = [{'region': r['region'], 'enabled': r['enabled'],
+                             'value': r['value']} for r in regions]
+
+        # Legacy single-value fields (first region with FL on)
+        first_on = next((r for r in flux_per_region if r['enabled']), None)
+        if first_on:
+            flux_value   = first_on['value']
+            flux_enabled = True
+        else:
+            flux_value   = (flux_per_region[0]['value'] if flux_per_region else 0.0)
+            flux_enabled = False
+
+        # ── Alpha transport flags ─────────────────────────────────────
+        # These are top-level (under hydro/burn data block in 11.1.0 JSON)
+        alpha_local    = False
+        alpha_nonlocal = False
+        for _, k, v in self._json_walk(data):
+            if k == 'Use alpha deposition':
+                if int(v) == 1:
+                    alpha_local = True
+            elif k == 'Use Non alpha deposition':
+                if int(v) == 1:
+                    alpha_nonlocal = True
+        # In 11.1.0, "burn ON" requires region-level Fusion reactions on = 1.
+        # alpha_local / alpha_nonlocal then describe HOW alphas are deposited.
+
+        # ── Drive: direct vs indirect ─────────────────────────────────
+        # Direct-drive: at least one laser beam with power_on
+        # Indirect: rad drive table has any non-zero entries
+        is_direct_drive = any(b['power_on'] for b in beams)
+
+        # ── Radiation drive temperature table ────────────────────────
+        drive_time = None
+        drive_temp = None
+        drive_location = ""
+        drive_flux_mult = 1.0
+        # JSON convention: "Time-Dependent rad drive flux at {Rmin|Rmax}-..." keys
+        # Look for a non-empty drive at Rmin or Rmax
+        for loc in ('Rmax', 'Rmin'):
+            prefix = f"Time-Dependent rad drive flux at {loc}-"
+            n_rows = None
+            x_vals = None
+            y_vals = None
+            for _, k, v in self._json_walk(data):
+                if not isinstance(k, str) or not k.startswith(prefix):
+                    continue
+                suffix = k[len(prefix):]
+                if suffix == 'Num rows':
+                    n_rows = int(v) if v else 0
+                elif suffix == 'X-values-Values':
+                    x_vals = v
+                elif suffix == 'Y-values-Values':
+                    y_vals = v
+            if n_rows and x_vals and y_vals:
+                try:
+                    drive_time = np.array([float(t) for t in x_vals])
+                    drive_temp = np.array([float(T) for T in y_vals])
+                    drive_location = loc
+                    break
+                except (TypeError, ValueError):
+                    pass
+        # Flux multiplier — generic key
+        for _, k, v in self._json_walk(data):
+            if k == 'Flux multiplier':
+                drive_flux_mult = self._json_to_float(v, 1.0)
+                break
+
+        # ── Burn enabled: any DT region has fusion reactions on ─────────
+        burn_enabled = fusion_anywhere
+
+        # ── EOS models per region ────────────────────────────────────
+        eos_models = []
+        for _, k, v in self._json_walk(data):
+            if not (isinstance(k, str) and k.startswith('Spatial region element[')
+                    and isinstance(v, dict)):
+                continue
+            eos_type = 'SESAME' if v.get('EOS data type', 0) == 1 else 'PROPACEOS'
+            eos_models.append({
+                'region': v.get('Region name', '?'),
+                'type':   eos_type,
+                'file':   v.get('EOS filepath', ''),
+            })
+
+        # ── Construct the config ────────────────────────────────────
+        if active is None:
+            active = {'wavelength': 0.35, 'spot_size': 0.0,
+                      'half_cone_angle': 1.0, 'focus_position': 0.0,
+                      'power_multiplier': 1.0, 'spatial_profile': 'Uniform'}
+
+        config = RHWConfiguration(
+            is_direct_drive=is_direct_drive,
+            burn_enabled=burn_enabled,
+            drive_time=drive_time,
+            drive_temperature=drive_temp,
+            drive_location=drive_location,
+            drive_flux_multiplier=drive_flux_mult,
+            source_file=str(self.file_path),
+            laser_wavelength_um=active['wavelength'],
+            laser_spot_size_cm=active['spot_size'],
+            laser_half_cone_angle_deg=active['half_cone_angle'],
+            laser_focus_position_cm=active['focus_position'],
+            laser_power_multiplier=active['power_multiplier'],
+            laser_spatial_profile=active['spatial_profile'],
+            laser_foot_power_TW=foot_power_TW,
+            laser_peak_power_TW=peak_power_TW,
+            laser_foot_start_ns=foot_start_ns,
+            laser_foot_end_ns=foot_end_ns,
+            laser_peak_start_ns=peak_start_ns,
+            laser_peak_end_ns=peak_end_ns,
+            laser_pulse_duration_ns=pulse_duration_ns,
+            laser_geometry_per_beam=beams if beams else None,
+            alpha_deposition_local=alpha_local,
+            alpha_deposition_nonlocal=alpha_nonlocal,
+            flux_limiter=flux_value,
+            flux_limiter_enabled=flux_enabled,
+            flux_limiter_per_region=flux_per_region if flux_per_region else None,
+            eos_models=eos_models if eos_models else None,
+        )
+
+        logger.info(f"Configuration: {config.drive_type}, "
+                    f"Burn {'ON' if burn_enabled else 'OFF'}")
+        logger.info(f"Active beam: λ={active['wavelength']:.3f} µm, "
+                    f"θ={active['half_cone_angle']:.1f}°, "
+                    f"spot={active['spot_size']:.3f} cm, "
+                    f"focus={active['focus_position']:.3f} cm "
+                    f"({active['spatial_profile']})")
+        if foot_power_TW > 0 and peak_power_TW > 0:
+            logger.info(f"Pulse: foot {foot_power_TW:.1f} TW "
+                        f"({foot_start_ns:.2f}–{foot_end_ns:.2f} ns), "
+                        f"peak {peak_power_TW:.1f} TW "
+                        f"({peak_start_ns:.2f}–{peak_end_ns:.2f} ns)")
+        if drive_time is not None:
+            logger.info(f"Drive temperature data ({drive_location}): "
+                        f"{len(drive_time)} points")
+
+        return config
+
+    # ──────────────────────────────────────────────────────────────────
+    # Legacy text format parsers (Helios 11.0.0 and earlier)
+    # ──────────────────────────────────────────────────────────────────
+
     def _parse_alpha_transport(self, lines: list) -> tuple:
         """Parse burn model from fusion transport and alpha deposition flags.
         
@@ -526,25 +829,6 @@ class RHWParser:
         logger.warning("Could not find 'Fusion reactions' flag, assuming burn disabled")
         return False
     
-    def _parse_rad_source_flags(self, lines: list) -> Tuple[bool, bool]:
-        """Return (rmin_on, rmax_on) booleans from the [Rad Source Data] block.
-
-        Separate from `_parse_drive_temperature` so callers can count
-        active IDD sources without depending on the drive-temperature
-        table being parseable.
-        """
-        rad_start = self._find_first_line(lines, "[Rad Source Data]")
-        if rad_start is None:
-            return False, False
-        rad_end = self._find_first_line(lines, "[End Rad Source Data]",
-                                        start=rad_start) or len(lines)
-        block = lines[rad_start:rad_end]
-        rmin = bool(self._extract_keyed_int(
-            block, "Rad source model at Rmin is on", default=0))
-        rmax = bool(self._extract_keyed_int(
-            block, "Rad source model at Rmax is on", default=0))
-        return rmin, rmax
-
     def _parse_drive_temperature(self, lines: list) -> Tuple[Optional[np.ndarray],
                                                               Optional[np.ndarray],
                                                               str, float]:
