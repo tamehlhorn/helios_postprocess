@@ -3117,3 +3117,82 @@ Expected results:
 - If yield ~295 MJ (like baseline_tm): FL is essential to reach Thomas
 
 Either result is informative. User to run.
+
+## Session Update — June 27 2026 (Helios 11.1.0 beta transition)
+
+### Helios 11.1.0 (beta) installed
+
+Path: `~/Codes/Prism/Helios_11.1.0/Helios.app/Contents/MacOS/Helios`.
+Coexists with the 11.0.0 production binary; runs are explicitly tagged
+in the run-folder name (`*_beta`, `*_beta_v2`).
+
+**11.1.0 introduces three changes that affect this postprocess:**
+
+1. **JSON workspace format for .rhw files.** The 11.1.0 GUI saves
+   workspaces as JSON instead of the legacy line-based text format.
+   `helios_postprocess/rhw_parser.py` auto-detects format from the
+   first non-whitespace character (`{` → JSON path) and returns the
+   same `RHWConfiguration` dataclass for both. Commit `f972bac`.
+
+2. **New flux-limiter options.** The 11.1.0 FL implementation appears
+   to be off from 11.0.0 by **a factor of 4-5×**. This is the working
+   hypothesis we're A/B testing — see "Immediate FL transition work"
+   below. The convention factor we documented in Physics Convention
+   §16 (`f_standard = 4 × f_prism`) was 11.0.0-specific; expect it to
+   change for 11.1.0.
+
+3. **Laser ray-tracing fixes** (+ "other fixes" per release notes —
+   detail unknown until we exercise it). The 1D geometric-coupling
+   memo (`docs/Helios_1D_Coupling_Correction_Memo.docx` §6) closed
+   the geomcorr investigation against 11.0.0; whether 11.1.0's
+   ray-trace changes the picture is unverified.
+
+### Immediate FL transition work (3-point A/B)
+
+The goal is to separate the version-delta from the FL-sensitivity-delta
+so we know which is which:
+
+- **Anchor**: 11.0.0 `Olson_PDD_20_fab04_burn` (existing in archive) —
+  PDD_20_s016 geometry at FL=0.04.
+
+- **Task 1**: 11.1.0 `Olson_PDD_20_fab06_foot25_s016_burn_beta` exists
+  but has WRONG geometry (cone=37°, spot=0.18 — should be cone=20°,
+  spot=0.16 per PDD_20_s016). Patch with the new
+  `examples/fix_json_rhw_geometry.py`, then re-run as
+  `*_beta_v2`. Gives the clean 11.0.0 vs 11.1.0 A/B at FL=0.06.
+
+- **Task 2**: Copy the corrected fab06 rhw to a `fab04_beta` folder
+  and patch all four "Flux limiter mult" entries 0.06 → 0.04 using
+  the extended `examples/edit_rhw_flux_limiter.py` (now JSON-aware).
+  Re-run with Helios 11.1.0. Gives the second 11.1.0 datapoint at
+  FL=0.04.
+
+- **Task 3**: `run_analysis.py` on each. Three-point comparison —
+  11.0.0 fab04 burn vs 11.1.0 fab04 burn vs 11.1.0 fab06 burn —
+  separates version-delta from FL-sensitivity-delta. Expectation:
+  if the 4-5× factor hypothesis is right, the 11.1.0 fab04 should
+  resemble the 11.0.0 result at f_prism ≈ 0.04/4 ≈ 0.01 — i.e.,
+  partial-extinction territory.
+
+### Tools added this session
+
+- `examples/fix_json_rhw_geometry.py` — patches `Spot size`,
+  `Half cone angle`, optional `Focus position` per beam in a JSON
+  workspace. Refuses to overwrite the input.
+
+- `examples/edit_rhw_flux_limiter.py` — extended with JSON
+  auto-detection. Same `--set "Region name"=value` CLI as the legacy
+  text path, plus a new `--all VALUE` convenience flag that applies
+  the same FL to every region (the common case for FL sweeps).
+
+### Then: HDD lrm4 + 150 eV prepulse on 11.1.0
+
+Per the geomcorr closeout (CLAUDE.md "Open items / Next priorities"
+section, item 1). Lifts the HDD adiabat lever test from the
+11.0.0-broken-FL regime into a hopefully-cleaner 11.1.0 baseline.
+
+### Parked
+
+- `examples/apply_geomcorr_to_rhw.py` is text-format only. Needs a
+  JSON sibling when a 11.1.0 anchor actually motivates a geomcorr
+  round-trip. Park until then.
