@@ -3207,6 +3207,40 @@ Per the geomcorr closeout (CLAUDE.md "Open items / Next priorities"
 section, item 1). Lifts the HDD adiabat lever test from the
 11.0.0-broken-FL regime into a hopefully-cleaner 11.1.0 baseline.
 
+### Open questions for Prism (June 28 2026)
+
+These surfaced from the first 11.1.0 PDD burn run
+(`Olson_PDD_20_fab06_foot25_s016_burn_beta_fixed`, FL=0.06 uniform,
+yield 98 MJ vs LILAC cluster 87.4). Each could be a dominant source
+of the +12% over-cluster yield — verify before quoting 11.1.0
+calibration numbers as "fixed":
+
+1. **DT-CH foam EOS appears to be pure DT in 11.1.0.** Summary line
+   reports `DT-CH foam   SESAME   matr_05271_DT.ses` (the pure-DT
+   table). The 11.0.0 production calibrations used PROPACEOS DT-CH
+   foam, which captures the CH binder's brems losses and compression
+   stiffness. Possibilities: (a) the inherited .rhw points at the
+   wrong table for the foam region; (b) 11.1.0 default-EOS resolution
+   changed; (c) summary text is misreporting (less likely — it reads
+   straight from RHW parsing). Pure-DT foam EOS would explain yield
+   excess (no CH dilution, easier compression, hotter HS). **Check:
+   what foam EOS did the 11.1.0 .rhw actually request, and what did
+   Helios actually load?**
+
+2. **Alpha transport mode in 11.1.0.** Captured in the Physics
+   Convention §17 addendum. tl;dr: legacy globals `Use alpha
+   deposition` / `Use Non alpha deposition` are both 0 in 11.1.0
+   workspaces; per-region `Fusion transport on` is the actual control;
+   our parser now infers non-local from the per-region flag but
+   that's an unverified assumption. If 11.1.0 silently defaults to
+   local alpha, every burn-on result has 2-5× yield inflation. Ask
+   Prism to confirm the local-vs-nonlocal default and whether any
+   JSON field selects between them.
+
+3. **FL convention factor.** The working hypothesis (11.1.0 FL off
+   from 11.0.0 by 4-5×) needs the planned A/B (11.0.0 fab04 burn vs
+   11.1.0 fab04 burn vs 11.1.0 fab06 burn) to confirm or refute.
+
 ### Parked
 
 - `examples/apply_geomcorr_to_rhw.py` is text-format only. Needs a
