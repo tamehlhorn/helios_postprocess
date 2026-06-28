@@ -343,6 +343,22 @@ Each entry is `[value, uncertainty]`. Entries with `[0.0, 0.0]` are skipped.
     adiabat 1.98) match LILAC well — the burn numbers are inflated by the
     local-α model, not by physics.
 
+    **Helios 11.1.0 JSON addendum (June 28 2026):** the legacy global
+    flags `Use alpha deposition` (local) and `Use Non alpha deposition`
+    (non-local) under `/Hydro data` in the JSON workspace appear to be
+    legacy and unused — observed both = 0 on a run that yielded 98 MJ
+    with alpha onset at 12.85 ns (Olson_PDD_20_fab06_foot25_s016_burn_
+    beta_fixed). The actual 11.1.0 control is **per-region**
+    `Fusion transport on = 1` inside each `Spatial region element[N]`.
+    `rhw_parser.py` now infers `alpha_deposition_nonlocal = True`
+    when any region has the per-region flag set and the legacy
+    globals are both 0; an INFO log line announces the inference per
+    run. **OPEN with Prism**: is the 11.1.0 default actually non-local
+    (the safe assumption matching 11.0.0 production behavior), or could
+    local-vs-nonlocal be controlled by some other JSON field we haven't
+    found yet? If 11.1.0 silently defaults to local α, every 11.1.0
+    burn-on result has 2–5× yield inflation baked in.
+
 18. **W. Trickey June 2026 conventions (response to Tom's 5 questions)**:
     canonical definitions adopted across the postprocess for cross-tool
     comparison with RHINO and any HYDRA postprocess that follows the same

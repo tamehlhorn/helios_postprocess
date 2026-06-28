@@ -289,6 +289,7 @@ class RHWParser:
         # ── Per-region flux limiter + fusion flags ─────────────────────
         regions = []        # one dict per region, ordered by element index
         fusion_anywhere = False
+        fusion_transport_anywhere = False
         for _, k, v in self._json_walk(data):
             if not (isinstance(k, str) and k.startswith('Spatial region element[')
                     and isinstance(v, dict)):
@@ -301,8 +302,11 @@ class RHWParser:
             use_fl  = bool(v.get('Use flux limiter', 0))
             fl_val  = self._json_to_float(v.get('Flux limiter mult'), 0.0)
             fusion_on = bool(v.get('Fusion reactions on', 0))
+            fusion_transport = bool(v.get('Fusion transport on', 0))
             if fusion_on:
                 fusion_anywhere = True
+            if fusion_transport:
+                fusion_transport_anywhere = True
             regions.append({
                 'region_id': region_id,
                 'region': name,
@@ -323,7 +327,26 @@ class RHWParser:
             flux_enabled = False
 
         # ── Alpha transport flags ─────────────────────────────────────
-        # These are top-level (under hydro/burn data block in 11.1.0 JSON)
+        # Two sources, in priority order:
+        #
+        #   (1) Legacy globals (under /Hydro data): 'Use alpha deposition'
+        #       (local) and 'Use Non alpha deposition' (non-local). In
+        #       Helios 11.0.0 these were the authoritative flags. In
+        #       11.1.0 GUI saves we've observed both set to 0 even on
+        #       runs that obviously burned alphas (98 MJ yield, alpha
+        #       onset at 12.85 ns); the global flags appear to be
+        #       legacy/unused in 11.1.0.
+        #
+        #   (2) Per-region 'Fusion transport on' (collected above as
+        #       fusion_transport_anywhere). In 11.1.0 this is the
+        #       observed mechanism — when any DT-containing region has
+        #       it = 1, alpha transport is active. ASSUMPTION (verify
+        #       with Prism): mode is non-local; we have not yet found
+        #       a JSON field that selects local-vs-nonlocal in 11.1.0,
+        #       and 11.0.0 production calibrations defaulted to
+        #       non-local. If 11.1.0 actually defaults to local this
+        #       under-estimates yield-inflation risk -- see CLAUDE.md
+        #       Phys. Conv. §17.
         alpha_local    = False
         alpha_nonlocal = False
         for _, k, v in self._json_walk(data):
@@ -333,6 +356,19 @@ class RHWParser:
             elif k == 'Use Non alpha deposition':
                 if int(v) == 1:
                     alpha_nonlocal = True
+        if not alpha_local and not alpha_nonlocal and fusion_transport_anywhere:
+            # 11.1.0 path: legacy globals are 0 but the per-region
+            # 'Fusion transport on' flag is set. Infer non-local
+            # transport (the 11.0.0 default) and log the inference
+            # so it's auditable.
+            alpha_nonlocal = True
+            logger.info(
+                "Alpha transport inferred non-local from per-region "
+                "'Fusion transport on' (11.1.0 JSON convention; "
+                "legacy globals 'Use alpha deposition' / "
+                "'Use Non alpha deposition' both 0). Verify with Prism "
+                "if the local-vs-nonlocal distinction matters for this run."
+            )
         # In 11.1.0, "burn ON" requires region-level Fusion reactions on = 1.
         # alpha_local / alpha_nonlocal then describe HOW alphas are deposited.
 
