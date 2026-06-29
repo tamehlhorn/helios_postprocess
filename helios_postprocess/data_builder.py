@@ -87,6 +87,16 @@ class ICFRunData:
         self.laser_power_on_target: Optional[np.ndarray] = None           # (n_times,) W — total summed across beams
         self.laser_power_on_target_per_beam: Optional[np.ndarray] = None  # (n_times, n_beam) W — preserved for multi-beam
         self.neutron_production_rate: Optional[np.ndarray] = None # (n_times, n_zones)
+        # Per-channel fusion rates (CLAUDE.md §5b: reactions/s/g, mass-specific).
+        # data.fusion_power above is DT (FusionRate_DT_nHe4); these add the
+        # other 5 channels Helios emits. Useful for tritium-lean studies +
+        # neutronics-output / DD-branch analysis. See Kyle's
+        # neutronics_output.py for full per-channel time-averaging pattern.
+        self.fusion_rate_DD_nHe3:   Optional[np.ndarray] = None  # DD -> n + He3
+        self.fusion_rate_DD_pT:     Optional[np.ndarray] = None  # DD -> p + T
+        self.fusion_rate_TT_nnHe4:  Optional[np.ndarray] = None  # TT -> 2n + He4
+        self.fusion_rate_DHe3_pHe4: Optional[np.ndarray] = None  # D-He3 -> p + He4
+        self.fusion_rate_pB11_3He4: Optional[np.ndarray] = None  # p-B11 -> 3 He4
         self.alpha_heating_power: Optional[np.ndarray] = None     # (n_times, n_zones)
         self.alpha_heating_ion: Optional[np.ndarray] = None       # (n_times, n_zones) particle → ion
         self.alpha_heating_ele: Optional[np.ndarray] = None       # (n_times, n_zones) particle → elec
@@ -561,6 +571,15 @@ _VARIABLE_MAP = [
                                  "laser_attenuation_coeff"],                       False),
     ("neutron_production_rate", ["neutron_production_rate", "neutron_rate",
                                  "FusionRate_DD_nHe3"],                           False),
+    # Per-channel fusion rates (reactions/s/g, mass-specific per CLAUDE.md §5b).
+    # data.fusion_power is the DT channel; these add DD/TT/DHe3/pB11 for
+    # tritium-lean and DD-branch yield analysis. EXODUS names per Kyle's
+    # neutronics_output.py inventory (June 2026).
+    ("fusion_rate_DD_nHe3",   ["FusionRate_DD_nHe3"],                             False),
+    ("fusion_rate_DD_pT",     ["FusionRate_DD_pT"],                               False),
+    ("fusion_rate_TT_nnHe4",  ["FusionRate_TT_nnHe4"],                            False),
+    ("fusion_rate_DHe3_pHe4", ["FusionRate_DHe3_pHe4"],                           False),
+    ("fusion_rate_pB11_3He4", ["FusionRate_pB11_3He4"],                           False),
     ("alpha_heating_power",   ["alpha_heating_power", "alpha_power",
                                "alpha_heating"],                                  False),
     ("alpha_heating_ion",     ["pt_particle_heating_ion"],                         False),
