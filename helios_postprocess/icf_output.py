@@ -245,25 +245,25 @@ class ICFOutputGenerator:
             _a(self._metric('Half-cone angle',  d.laser_half_cone_angle_deg, 'deg', fmt='.2f'))
             _a(f"  {'Spot radius':<30} {d.laser_spot_size_cm:>15.4f} cm  ({d.laser_spatial_profile})")
             _a(self._metric('Power multiplier', d.laser_power_multiplier,    '',    fmt='.4f'))
-            # Flux limiter: per-region when varying, single-line when uniform
+            # Flux limiter: always emit per-region listing when per-region
+            # data is available (Helios 11.0 per-region parsing, 11.1.0
+            # JSON 'Flux limiter mult' per Spatial region element). Header
+            # carries a "(uniform = X)" annotation when all regions match,
+            # for quick visual confirmation that the FL was set as intended
+            # across the whole target. Per-region "(flag off)" tag is
+            # preserved on rows where Use flux limiter = 0.
             fl_per = getattr(d, 'flux_limiter_per_region', None)
             if fl_per:
                 values = [r['value'] for r in fl_per]
                 uniform = all(abs(v - values[0]) < 1e-9 for v in values)
                 if uniform:
-                    v = values[0]
-                    any_enabled = any(r['enabled'] for r in fl_per)
-                    if any_enabled:
-                        _a(f"  {'Flux limiter (f)':<36s} {v:>10.3f}")
-                    elif v > 0:
-                        _a(f"  {'Flux limiter (f)':<36s} {v:>10.3f}  (flag off)")
-                    else:
-                        _a(f"  {'Flux limiter (f)':<36s} {'(not set)':>10s}")
+                    header_tag = f"(uniform = {values[0]:.3f})"
                 else:
-                    _a(f"  {'Flux limiter (f) per region:':<36s}")
-                    for r in fl_per:
-                        tag = '' if r['enabled'] else '  (flag off)'
-                        _a(f"    {r['region']:<28s} {r['value']:>10.3f}{tag}")
+                    header_tag = f"(range {min(values):.3f} - {max(values):.3f})"
+                _a(f"  Flux limiter (f) per region:   {header_tag}")
+                for r in fl_per:
+                    tag = '' if r['enabled'] else '  (flag off)'
+                    _a(f"    {r['region']:<28s} {r['value']:>10.3f}{tag}")
             else:
                 # Backward fallback for older summaries without per-region parsing
                 if getattr(d, 'flux_limiter_enabled', False):
