@@ -1071,15 +1071,19 @@ class ICFPlotter:
         is normalized per timestep so the absorption front stays visible
         throughout the drive.
         """
-        led = getattr(self.data, 'laser_energy_deposited', None)
+        # Prefer instantaneous zone-resolved deposited power (W/cm^3, RHINO-like);
+        # fall back to a 2-D time-integrated energy array if that's all a run has.
+        src = getattr(self.data, 'laser_power_source', None)
+        if src is None or getattr(src, 'ndim', 1) != 2:
+            src = getattr(self.data, 'laser_energy_deposited', None)
         zbnd = self.data.zone_boundaries
-        if led is None or getattr(led, 'ndim', 1) != 2 or zbnd is None:
-            logger.warning("Laser deposition contour: spatially-resolved data unavailable")
+        if src is None or getattr(src, 'ndim', 1) != 2 or zbnd is None:
+            logger.warning("Laser deposition contour: spatially-resolved deposition unavailable")
             return
 
         fig, ax = plt.subplots(figsize=self.default_figsize)
         try:
-            n_zones = min(led.shape[1], zbnd.shape[1] - 1)
+            n_zones = min(src.shape[1], zbnd.shape[1] - 1)
 
             # Focus on the drive/implosion window (through ~stagnation)
             stag = self.data.stag_time if self.data.stag_time > 0 else self.data.time[-1]
@@ -1087,7 +1091,7 @@ class ICFPlotter:
             tmask = self.data.time <= t_hi
             t_idx = np.where(tmask)[0]
             if len(t_idx) < 2:
-                t_idx = np.arange(led.shape[0])
+                t_idx = np.arange(src.shape[0])
             stime = self.data.time[t_idx]
 
             # Uniform radial grid; per-timestep-normalized deposition
@@ -1097,7 +1101,7 @@ class ICFPlotter:
             Z = np.zeros((len(t_idx), n_r))
             for i, t in enumerate(t_idx):
                 zc = 0.5 * (zbnd[t, :n_zones] + zbnd[t, 1:n_zones + 1])
-                row = np.interp(r_grid, zc, led[t, :n_zones], left=0.0, right=0.0)
+                row = np.interp(r_grid, zc, src[t, :n_zones], left=0.0, right=0.0)
                 m = row.max()
                 if m > 0:
                     Z[i, :] = row / m
@@ -1105,7 +1109,7 @@ class ICFPlotter:
             T, R = np.meshgrid(stime, r_grid, indexing='ij')
             cs = ax.contourf(T, R, Z, levels=20, cmap='plasma')
             cbar = plt.colorbar(cs, ax=ax)
-            cbar.set_label('Normalized laser deposition', fontsize=11)
+            cbar.set_label('Normalized deposited power', fontsize=11)
 
             # Critical surface overlay
             crit = getattr(self.data, 'critical_density_radius_formula', None)
@@ -1136,7 +1140,7 @@ class ICFPlotter:
 
             ax.set_xlabel('Time (ns)', fontsize=12)
             ax.set_ylabel('Radius (cm)', fontsize=12)
-            ax.set_title('Laser Deposition (normalized)\nwith critical surface & CR clock',
+            ax.set_title('Laser Deposition (normalized power)\nwith critical surface & CR clock',
                          fontsize=13, fontweight='bold')
             ax.set_ylim(0, 1.1 * r_out0)
             ax.set_xlim(stime[0], stime[-1])
