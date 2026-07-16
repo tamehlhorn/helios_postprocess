@@ -428,6 +428,23 @@ class ICFOutputGenerator:
             _a(self._metric('Mass-avg adiabat (peak-vel)', d.adiabat_mass_averaged_ice, '',    fmt='.2f'))
         if getattr(d, 'adiabat_at_breakout', 0.0) > 0:
             _a(self._metric('Base adiabat (at breakout)', d.adiabat_at_breakout,       '',     fmt='.2f'))
+        # ---- CR-clocked cross-code metrics (Will Trickey / RHINO parity) ----
+        if getattr(d, 'ifar_cr15', None) is not None and d.ifar_cr15 > 0:
+            _a(self._metric('IFAR at CR 1.5 (compound)',        d.ifar_cr15,                        '',     fmt='.1f'))
+        if getattr(d, 'ifar_ice_cr15', None) is not None and d.ifar_ice_cr15 > 0:
+            _a(self._metric('IFAR at CR 1.5 (ice)',             d.ifar_ice_cr15,                    '',     fmt='.1f'))
+        if getattr(d, 'adiabat_min_rhino', None) is not None and d.adiabat_min_rhino > 0:
+            _a(self._metric('Min shell adiabat at CR 1.5',      d.adiabat_min_rhino,                '',     fmt='.2f'))
+        if getattr(d, 'adiabat_mass_averaged_ice_cr15', None) is not None and d.adiabat_mass_averaged_ice_cr15 > 0:
+            _a(self._metric('Mass-avg ice adiabat at CR 1.5',   d.adiabat_mass_averaged_ice_cr15,   '',     fmt='.2f'))
+        if getattr(d, 'adiabat_mass_avg_will_cr15', None) is not None and d.adiabat_mass_avg_will_cr15 > 0:
+            _a(self._metric('Mass-avg shell adiabat at CR 1.5 (Will)', d.adiabat_mass_avg_will_cr15, '',    fmt='.2f'))
+        if getattr(d, 'ablation_pressure_at_cr_3p5_Mbar', None) is not None and d.ablation_pressure_at_cr_3p5_Mbar > 0:
+            _a(self._metric('Ablation pressure at CR 3.5',      d.ablation_pressure_at_cr_3p5_Mbar, 'Mbar', fmt='.2f'))
+        if getattr(d, 'sound_speed_shell_will_cr15_kms', None) is not None and d.sound_speed_shell_will_cr15_kms > 0:
+            _a(self._metric('Shell sound speed at CR 1.5',      d.sound_speed_shell_will_cr15_kms,  'km/s', fmt='.1f'))
+        if getattr(d, 'peak_implosion_velocity_at_cr15', None) is not None and d.peak_implosion_velocity_at_cr15 > 0:
+            _a(self._metric('Implosion velocity at CR 1.5',     d.peak_implosion_velocity_at_cr15,  'km/s', fmt='.2f'))
         if getattr(d, 'shock_breakout_time_ns', 0.0) > 0:
             # Pre-stagnation pressures shown in Mbar (1 Gbar = 1000 Mbar).
             # Stored attributes keep Gbar units; conversion is display-only.
