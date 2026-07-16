@@ -100,6 +100,7 @@ class ICFPlotter:
             # Laser/drive
             if self.data.laser_energy_deposited is not None:
                 self._plot_laser_deposition(pdf)
+                self._plot_laser_deposition_contour(pdf)
             self._plot_laser_intensity(pdf)
             if self.data.laser_power_delivered is not None:
                 self._plot_laser_power(pdf)
@@ -1058,6 +1059,94 @@ class ICFPlotter:
         
         pdf.savefig(fig)
         plt.close(fig)
+
+    def _plot_laser_deposition_contour(self, pdf):
+        """
+        Contour of normalized laser energy deposition in time-radius space,
+        with the critical surface, material interfaces, and CR=1.5 / CR=3.5
+        clock lines overlaid. RHINO plot_laser_deposition analog.
+
+        Complements _plot_laser_deposition (cumulative energy vs time) by
+        showing WHERE the laser deposits as the shell converges. Deposition
+        is normalized per timestep so the absorption front stays visible
+        throughout the drive.
+        """
+        led = getattr(self.data, 'laser_energy_deposited', None)
+        zbnd = self.data.zone_boundaries
+        if led is None or getattr(led, 'ndim', 1) != 2 or zbnd is None:
+            logger.warning("Laser deposition contour: spatially-resolved data unavailable")
+            return
+
+        fig, ax = plt.subplots(figsize=self.default_figsize)
+        try:
+            n_zones = min(led.shape[1], zbnd.shape[1] - 1)
+
+            # Focus on the drive/implosion window (through ~stagnation)
+            stag = self.data.stag_time if self.data.stag_time > 0 else self.data.time[-1]
+            t_hi = min(stag * 1.1, self.data.time[-1])
+            tmask = self.data.time <= t_hi
+            t_idx = np.where(tmask)[0]
+            if len(t_idx) < 2:
+                t_idx = np.arange(led.shape[0])
+            stime = self.data.time[t_idx]
+
+            # Uniform radial grid; per-timestep-normalized deposition
+            r_out0 = float(zbnd[0, n_zones])
+            n_r = 3 * n_zones
+            r_grid = np.linspace(0.0, r_out0, n_r)
+            Z = np.zeros((len(t_idx), n_r))
+            for i, t in enumerate(t_idx):
+                zc = 0.5 * (zbnd[t, :n_zones] + zbnd[t, 1:n_zones + 1])
+                row = np.interp(r_grid, zc, led[t, :n_zones], left=0.0, right=0.0)
+                m = row.max()
+                if m > 0:
+                    Z[i, :] = row / m
+
+            T, R = np.meshgrid(stime, r_grid, indexing='ij')
+            cs = ax.contourf(T, R, Z, levels=20, cmap='plasma')
+            cbar = plt.colorbar(cs, ax=ax)
+            cbar.set_label('Normalized laser deposition', fontsize=11)
+
+            # Critical surface overlay
+            crit = getattr(self.data, 'critical_density_radius_formula', None)
+            if crit is not None:
+                cvalid = (crit > 0) & tmask
+                if np.any(cvalid):
+                    ax.plot(self.data.time[cvalid], crit[cvalid], 'g--',
+                            linewidth=1.5, label='Critical surface')
+
+            # Material interface overlays
+            ri = getattr(self.data, 'region_interfaces_indices', None)
+            if ri is not None and getattr(ri, 'ndim', 0) == 2:
+                for col in range(ri.shape[1]):
+                    r_iface = np.array([zbnd[t, int(ri[t, col])] for t in t_idx])
+                    lbl = 'Material interface' if col == 0 else None
+                    ax.plot(stime, r_iface, 'w:', linewidth=1.0, alpha=0.8, label=lbl)
+
+            # CR=1.5 / CR=3.5 clock lines
+            t_cr15 = getattr(self.data, 't_peak_velocity_at_cr15_ns', 0.0) \
+                or getattr(self.data, 't_adiabat_min_rhino_ns', 0.0)
+            t_cr35 = getattr(self.data, 't_at_cr_3p5_ns', 0.0)
+            if t_cr15 and t_cr15 <= t_hi:
+                ax.axvline(t_cr15, color='cyan', linestyle='-.', linewidth=1.5,
+                           alpha=0.85, label='CR = 1.5')
+            if t_cr35 and t_cr35 <= t_hi:
+                ax.axvline(t_cr35, color='magenta', linestyle='-.', linewidth=1.8,
+                           alpha=0.85, label='CR = 3.5')
+
+            ax.set_xlabel('Time (ns)', fontsize=12)
+            ax.set_ylabel('Radius (cm)', fontsize=12)
+            ax.set_title('Laser Deposition (normalized)\nwith critical surface & CR clock',
+                         fontsize=13, fontweight='bold')
+            ax.set_ylim(0, 1.1 * r_out0)
+            ax.set_xlim(stime[0], stime[-1])
+            ax.legend(loc='upper right', fontsize=8, framealpha=0.85)
+            plt.tight_layout()
+            pdf.savefig(fig)
+        except Exception as e:
+            logger.warning(f"Could not create laser deposition contour: {e}")
+        finally:
+            plt.close(fig)
 
     def _plot_laser_intensity(self, pdf):
         """
