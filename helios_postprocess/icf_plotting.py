@@ -1122,8 +1122,9 @@ class ICFPlotter:
             # Material interface overlays
             ri = getattr(self.data, 'region_interfaces_indices', None)
             if ri is not None and getattr(ri, 'ndim', 0) == 2:
+                _nnode = zbnd.shape[1] - 1  # clip interface indices to valid node range
                 for col in range(ri.shape[1]):
-                    r_iface = np.array([zbnd[t, int(ri[t, col])] for t in t_idx])
+                    r_iface = np.array([zbnd[t, min(int(ri[t, col]), _nnode)] for t in t_idx])
                     lbl = 'Material interface' if col == 0 else None
                     ax.plot(stime, r_iface, 'w:', linewidth=1.0, alpha=0.8, label=lbl)
 
