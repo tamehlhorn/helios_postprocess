@@ -240,6 +240,10 @@ def extract_histories_from_run_data(data) -> Dict:
     adiabat             = getattr(data, 'adiabat_mass_averaged_ice', 0.0)
     adiabat_cr15        = getattr(data, 'adiabat_mass_averaged_ice_cr15', 0.0)
     adiabat_min_rhino   = getattr(data, 'adiabat_min_rhino', 0.0)
+    # RHINO native convention (fully-ionized DT, Z̄=1): W. Trickey's headline
+    # min shell adiabat (~4.13 on WT baseline). Distinct from adiabat_min_rhino
+    # above, which uses the actual per-zone electron density.
+    adiabat_min_rhino_fi = getattr(data, 'adiabat_min_rhino_fully_ionized', 0.0)
     # RHINO-formula parallel adiabats (proper degenerate electron gas
     # Fermi pressure with actual n_e per zone). Same zone-selection and
     # time-selection as the Lindl-convention adiabats above; just a
@@ -372,6 +376,7 @@ def extract_histories_from_run_data(data) -> Dict:
         'adiabat':               adiabat,
         'adiabat_cr15':          adiabat_cr15,
         'adiabat_min_rhino':     adiabat_min_rhino,
+        'adiabat_min_rhino_fully_ionized': adiabat_min_rhino_fi,
         'adiabat_rhino_formula': adiabat_rhino_formula,
         'adiabat_cr15_rhino_formula': adiabat_cr15_rhino_formula,
         'adiabat_breakout_rhino_formula': adiabat_breakout_rhino_formula,
@@ -568,6 +573,7 @@ def calculate_burn_averaged_metrics(histories: Dict,
         'adiabat':               histories.get('adiabat', 0.0),
         'adiabat_cr15':          histories.get('adiabat_cr15', 0.0),
         'adiabat_min_rhino':     histories.get('adiabat_min_rhino', 0.0),
+        'adiabat_min_rhino_fully_ionized': histories.get('adiabat_min_rhino_fully_ionized', 0.0),
         'adiabat_rhino_formula': histories.get('adiabat_rhino_formula', 0.0),
         'adiabat_cr15_rhino_formula': histories.get('adiabat_cr15_rhino_formula', 0.0),
         'adiabat_breakout_rhino_formula': histories.get('adiabat_breakout_rhino_formula', 0.0),
@@ -796,11 +802,16 @@ def compare_with_published(sim_metrics: Dict,
          'peak_velocity_kms', None, '.1f'),
         ('Peak velocity at CR=1.5 (km/s)',
          sim_metrics.get('peak_velocity_kms_cr15', 0.0),
-         'peak_velocity_kms', None, '.1f'),
+         _adi_ref('peak_velocity_kms_cr15'), None, '.1f'),
         ('Implosion velocity RHINO (km/s)',
          sim_metrics.get('implosion_velocity_rhino_kms', 0.0),
-         'peak_velocity_kms', None, '.1f'),
-        ('Min shell adiabat RHINO',
+         ('peak_velocity_kms_rhino'
+          if (published_metrics and 'peak_velocity_kms_rhino' in published_metrics)
+          else 'peak_velocity_kms'), None, '.1f'),
+        ('Min adiabat RHINO (WT native)',
+         sim_metrics.get('adiabat_min_rhino_fully_ionized', 0.0),
+         adi_rhino_min_key, None, '.2f'),
+        ('Min adiabat RHINO (actual n_e)',
          sim_metrics.get('adiabat_min_rhino', 0.0),
          adi_rhino_min_key, None, '.2f'),
         ('Adiabat (Lindl peak v)',
