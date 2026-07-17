@@ -1294,51 +1294,76 @@ class ICFPlotter:
 
         pdf.savefig(fig); _plt.close(fig)
 
-        # ---- PAGE 3: Method 1 vs Method 2 cross-check at peak power ---------
-        fig, axes = _plt.subplots(2, 1, figsize=(11, 8.5), sharex=True)
+        # ---- PAGE 3: intensity + density profile at peak power (LPI view) ----
+        # Method 2 (Beer-Lambert) intensity and the electron-density profile vs
+        # radius, zoomed to the corona. Method 1 (P_src/alpha) and the raw alpha
+        # panel were removed: Method 1 exceeded the physical intensity ceiling
+        # (~1e15) and alpha's only role here was as its input. n_e/n_crit with
+        # n_c and n_c/4 levels, plus the density scale length at quarter-critical,
+        # give an LPI reader the intensity and gradient where SRS/TPD grow.
+        fig, ax = _plt.subplots(figsize=(11, 6.5))
 
-        # Pick the peak-power timestep
         t_idx = 0
         if _np.isfinite(t_peak_power) and t_ns is not None:
             t_idx = int(_np.argmin(_np.abs(t_ns - t_peak_power)))
         elif P_laser is not None:
             t_idx = int(_np.argmax(P_laser))
 
-        r_row = r_um[t_idx]
+        r_row = r_um[t_idx]        # um
+        r_cm = zcen[t_idx]         # cm
         with _np.errstate(invalid='ignore', divide='ignore'):
-            I1_row = I1[t_idx]
             I2_row = I2[t_idx]
-            alpha_row = alpha[t_idx]
 
-        ax = axes[0]
-        ax.semilogy(r_row, I2_row, color='steelblue', lw=1.3,
-                    label='Method 2 (Beer-Lambert)')
-        m1_finite = _np.isfinite(I1_row) & (I1_row > 0)
-        if m1_finite.any():
-            ax.semilogy(r_row[m1_finite], I1_row[m1_finite],
-                        color='crimson', lw=0.0, marker='.', ms=3,
-                        alpha=0.6, label='Method 1 (P_src / alpha)')
-        if _np.isfinite(r_crit[t_idx]):
-            ax.axvline(r_crit[t_idx] * 1e4, color='black', ls='--', lw=0.8,
-                       label=f'r_crit = {r_crit[t_idx]*1e4:.1f} um')
+        ax.semilogy(r_row, I2_row, color='steelblue', lw=1.5,
+                    label='I (Beer-Lambert)')
+        ax.set_xlabel(r'Radius [$\mu$m]')
+        ax.set_ylabel(r'Intensity [W/cm$^2$]', color='steelblue')
+        ax.tick_params(axis='y', labelcolor='steelblue')
+        ax.grid(True, alpha=0.3, which='both')
+
+        r_crit_um = (r_crit[t_idx] * 1e4) if _np.isfinite(r_crit[t_idx]) else _np.nan
         _rqc_h = getattr(self.data, 'r_quarter_crit_intensity_history', None)
-        if _rqc_h is not None and _np.isfinite(_rqc_h[t_idx]):
-            ax.axvline(_rqc_h[t_idx] * 1e4, color='green', ls=':', lw=0.9,
-                       label=f'r_qc = {_rqc_h[t_idx]*1e4:.1f} um')
-        ax.set_ylabel(r'Intensity [W/cm$^2$]')
-        ax.set_title(f'Radial profile at t = {t_ns[t_idx]:.2f} ns '
-                     f'(peak laser power)')
-        ax.legend(loc='upper right', fontsize=9)
-        ax.grid(True, alpha=0.3, which='both')
+        r_qc_um = (_rqc_h[t_idx] * 1e4) if (_rqc_h is not None
+                   and _np.isfinite(_rqc_h[t_idx])) else _np.nan
 
-        ax = axes[1]
-        ax.semilogy(r_row, _np.maximum(alpha_row, 1e-4),
-                    color='black', lw=1.0)
-        ax.set_xlabel(r'Radius [um]')
-        ax.set_ylabel(r'Attenuation coefficient $\alpha$ [1/cm]')
-        ax.grid(True, alpha=0.3, which='both')
-        if _np.isfinite(r_crit[t_idx]):
-            ax.axvline(r_crit[t_idx] * 1e4, color='black', ls='--', lw=0.8)
+        # Electron density n_e/n_crit on a twin axis, with n_c and n_c/4 levels
+        ne = getattr(self.data, 'electron_density', None)
+        ncr = getattr(self.data, 'ncr_intensity', None)
+        L_n_um = _np.nan
+        if ne is not None and ncr:
+            ne_row = _np.asarray(ne[t_idx], dtype=float)
+            ax2 = ax.twinx()
+            ax2.semilogy(r_row, _np.maximum(ne_row / ncr, 1e-3),
+                         color='purple', lw=1.3, label=r'n$_e$/n$_{crit}$')
+            ax2.set_ylabel(r'n$_e$ / n$_{crit}$', color='purple')
+            ax2.tick_params(axis='y', labelcolor='purple')
+            ax2.axhline(1.0, color='purple', ls='-', lw=0.7, alpha=0.35)
+            ax2.axhline(0.25, color='purple', ls='--', lw=0.7, alpha=0.35)
+
+            # Density scale length L_n = n_e/|dn_e/dr| at quarter-critical
+            if _np.isfinite(r_qc_um):
+                j = int(_np.argmin(_np.abs(r_cm - _rqc_h[t_idx])))
+                dne = _np.gradient(ne_row, r_cm)
+                if _np.isfinite(dne[j]) and dne[j] != 0:
+                    L_n_um = abs(ne_row[j] / dne[j]) * 1e4
+
+        if _np.isfinite(r_crit_um):
+            ax.axvline(r_crit_um, color='black', ls='--', lw=1.0,
+                       label=f'r$_{{crit}}$ = {r_crit_um:.0f} $\\mu$m')
+        if _np.isfinite(r_qc_um):
+            ax.axvline(r_qc_um, color='green', ls=':', lw=1.2,
+                       label=f'r$_{{qc}}$ = {r_qc_um:.0f} $\\mu$m')
+
+        if _np.isfinite(r_qc_um):
+            _lo = (r_crit_um if _np.isfinite(r_crit_um) else r_qc_um) * 0.5
+            ax.set_xlim(max(0.0, _lo), r_qc_um * 2.5)
+
+        ttl = f'Radial profile at t = {t_ns[t_idx]:.2f} ns (peak laser power)'
+        if _np.isfinite(L_n_um):
+            ttl += (f'\nDensity scale length at n$_c$/4:  '
+                    f'L$_n$ = {L_n_um:.0f} $\\mu$m')
+        ax.set_title(ttl)
+        ax.legend(loc='upper right', fontsize=9)
 
         pdf.savefig(fig); _plt.close(fig)
 
