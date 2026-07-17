@@ -1170,9 +1170,7 @@ class ICFPlotter:
         zcen = 0.5 * (zbnd[:, :-1] + zbnd[:, 1:])
         r_um = zcen * 1e4  # cm -> um for plot axes
 
-        I1 = arrays['I1']
         I2 = arrays['I2']
-        alpha = arrays['alpha_zone']
         r_crit = arrays['r_crit']
         I_peak_coronal_vs_t = arrays['I_peak_coronal_vs_t']
 

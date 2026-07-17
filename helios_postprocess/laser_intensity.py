@@ -3,28 +3,23 @@ laser_intensity.py
 ==================
 Reconstruct laser intensity I(r, t) [W/cm^2] from quantities on ICFRunData.
 
-Two independent methods, both computed for cross-check:
-
-  Method 1 (exact, local):
-      I(r) = LaserPwrSrc(r) / laserAttinuationCoeff(r)
-  Derived from P_src = alpha * I by definition. Undefined where alpha is
-  below the coronal-noise floor (ALPHA_MIN_M1) or above the opaque cap.
-
-  Method 2 (Beer-Lambert, 1D spherical):
+Reconstruction (Beer-Lambert, 1D spherical):
       I(r) = I_outer * (R_out / r)^2 * exp(-tau(r))
   with
       I_outer = LaserPwrOnTargetForBeam / (4 pi R_out^2)
       tau(r)  = integral_r^{R_out} alpha(r') dr' at zone centers
 
+  Anchored by the measured incident power and geometric convergence; the corona
+  value is insensitive to alpha's magnitude (exp(-tau) ~ 1 there).
+
 Extracted from the standalone plot_laser_intensity.py (Apr 2026).
 
-Key change from the standalone:
-  - M1 filter: the per-timestep relative threshold `alpha > 0.01 * alpha_max(t)`
-    was over-aggressive. alpha_max at the critical surface reaches 10^4-10^5
-    cm^-1, so 1% of that is 100+ cm^-1 -- far above the physical coronal
-    absorption range (10^-2 to 10^1 cm^-1). Replaced with an absolute physical
-    floor ALPHA_MIN_M1 = 1e-2 cm^-1 that excludes only tenuous-vacuum noise
-    while keeping the full absorbing corona.
+Removed (Jul 2026): a second "Method 1" estimate I = P_src / alpha. It assumed
+  P_src = alpha * I pointwise, but Helios's laserAttinuationCoeff is not the
+  local IB absorption coefficient, so Method 1 lacked the (R_out/r)^2
+  convergence and overshot the physical intensity ceiling by ~100x (growing as
+  r^2 into the corona). It fed only a cross-check plot -- no scalar or metric
+  depended on it. See diagnose_method1_discrepancy.py.
 
 Author: Prof T / Xcimer ICF Analysis
 Date:   2026
@@ -42,9 +37,6 @@ N_CR_COEFF = 1.115e21   # cm^-3 * um^2
 SENTINEL_THRESHOLD = 1.0e20
 ALPHA_MAX = 1.0e6       # cap that saturates tau on any physical path length
 OPAQUE_FLOOR = 0.9 * ALPHA_MAX
-
-# Coronal-noise floor for Method 1 (see module docstring)
-ALPHA_MIN_M1 = 1.0e-2   # cm^-1
 
 
 # ---------------------------------------------------------------------------
@@ -85,19 +77,6 @@ def clean_attenuation(atten_raw: np.ndarray, nzone: int) -> np.ndarray:
 # ---------------------------------------------------------------------------
 # Intensity reconstruction
 # ---------------------------------------------------------------------------
-
-def compute_method1(pwr_src: np.ndarray, alpha_zone: np.ndarray) -> np.ndarray:
-    """
-    I = P_src / alpha, NaN where not physically meaningful.
-
-    Invalid zones: alpha <= ALPHA_MIN_M1 (coronal noise) or alpha >= OPAQUE_FLOOR
-    (laser cannot propagate). See module docstring for threshold rationale.
-    """
-    with np.errstate(divide='ignore', invalid='ignore'):
-        valid = (alpha_zone > ALPHA_MIN_M1) & (alpha_zone < OPAQUE_FLOOR)
-        I = np.where(valid, pwr_src / alpha_zone, np.nan)
-    return I
-
 
 def compute_method2(zbnd: np.ndarray,
                     alpha_zone: np.ndarray,
@@ -227,7 +206,7 @@ def analyze_laser_intensity(data, wavelength_um: float = LAMBDA_UM_DEFAULT
     Returns None if required inputs are missing.
 
     Returns dict with:
-      I1, I2                     (nt, nz)    Method-1 and Method-2 intensities
+      I2                         (nt, nz)    Reconstructed intensity (Beer-Lambert)
       I_grid_outer               (nt,)       Incident intensity at grid outer boundary
       alpha_zone                 (nt, nz)    Cleaned, zone-centered attenuation
       r_crit                     (nt,)       Critical-surface radius [cm]
@@ -259,7 +238,6 @@ def analyze_laser_intensity(data, wavelength_um: float = LAMBDA_UM_DEFAULT
                            P_on_target / (4.0 * np.pi * R_out ** 2),
                            0.0)
 
-    I1 = compute_method1(pwr_src, alpha_zone)
     I2 = compute_method2(zbnd, alpha_zone, I_outer)
 
     ne = getattr(data, 'electron_density', None)
@@ -309,7 +287,7 @@ def analyze_laser_intensity(data, wavelength_um: float = LAMBDA_UM_DEFAULT
                              if np.isfinite(I_at_qc_vs_t[t_peak]) else np.nan)
 
     return dict(
-        I1=I1, I2=I2, I_grid_outer=I_outer, alpha_zone=alpha_zone,
+        I2=I2, I_grid_outer=I_outer, alpha_zone=alpha_zone,
         r_crit=r_crit, ncr=ncr,
         I_at_crit_vs_t=I_at_crit_vs_t,
         I_peak_coronal_vs_t=I_peak_coronal_vs_t,

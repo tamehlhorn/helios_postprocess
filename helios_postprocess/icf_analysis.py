@@ -143,7 +143,6 @@ class ICFAnalyzer:
 
         # Cached 2D arrays for plotter (not persisted)
         self.data._laser_intensity_arrays = dict(
-            I1=result['I1'],
             I2=result['I2'],
             alpha_zone=result['alpha_zone'],
             r_crit=result['r_crit'],
