@@ -1196,34 +1196,43 @@ class ICFPlotter:
         except Exception:
             vmax = 16.0
 
-        # Use pcolormesh with time on x, radius on y (one mesh per frame)
-        # For performance with 1131 timesteps, reduce to a uniform mesh
-        T_mesh, R_mesh = _np.meshgrid(t_ns, _np.arange(log_I.shape[1]))
-        # But we want physical radius as y-axis; each row is a timestep so
-        # r varies per timestep. Use imshow on median-radius grid for speed.
-        # Simple approach: imshow on (time, zone_index) with r_crit overlaid
-        # in zone-index units too.
-        im = ax.imshow(log_I.T,
-                       origin='lower', aspect='auto',
-                       extent=[t_ns[0], t_ns[-1], 0, log_I.shape[1]],
-                       cmap='magma', vmin=vmin, vmax=vmax,
-                       interpolation='nearest')
-        cb = _plt.colorbar(im, ax=ax, pad=0.02)
+        # Interpolate log10 I2 onto a uniform PHYSICAL-radius grid (cm) so the
+        # y-axis is physical and directly comparable to the deposition contour,
+        # rather than zone index. Each Lagrangian row has its own radii, so
+        # interpolate per timestep; the empty inner region stays NaN (masked).
+        r_qc_hist = getattr(self.data, 'r_quarter_crit_intensity_history', None)
+        _fin_all = _np.isfinite(log_I)
+        if _np.any(_fin_all):
+            r_lo = float(_np.nanmin(zcen[_fin_all]))
+            r_hi = float(_np.nanmax(zcen[_fin_all]))
+        else:
+            r_lo, r_hi = 0.0, float(_np.nanmax(zcen))
+        n_r = 2 * log_I.shape[1]
+        r_grid = _np.linspace(max(0.0, r_lo * 0.9), r_hi * 1.02, n_r)
+        Zmap = _np.full((len(t_ns), n_r), _np.nan)
+        for tt in range(len(t_ns)):
+            fin = _np.isfinite(log_I[tt])
+            if int(_np.count_nonzero(fin)) >= 2:
+                Zmap[tt] = _np.interp(r_grid, zcen[tt][fin], log_I[tt][fin],
+                                      left=_np.nan, right=_np.nan)
+        pcm = ax.pcolormesh(t_ns, r_grid, Zmap.T, cmap='magma',
+                            vmin=vmin, vmax=vmax, shading='auto')
+        cb = _plt.colorbar(pcm, ax=ax, pad=0.02)
         cb.set_label(r'log$_{10}$ I [W/cm$^2$]')
 
-        # Overlay r_crit in zone-index space
-        r_crit_zone = _np.full_like(r_crit, _np.nan, dtype=float)
-        for tt in range(len(r_crit)):
-            if _np.isfinite(r_crit[tt]):
-                r_crit_zone[tt] = _np.argmin(_np.abs(zcen[tt] - r_crit[tt]))
-        ax.plot(t_ns, r_crit_zone, color='cyan', lw=1.2, label='r_crit')
+        # LPI-relevant surfaces (physical radius): critical and quarter-critical
+        ax.plot(t_ns, r_crit, color='cyan', lw=1.4, label=r'r$_{crit}$')
+        if r_qc_hist is not None:
+            ax.plot(t_ns, r_qc_hist, color='lime', lw=1.2,
+                    label=r'r$_{qc}$ (n$_c$/4)')
 
         if _np.isfinite(t_peak_power):
             ax.axvline(t_peak_power, color='white', ls='--', lw=0.8,
                        alpha=0.7, label='t(peak P)')
 
         ax.set_xlabel('Time [ns]')
-        ax.set_ylabel('Zone index (radial)')
+        ax.set_ylabel('Radius [cm]')
+        ax.set_ylim(r_grid[0], r_grid[-1])
         ax.set_title(f'Laser intensity I(r, t)  --  Method 2 (Beer-Lambert)\n'
                      f'File: {getattr(self.data, "filename", "")}')
         ax.legend(loc='upper right', fontsize=9)
@@ -1242,20 +1251,42 @@ class ICFPlotter:
         ax.set_title('Laser power and intensity vs time')
 
         ax = axes[1]
-        with _np.errstate(invalid='ignore', divide='ignore'):
-            if I_grid_outer is not None:
-                ax.semilogy(t_ns, I_grid_outer, color='steelblue', lw=1.0,
-                            label='I at grid outer')
-            if I_at_crit is not None:
-                ax.semilogy(t_ns, I_at_crit, color='crimson', lw=1.2,
-                            label='I at r_crit')
-            if I_peak_coronal_vs_t is not None:
-                ax.semilogy(t_ns, I_peak_coronal_vs_t,
-                            color='darkorange', lw=0.8, ls='--',
-                            label='I peak coronal')
+        # Sampled-at-surface intensities underflow (~1e-269) when the critical /
+        # quarter-critical surface is ill-defined or the beam is fully absorbed
+        # there, which otherwise auto-scales the log axis across ~270 decades.
+        # Window to the laser-on period (P > 1% peak) and floor to a physical
+        # minimum so the meaningful curves (~1e13-1e15) are readable.
+        I_at_qc = getattr(self.data, 'I_at_quarter_crit_history', None)
+        I_FLOOR = 1.0e10  # W/cm^2
+        on_mask = _np.ones(len(t_ns), dtype=bool)
+        if P_laser is not None and _np.any(_np.isfinite(P_laser)):
+            _pk = float(_np.nanmax(P_laser))
+            if _pk > 0:
+                on_mask = P_laser > 0.01 * _pk
+
+        def _clean(y):
+            if y is None:
+                return None
+            y = _np.asarray(y, dtype=float)
+            out = _np.full(len(t_ns), _np.nan)
+            m = on_mask & _np.isfinite(y) & (y >= I_FLOOR)  # sub-floor = underflow -> gap
+            out[m] = y[m]
+            return out
+
+        _hi = 0.0
+        for _arr, _c, _lw, _ls, _lbl in (
+                (_clean(I_grid_outer),        'steelblue',  1.0, '-',  'I at grid outer'),
+                (_clean(I_at_crit),           'crimson',    1.2, '-',  r'I at r$_{crit}$'),
+                (_clean(I_at_qc),             'green',      1.1, '-',  r'I at r$_{qc}$ (n$_c$/4)'),
+                (_clean(I_peak_coronal_vs_t), 'darkorange', 0.9, '--', 'I peak coronal')):
+            if _arr is not None and _np.any(_np.isfinite(_arr)):
+                ax.semilogy(t_ns, _arr, color=_c, lw=_lw, ls=_ls, label=_lbl)
+                _hi = max(_hi, float(_np.nanmax(_arr)))
         ax.set_xlabel('Time [ns]')
         ax.set_ylabel(r'Intensity [W/cm$^2$]')
-        ax.legend(loc='upper right', fontsize=9)
+        if _hi > 0:
+            ax.set_ylim(I_FLOOR, 10 ** (_np.ceil(_np.log10(_hi)) + 0.3))
+        ax.legend(loc='lower right', fontsize=9)
         ax.grid(True, alpha=0.3, which='both')
         if _np.isfinite(t_peak_power):
             for a in axes:
@@ -1290,6 +1321,10 @@ class ICFPlotter:
         if _np.isfinite(r_crit[t_idx]):
             ax.axvline(r_crit[t_idx] * 1e4, color='black', ls='--', lw=0.8,
                        label=f'r_crit = {r_crit[t_idx]*1e4:.1f} um')
+        _rqc_h = getattr(self.data, 'r_quarter_crit_intensity_history', None)
+        if _rqc_h is not None and _np.isfinite(_rqc_h[t_idx]):
+            ax.axvline(_rqc_h[t_idx] * 1e4, color='green', ls=':', lw=0.9,
+                       label=f'r_qc = {_rqc_h[t_idx]*1e4:.1f} um')
         ax.set_ylabel(r'Intensity [W/cm$^2$]')
         ax.set_title(f'Radial profile at t = {t_ns[t_idx]:.2f} ns '
                      f'(peak laser power)')
