@@ -86,8 +86,6 @@ class ICFPlotter:
             self._plot_pressure_history(pdf)
             self._plot_velocity_history(pdf)
             self._plot_radius_history(pdf)
-            self._plot_critical_density_position(pdf)
-            self._plot_ablation_front(pdf)
             self._plot_combined_surface_tracking(pdf)
       
             # Fusion and burn
@@ -813,8 +811,9 @@ class ICFPlotter:
         Plot ablation front and critical density surfaces on the same axes.
         Shows how different physical surfaces evolve during the implosion.
         
-        Note: Plot is limited to stagnation/bang time to avoid algorithm breakdown
-        and to maintain appropriate scale for early-time details.
+        Note: Shows the full time range; bang/stagnation are marked as vertical
+        lines. Y-axis defaults to the ablation-front range so a post-stagnation
+        critical-surface spike clips rather than compressing the plot.
         """
         # Check if we have data to plot
         has_ablation = self.data.ablation_front_radius is not None
@@ -825,24 +824,14 @@ class ICFPlotter:
             logger.warning("No surface tracking data available for combined plot")
             return
         
-        # Determine time cutoff (stagnation or bang time)
-        # This prevents algorithm breakdown and keeps scale appropriate
+        # Full time range. The algorithm critical curve (the reason this plot
+        # was previously capped at stagnation) has been removed, so the
+        # well-behaved ablation-front and formula-critical curves can run to
+        # the end, capturing the post-stagnation ablation-front behavior.
+        # Bang/stagnation are kept as vertical markers rather than a cutoff.
         time_cutoff = None
         cutoff_label = None
-        
-        if self.data.stag_time > 0:
-            time_cutoff = self.data.stag_time
-            cutoff_label = 'Stagnation'
-        elif self.data.bang_time > 0:
-            time_cutoff = self.data.bang_time
-            cutoff_label = 'Bang Time'
-        
-        if time_cutoff is None:
-            logger.warning("No stagnation or bang time available - plotting full time range")
-            time_mask = np.ones(len(self.data.time), dtype=bool)
-        else:
-            time_mask = self.data.time <= time_cutoff
-            logger.info(f"Combined surface plot limited to {cutoff_label} = {time_cutoff:.3e} ns")
+        time_mask = np.ones(len(self.data.time), dtype=bool)
         
         fig, ax = plt.subplots(figsize=self.default_figsize)
         
@@ -871,16 +860,9 @@ class ICFPlotter:
                        alpha=0.8, linestyle='-')
                 plotted_something = True
         
-        # Plot critical density - algorithm method
-        if has_crit_algo:
-            valid_mask = (self.data.critical_density_radius_algorithm > 0) & time_mask
-            if np.any(valid_mask):
-                ax.plot(self.data.time[valid_mask],
-                       self.data.critical_density_radius_algorithm[valid_mask],
-                       color='red', linewidth=2, 
-                       label='Critical Density (laser front)',
-                       alpha=0.8, linestyle='--')
-                plotted_something = True
+        # Algorithm critical-density curve intentionally not plotted here:
+        # it is unreliable on direct-drive (unphysical excursions near
+        # stagnation). Formula method + ablation front are retained.
         
         if not plotted_something:
             logger.warning("No valid surface tracking data to plot")
@@ -934,9 +916,16 @@ class ICFPlotter:
             # Add 10% padding for visibility
             ax.set_xlim([0, time_cutoff * 1.1])
         
-        # Set y-axis limits (let matplotlib auto-scale or use user config)
+        # Set y-axis limits. Over the full range the formula critical curve can
+        # spike post-stagnation (critical surface ill-defined during burn), so
+        # default the cap to the ablation-front range (physically bounded); such
+        # excursions then clip instead of compressing the plot.
         if self.config.get('combined_surface_ylim'):
             ax.set_ylim(self.config['combined_surface_ylim'])
+        elif has_ablation:
+            _abl = self.data.ablation_front_radius[(self.data.ablation_front_radius > 0) & time_mask]
+            if _abl.size:
+                ax.set_ylim(0, 1.15 * float(np.max(_abl)))
         
         plt.tight_layout()
         pdf.savefig(fig)
