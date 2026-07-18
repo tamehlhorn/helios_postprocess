@@ -87,6 +87,7 @@ class ICFPlotter:
             self._plot_velocity_history(pdf)
             self._plot_radius_history(pdf)
             self._plot_combined_surface_tracking(pdf)
+            self._plot_adiabat_conventions(pdf)
       
             # Fusion and burn
             # Fusion diagnostics (if available)
@@ -100,6 +101,7 @@ class ICFPlotter:
                 self._plot_laser_deposition(pdf)
                 self._plot_laser_deposition_contour(pdf)
             self._plot_laser_intensity(pdf)
+            self._plot_ln_quarter_critical_history(pdf)
             if self.data.laser_power_delivered is not None:
                 self._plot_laser_power(pdf)
             
@@ -1364,6 +1366,171 @@ class ICFPlotter:
         ax.legend(loc='upper right', fontsize=9)
 
         pdf.savefig(fig); _plt.close(fig)
+
+    def _plot_adiabat_conventions(self, pdf):
+        """Adiabat by convention (same run), two panels so the RHINO proper-
+        Fermi formula family (~14x standard) does not compress the rest."""
+        d = self.data
+        std = [
+            ('Lindl, breakout',                   'adiabat_at_breakout'),
+            ('Lindl, CR=1.5',                     'adiabat_mass_averaged_ice_cr15'),
+            ('Lindl, peak-v',                     'adiabat_mass_averaged_ice'),
+            ('RHINO min, WT native (fully-ion.)', 'adiabat_min_rhino_fully_ionized'),
+            ('RHINO min, actual n_e',             'adiabat_min_rhino'),
+            ('Will mass-avg shell, CR=1.5',       'adiabat_mass_avg_will_cr15'),
+        ]
+        rhino_f = [
+            ('RHINO formula, breakout', 'adiabat_at_breakout_rhino_formula'),
+            ('RHINO formula, CR=1.5',   'adiabat_mass_averaged_ice_cr15_rhino_formula'),
+            ('RHINO formula, peak-v',   'adiabat_mass_averaged_ice_rhino_formula'),
+        ]
+
+        def _collect(rows):
+            labs, vals, attrs = [], [], []
+            for lab, attr in rows:
+                v = float(getattr(d, attr, 0.0) or 0.0)
+                if v > 0:
+                    labs.append(lab); vals.append(v); attrs.append(attr)
+            return labs, vals, attrs
+
+        s_labs, s_vals, s_attrs = _collect(std)
+        r_labs, r_vals, _r_attrs = _collect(rhino_f)
+        if not s_labs and not r_labs:
+            return
+
+        fig, axes = plt.subplots(
+            2, 1, figsize=(10, 8),
+            gridspec_kw={'height_ratios': [max(len(s_labs), 1),
+                                           max(len(r_labs), 1)]})
+
+        hl = 'adiabat_min_rhino_fully_ionized'
+        ax = axes[0]
+        if s_labs:
+            colors = ['crimson' if a == hl else 'steelblue' for a in s_attrs]
+            ypos = np.arange(len(s_labs))
+            ax.barh(ypos, s_vals, color=colors, alpha=0.85)
+            ax.set_yticks(ypos)
+            ax.set_yticklabels(s_labs, fontsize=9)
+            ax.invert_yaxis()
+            for y, v in zip(ypos, s_vals):
+                ax.text(v, y, f' {v:.2f}', va='center', fontsize=8)
+            cl = getattr(d, 'published_adiabat_cluster', None)
+            if cl:
+                try:
+                    cval, cunc = (cl if isinstance(cl, (tuple, list)) else (cl, 0.0))
+                    ax.axvspan(cval - cunc, cval + cunc, color='gray', alpha=0.18,
+                               label=f'Cluster {cval:.2f}±{cunc:.2f}')
+                    ax.legend(loc='lower right', fontsize=8)
+                except Exception:
+                    pass
+            ax.set_xlabel(r'Adiabat  $\alpha$')
+            ax.set_title("Adiabat by convention -- standard scale\n"
+                         "(crimson = Will's fully-ionized RHINO headline)",
+                         fontsize=11)
+            ax.grid(True, axis='x', alpha=0.3)
+        else:
+            ax.axis('off')
+
+        ax = axes[1]
+        if r_labs:
+            ypos = np.arange(len(r_labs))
+            ax.barh(ypos, r_vals, color='purple', alpha=0.8)
+            ax.set_yticks(ypos)
+            ax.set_yticklabels(r_labs, fontsize=9)
+            ax.invert_yaxis()
+            for y, v in zip(ypos, r_vals):
+                ax.text(v, y, f' {v:.2f}', va='center', fontsize=8)
+            ax.set_xlabel(r'Adiabat  $\alpha$  (proper-Fermi)')
+            ax.set_title('RHINO proper-Fermi formula family '
+                         '(~14x standard -- separate axis)', fontsize=11)
+            ax.grid(True, axis='x', alpha=0.3)
+        else:
+            ax.axis('off')
+
+        fig.suptitle(f'Adiabat conventions -- {getattr(d, "filename", "")}',
+                     fontsize=12, fontweight='bold')
+        fig.tight_layout(rect=[0, 0, 1, 0.96])
+        pdf.savefig(fig); plt.close(fig)
+
+    def _plot_ln_quarter_critical_history(self, pdf):
+        """Density scale length L_n = n_e/|dn_e/dr| at the quarter-critical
+        surface vs time (SRS/TPD gain scale length), with I at n_c/4 on a
+        twin axis. Windowed to the laser-on period."""
+        d = self.data
+        ne = getattr(d, 'electron_density', None)
+        zc = getattr(d, 'zone_centers', None)
+        r_qc = getattr(d, 'r_quarter_crit_intensity_history', None)
+        t = getattr(d, 'time', None)
+        if ne is None or zc is None or r_qc is None or t is None:
+            return
+        t = np.asarray(t, dtype=float)
+        nt = len(t)
+        P = getattr(d, 'laser_power_on_target', None)
+        on = np.ones(nt, dtype=bool)
+        if P is not None and np.any(np.isfinite(P)):
+            pk = float(np.nanmax(P))
+            if pk > 0:
+                on = np.asarray(P, dtype=float) > 0.01 * pk
+
+        Ln_um = np.full(nt, np.nan)
+        for tt in range(nt):
+            if not on[tt]:
+                continue
+            rqc = r_qc[tt]
+            if not np.isfinite(rqc) or rqc <= 0:
+                continue
+            r_cm = np.asarray(zc[tt], dtype=float)
+            ne_row = np.asarray(ne[tt], dtype=float)
+            if r_cm.size < 3:
+                continue
+            j = int(np.argmin(np.abs(r_cm - rqc)))
+            dne = np.gradient(ne_row, r_cm)
+            if np.isfinite(dne[j]) and dne[j] != 0:
+                Ln_um[tt] = abs(ne_row[j] / dne[j]) * 1e4
+
+        if not np.any(np.isfinite(Ln_um)):
+            return
+
+        fig, ax = plt.subplots(figsize=(10, 6))
+        ax.plot(t, Ln_um, color='darkgreen', lw=1.6, label=r'L$_n$ at n$_c$/4')
+        ax.set_xlabel('Time [ns]')
+        ax.set_ylabel(r'L$_n$ at n$_c$/4  [$\mu$m]', color='darkgreen')
+        ax.tick_params(axis='y', labelcolor='darkgreen')
+        ax.grid(True, alpha=0.3)
+
+        I_qc = getattr(d, 'I_at_quarter_crit_history', None)
+        if I_qc is not None:
+            I_qc = np.asarray(I_qc, dtype=float).copy()
+            I_qc[~on] = np.nan
+            I_qc[~(I_qc > 0)] = np.nan
+            if np.any(np.isfinite(I_qc)):
+                ax2 = ax.twinx()
+                ax2.semilogy(t, I_qc, color='darkorange', lw=1.2, ls='--',
+                             label=r'I at n$_c$/4')
+                ax2.set_ylabel(r'I at n$_c$/4  [W/cm$^2$]', color='darkorange')
+                ax2.tick_params(axis='y', labelcolor='darkorange')
+
+        t_hi = float(np.nanmax(t))
+        t_cr15 = getattr(d, 't_peak_velocity_at_cr15_ns', 0.0) \
+            or getattr(d, 't_adiabat_min_rhino_ns', 0.0)
+        t_cr35 = getattr(d, 't_at_cr_3p5_ns', 0.0)
+        t_pk = getattr(d, 't_peak_power_ns', 0.0)
+        if t_cr15 and t_cr15 <= t_hi:
+            ax.axvline(t_cr15, color='cyan', ls='-.', lw=1.3, alpha=0.8, label='CR=1.5')
+        if t_cr35 and t_cr35 <= t_hi:
+            ax.axvline(t_cr35, color='magenta', ls='-.', lw=1.3, alpha=0.8, label='CR=3.5')
+        if t_pk and np.isfinite(t_pk):
+            ax.axvline(t_pk, color='gray', ls=':', lw=1.0, alpha=0.7, label='peak P')
+
+        on_idx = np.where(on)[0]
+        if on_idx.size:
+            ax.set_xlim(t[on_idx[0]], t[on_idx[-1]])
+
+        ax.set_title('Density scale length at quarter-critical vs time '
+                     '(SRS/TPD gain window)\n' + str(getattr(d, "filename", "")),
+                     fontsize=11)
+        ax.legend(loc='upper left', fontsize=9)
+        pdf.savefig(fig); plt.close(fig)
 
     def _plot_laser_power(self, pdf):
         """Plot laser power delivered.
