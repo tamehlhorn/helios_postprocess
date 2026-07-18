@@ -1368,36 +1368,25 @@ class ICFPlotter:
         pdf.savefig(fig); _plt.close(fig)
 
     def _published_adiabat_band(self):
-        """(value, uncertainty) for the cluster min-shell adiabat, read from the
-        published data. Resolution order: config['published_metrics'] (dict),
-        config['published_data_path'] (JSON file), then a pre-set
-        data.published_adiabat_cluster. Key 'adiabat_rhino_min_cr15' with
-        fallback 'adiabat'. Returns None if unavailable."""
-        def _pair(entry):
-            if entry is None:
-                return None
-            if isinstance(entry, (list, tuple)) and len(entry) >= 2:
-                return (float(entry[0]), float(entry[1]))
-            try:
-                return (float(entry), 0.0)
-            except (TypeError, ValueError):
-                return None
-        cfg = getattr(self, 'config', None) or {}
-        pub = cfg.get('published_metrics') if isinstance(cfg, dict) else None
+        """(value, unc) for the cluster min-shell adiabat, taken from the SAME
+        published_metrics the text comparison table uses: data.published_metrics
+        or config['published_metrics']. Key 'adiabat_rhino_min_cr15', fallback
+        'adiabat'. Returns None when no published data is present."""
+        pub = getattr(self.data, 'published_metrics', None)
         if not isinstance(pub, dict):
-            path = cfg.get('published_data_path') if isinstance(cfg, dict) else None
-            if path:
-                try:
-                    import json
-                    with open(path, 'r') as _f:
-                        pub = json.load(_f)
-                except Exception:
-                    pub = None
-        if isinstance(pub, dict):
-            got = _pair(pub.get('adiabat_rhino_min_cr15', pub.get('adiabat')))
-            if got is not None:
-                return got
-        return _pair(getattr(self.data, 'published_adiabat_cluster', None))
+            cfg = getattr(self, 'config', None) or {}
+            pub = cfg.get('published_metrics') if isinstance(cfg, dict) else None
+        if not isinstance(pub, dict):
+            return None
+        entry = pub.get('adiabat_rhino_min_cr15', pub.get('adiabat'))
+        if entry is None:
+            return None
+        if isinstance(entry, (list, tuple)) and len(entry) >= 2:
+            return (float(entry[0]), float(entry[1]))
+        try:
+            return (float(entry), 0.0)
+        except (TypeError, ValueError):
+            return None
 
     def _plot_adiabat_conventions(self, pdf):
         """Adiabat by convention (same run), two panels so the RHINO proper-
