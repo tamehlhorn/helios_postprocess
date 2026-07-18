@@ -1367,6 +1367,38 @@ class ICFPlotter:
 
         pdf.savefig(fig); _plt.close(fig)
 
+    def _published_adiabat_band(self):
+        """(value, uncertainty) for the cluster min-shell adiabat, read from the
+        published data. Resolution order: config['published_metrics'] (dict),
+        config['published_data_path'] (JSON file), then a pre-set
+        data.published_adiabat_cluster. Key 'adiabat_rhino_min_cr15' with
+        fallback 'adiabat'. Returns None if unavailable."""
+        def _pair(entry):
+            if entry is None:
+                return None
+            if isinstance(entry, (list, tuple)) and len(entry) >= 2:
+                return (float(entry[0]), float(entry[1]))
+            try:
+                return (float(entry), 0.0)
+            except (TypeError, ValueError):
+                return None
+        cfg = getattr(self, 'config', None) or {}
+        pub = cfg.get('published_metrics') if isinstance(cfg, dict) else None
+        if not isinstance(pub, dict):
+            path = cfg.get('published_data_path') if isinstance(cfg, dict) else None
+            if path:
+                try:
+                    import json
+                    with open(path, 'r') as _f:
+                        pub = json.load(_f)
+                except Exception:
+                    pub = None
+        if isinstance(pub, dict):
+            got = _pair(pub.get('adiabat_rhino_min_cr15', pub.get('adiabat')))
+            if got is not None:
+                return got
+        return _pair(getattr(self.data, 'published_adiabat_cluster', None))
+
     def _plot_adiabat_conventions(self, pdf):
         """Adiabat by convention (same run), two panels so the RHINO proper-
         Fermi formula family (~14x standard) does not compress the rest."""
@@ -1414,15 +1446,13 @@ class ICFPlotter:
             ax.invert_yaxis()
             for y, v in zip(ypos, s_vals):
                 ax.text(v, y, f' {v:.2f}', va='center', fontsize=8)
-            cl = getattr(d, 'published_adiabat_cluster', None)
-            if cl:
-                try:
-                    cval, cunc = (cl if isinstance(cl, (tuple, list)) else (cl, 0.0))
-                    ax.axvspan(cval - cunc, cval + cunc, color='gray', alpha=0.18,
-                               label=f'Cluster {cval:.2f}±{cunc:.2f}')
-                    ax.legend(loc='lower right', fontsize=8)
-                except Exception:
-                    pass
+            cband = self._published_adiabat_band()
+            if cband is not None:
+                cval, cunc = cband
+                ax.axvspan(cval - cunc, cval + cunc, color='0.5', alpha=0.18,
+                           zorder=0, label=f'Cluster {cval:.2f}±{cunc:.2f}')
+                ax.axvline(cval, color='0.35', lw=1.0, alpha=0.75, zorder=1)
+                ax.legend(loc='lower right', fontsize=8)
             ax.set_xlabel(r'Adiabat  $\alpha$')
             ax.set_title("Adiabat by convention -- standard scale\n"
                          "(crimson = Will's fully-ionized RHINO headline)",
