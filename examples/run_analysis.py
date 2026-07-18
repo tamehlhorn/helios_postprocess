@@ -136,6 +136,26 @@ def main(base_path: str, include_contours: bool = False):
     analyzer.compute_performance_metrics()
     print()
 
+    # Load published data now (once) so the Step 3 report's adiabat band can
+    # read it, and reuse the same dict in Step 6 -- no second file read.
+    published_metrics = None
+    pub_laser = None
+    if published_path.exists():
+        try:
+            with open(published_path, 'r', encoding='utf-8-sig', errors='replace') as f:
+                pub_raw = json.load(f)
+            pub_laser = pub_raw.pop('laser_energy_MJ', None)
+            published_metrics = {}
+            for key, val in pub_raw.items():
+                if key.startswith('_'):
+                    continue
+                if isinstance(val, (list, tuple)) and len(val) == 2:
+                    published_metrics[key] = tuple(val)
+            data.published_metrics = published_metrics
+        except Exception as e:
+            print(f"  WARNING: Could not load published data: {e}")
+            published_metrics = None
+
     # ── Step 3: Generate PDF report ──
     print("-" * 80)
     print("STEP 3: Generating PDF report")
@@ -192,26 +212,12 @@ def main(base_path: str, include_contours: bool = False):
     _append_metrics_to_summary(summary_txt, name, metrics)
 
     # ── Step 6: Compare with published data (if available) ──
-    published_metrics = None
-    pub_laser = None
-
-    if published_path.exists():
+    if published_metrics is not None:
         print("-" * 80)
         print("STEP 6: Comparison with published data")
         print("-" * 80)
 
         try:
-            with open(published_path, 'r', encoding='utf-8-sig', errors='replace') as f:
-                pub_raw = json.load(f)
-
-            pub_laser = pub_raw.pop('laser_energy_MJ', None)
-            published_metrics = {}
-            for key, val in pub_raw.items():
-                if key.startswith('_'):
-                    continue
-                if isinstance(val, (list, tuple)) and len(val) == 2:
-                    published_metrics[key] = tuple(val)
-
             table = compare_with_published(
                 metrics, published_metrics,
                 laser_energy_MJ=pub_laser,
