@@ -132,7 +132,7 @@ def _find_exo(path) -> str:
     return str(exos[0])
 
 
-def our_neutronics(run_path) -> dict:
+def our_neutronics(run_path, dt_source: str = "gradient") -> dict:
     """Run our RHINO-free extraction and return an npz-like dict."""
     from helios_postprocess.core import HeliosRun
     from helios_postprocess.data_builder import build_run_data
@@ -140,7 +140,7 @@ def our_neutronics(run_path) -> dict:
 
     exo = _find_exo(run_path)
     data = build_run_data(HeliosRun(exo))
-    nd = ns.extract_neutronics(data=data, use_rhino=False)
+    nd = ns.extract_neutronics(data=data, use_rhino=False, dt_source=dt_source)
     if nd is None:
         raise RuntimeError("extract_neutronics returned None (no-burn / missing fields).")
     dt = (nd.avg_results.get("DT_nHe4") or {})
@@ -160,10 +160,13 @@ def main(argv=None):
     ap = argparse.ArgumentParser(description="Diff our neutronics extraction vs Kyle's npz.")
     ap.add_argument("run", help="Helios run directory or .exo path")
     ap.add_argument("kyle_npz", help="Kyle's neutronics_data.npz for the same run")
+    ap.add_argument("--dt-source", choices=["gradient", "exodus"], default="gradient",
+                    help="temporal weight: 'gradient' (default, output-interval) or "
+                         "'exodus' (exact 'Time step size [sec]', matches Kyle bit-for-bit)")
     ap.add_argument("--plot", default=None, help="optional PNG of the <rho(r)>/<T_i(r)> overlays")
     args = ap.parse_args(argv)
 
-    ours = our_neutronics(args.run)
+    ours = our_neutronics(args.run, dt_source=args.dt_source)
     theirs = np.load(args.kyle_npz, allow_pickle=True)
     rows = compare_npz(ours, theirs)
     print(format_report(rows))

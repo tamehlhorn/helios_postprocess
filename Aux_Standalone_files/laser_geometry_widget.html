@@ -1,0 +1,296 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Helios laser ray-trace geometry</title>
+<style>
+:root {
+  --bg: #fafaf7;
+  --surface: #ffffff;
+  --surface-2: #f1efe8;
+  --text: #2c2c2a;
+  --text-muted: #5f5e5a;
+  --text-dim: #888780;
+  --border: #d3d1c7;
+  --border-strong: #b4b2a9;
+  --accent: #EF9F27;
+  --radius: 8px;
+  --radius-lg: 12px;
+}
+@media (prefers-color-scheme: dark) {
+  :root {
+    --bg: #1e1e1c;
+    --surface: #2c2c2a;
+    --surface-2: #3a3a37;
+    --text: #e8e6dd;
+    --text-muted: #b4b2a9;
+    --text-dim: #888780;
+    --border: #3a3a37;
+    --border-strong: #5f5e5a;
+    --accent: #EF9F27;
+  }
+}
+* { box-sizing: border-box; }
+body {
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  background: var(--bg);
+  color: var(--text);
+  margin: 0;
+  padding: 2rem 1rem;
+  line-height: 1.5;
+}
+.container { max-width: 780px; margin: 0 auto; }
+h1 { font-size: 20px; font-weight: 500; margin: 0 0 4px; }
+.subtitle { font-size: 13px; color: var(--text-muted); margin: 0 0 1.5rem; }
+.card {
+  background: var(--surface);
+  border: 0.5px solid var(--border);
+  border-radius: var(--radius-lg);
+  padding: 1.25rem;
+}
+.controls { display: flex; flex-direction: column; gap: 12px; margin-top: 16px; font-size: 13px; color: var(--text-muted); }
+.row { display: flex; align-items: center; gap: 12px; }
+.row label { min-width: 118px; }
+.row input[type="range"] { flex: 1; height: 4px; -webkit-appearance: none; appearance: none; background: var(--border); border-radius: 2px; }
+.row input[type="range"]::-webkit-slider-thumb { -webkit-appearance: none; width: 18px; height: 18px; border-radius: 50%; background: var(--surface); border: 1px solid var(--border-strong); cursor: pointer; }
+.row input[type="range"]::-moz-range-thumb { width: 18px; height: 18px; border-radius: 50%; background: var(--surface); border: 1px solid var(--border-strong); cursor: pointer; border: none; }
+.row .val { min-width: 76px; text-align: right; font-variant-numeric: tabular-nums; color: var(--text); font-weight: 500; }
+.prof { display: flex; gap: 8px; flex: 1; }
+.pbtn, .preset {
+  padding: 5px 14px; font-size: 12px;
+  border: 0.5px solid var(--border);
+  border-radius: var(--radius);
+  background: transparent; cursor: pointer;
+  color: var(--text-muted);
+  font-family: inherit;
+}
+.pbtn:hover, .preset:hover { background: var(--surface-2); }
+.pbtn.active { background: var(--surface-2); border-color: var(--border-strong); color: var(--text); }
+.presets { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 14px; }
+.readout { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 12px; margin-top: 16px; }
+.metric { background: var(--surface-2); border-radius: var(--radius); padding: 0.75rem 1rem; }
+.metric-label { font-size: 12px; color: var(--text-muted); margin-bottom: 4px; }
+.metric-value { font-size: 18px; font-weight: 500; font-variant-numeric: tabular-nums; color: var(--text); }
+svg text.ts { font: 12px -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; fill: var(--text-muted); }
+svg text.th { font: 500 14px -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; fill: var(--text); }
+.note { margin-top: 2rem; padding: 1rem 1.25rem; background: var(--surface-2); border-radius: var(--radius); font-size: 13px; color: var(--text-muted); line-height: 1.6; }
+.note strong { color: var(--text); font-weight: 500; }
+</style>
+</head>
+<body>
+<div class="container">
+  <h1>Helios laser ray-trace geometry</h1>
+  <p class="subtitle">Tradeoffs between cone angle γ, focus position d, focal profile, and capsule radius R.</p>
+
+  <div class="card">
+    <svg width="100%" viewBox="0 0 680 340" role="img" style="overflow: hidden;">
+      <title>Helios laser ray-trace geometry</title>
+      <desc>Converging laser cone with capsule; coupled rays in amber, geometrically missed rays dashed.</desc>
+      <defs>
+        <clipPath id="vb"><rect x="0" y="0" width="680" height="340"/></clipPath>
+      </defs>
+      <g id="scene" clip-path="url(#vb)"></g>
+    </svg>
+
+    <div class="controls">
+      <div class="row">
+        <label for="gamma">Half-cone γ</label>
+        <input type="range" id="gamma" min="0.5" max="45" step="0.5" value="3.5">
+        <span class="val" id="gamma-val">3.5°</span>
+      </div>
+      <div class="row">
+        <label for="focus">Focus d</label>
+        <input type="range" id="focus" min="-3.0" max="0.5" step="0.05" value="-2.5">
+        <span class="val" id="focus-val">−2.50 cm</span>
+      </div>
+      <div class="row">
+        <label for="radius">Capsule R</label>
+        <input type="range" id="radius" min="0.05" max="0.23" step="0.01" value="0.20">
+        <span class="val" id="radius-val">0.20 cm</span>
+      </div>
+      <div class="row">
+        <label>Focal profile</label>
+        <div class="prof">
+          <button class="pbtn active" id="prof-gauss" onclick="setProfile('gauss')">Gaussian</button>
+          <button class="pbtn" id="prof-unif" onclick="setProfile('unif')">Uniform</button>
+        </div>
+      </div>
+    </div>
+
+    <div class="presets">
+      <button class="preset" onclick="applyPreset('olson')">Olson WfCDT (d=−2.5, γ=3.5°)</button>
+      <button class="preset" onclick="applyPreset('pdd22')">PDD_22 (d=+0.2, γ=35°)</button>
+      <button class="preset" onclick="applyPreset('pdd26')">PDD_26 (d=+0.2, γ=15°)</button>
+      <button class="preset" onclick="applyPreset('origin')">Focus at origin (d=0)</button>
+      <button class="preset" onclick="applyPreset('latetime')">Olson late-time (R=0.08)</button>
+    </div>
+
+    <div class="readout">
+      <div class="metric">
+        <div class="metric-label">Focal position F</div>
+        <div class="metric-value" id="out-f">−2.50 cm</div>
+      </div>
+      <div class="metric">
+        <div class="metric-label">Critical ray angle</div>
+        <div class="metric-value" id="out-crit">4.6°</div>
+      </div>
+      <div class="metric">
+        <div class="metric-label">Coupling fraction</div>
+        <div class="metric-value" id="out-couple">100%</div>
+      </div>
+    </div>
+  </div>
+
+  <div class="note">
+    <strong>Caveat for 1D Helios simulations.</strong> This diagram visualizes
+    the 3D geometric coupling that fixed-pointing NIF beams see as the capsule
+    implodes. Helios 1D spherical geometry is forced to couple 100% by symmetry
+    regardless of R — it physically cannot reproduce this late-time miss
+    effect. The gap between Helios absorption (~93%) and reference codes
+    (LILAC/HYDRA/Xrage ~65%) on Olson PDD is consistent with exactly this
+    missing physics. Drag R from 0.20 down to 0.08 with the Olson preset
+    active to see the coupling fraction fall dramatically — that is the 3D
+    late-time loss that a 1D code cannot reproduce.
+  </div>
+</div>
+
+<script>
+(function() {
+  var SCALE = 180;
+  var CX = 540, CY = 170;
+  var SRC_X = 900;
+  var N_RAYS = 25;
+
+  var state = { gamma: 3.5, d: -2.5, R: 0.20, profile: 'gauss' };
+
+  function render() {
+    var scene = document.getElementById('scene');
+    var gammaRad = state.gamma * Math.PI / 180;
+    var Fx = CX + state.d * SCALE;
+    var Fy = CY;
+    var Rpx = state.R * SCALE;
+    var parts = [];
+
+    parts.push('<line x1="20" y1="' + CY + '" x2="660" y2="' + CY + '" stroke="var(--text-dim)" stroke-width="0.5" stroke-dasharray="4,3"/>');
+
+    var topY = Fy + (SRC_X - Fx) * Math.tan(gammaRad);
+    var botY = Fy - (SRC_X - Fx) * Math.tan(gammaRad);
+    parts.push('<line x1="' + Fx.toFixed(1) + '" y1="' + Fy + '" x2="' + SRC_X + '" y2="' + topY.toFixed(1) + '" stroke="var(--text-muted)" stroke-width="0.5" stroke-dasharray="3,3" opacity="0.4"/>');
+    parts.push('<line x1="' + Fx.toFixed(1) + '" y1="' + Fy + '" x2="' + SRC_X + '" y2="' + botY.toFixed(1) + '" stroke="var(--text-muted)" stroke-width="0.5" stroke-dasharray="3,3" opacity="0.4"/>');
+
+    for (var i = 0; i < N_RAYS; i++) {
+      var frac = (i - (N_RAYS - 1) / 2) / ((N_RAYS - 1) / 2);
+      var theta = frac * gammaRad;
+      var ySrc = Fy + (SRC_X - Fx) * Math.tan(theta);
+      var Dx = Fx - SRC_X, Dy = Fy - ySrc;
+      var ax = SRC_X - CX, ay = ySrc - CY;
+      var A = Dx * Dx + Dy * Dy;
+      var B = 2 * (ax * Dx + ay * Dy);
+      var C = ax * ax + ay * ay - Rpx * Rpx;
+      var disc = B * B - 4 * A * C;
+      var intensity = (state.profile === 'gauss') ? Math.exp(-2 * frac * frac) : 1.0;
+      var sw = 0.5 + intensity * 1.6;
+
+      var coupled = false, xE = null, yE = null;
+      if (disc >= 0) {
+        var sd = Math.sqrt(disc);
+        var t1 = (-B - sd) / (2 * A);
+        var t2 = (-B + sd) / (2 * A);
+        var tE = null;
+        if (t1 > 0 && (t2 < 0 || t1 <= t2)) tE = t1;
+        else if (t2 > 0) tE = t2;
+        if (tE !== null) {
+          coupled = true;
+          xE = SRC_X + tE * Dx;
+          yE = ySrc + tE * Dy;
+        }
+      }
+
+      if (coupled) {
+        var op = 0.4 + 0.55 * intensity;
+        parts.push('<line x1="' + SRC_X + '" y1="' + ySrc.toFixed(1) + '" x2="' + xE.toFixed(1) + '" y2="' + yE.toFixed(1) + '" stroke="var(--accent)" stroke-width="' + sw.toFixed(2) + '" opacity="' + op.toFixed(2) + '" stroke-linecap="round"/>');
+      } else {
+        var xEnd, yEnd;
+        if (Fx >= 0 && Fx <= 680) { xEnd = Fx; yEnd = Fy; }
+        else {
+          var tEx = (Fx < 0) ? (-10 - SRC_X) / Dx : (690 - SRC_X) / Dx;
+          xEnd = SRC_X + tEx * Dx;
+          yEnd = ySrc + tEx * Dy;
+        }
+        var mop = 0.12 + 0.14 * intensity;
+        parts.push('<line x1="' + SRC_X + '" y1="' + ySrc.toFixed(1) + '" x2="' + xEnd.toFixed(1) + '" y2="' + yEnd.toFixed(1) + '" stroke="var(--text-dim)" stroke-width="' + sw.toFixed(2) + '" opacity="' + mop.toFixed(2) + '" stroke-dasharray="2,3"/>');
+      }
+    }
+
+    parts.push('<circle cx="' + CX + '" cy="' + CY + '" r="' + Rpx.toFixed(1) + '" fill="var(--surface-2)" stroke="var(--text-muted)" stroke-width="1"/>');
+    parts.push('<circle cx="' + CX + '" cy="' + CY + '" r="2.2" fill="var(--text)"/>');
+    parts.push('<text x="' + CX + '" y="' + (CY + Rpx + 18).toFixed(1) + '" text-anchor="middle" class="ts">Capsule (R = ' + state.R.toFixed(2) + ' cm)</text>');
+
+    if (Fx >= 14 && Fx <= 666) {
+      parts.push('<circle cx="' + Fx.toFixed(1) + '" cy="' + Fy + '" r="4" fill="var(--text)"/>');
+      parts.push('<text x="' + Fx.toFixed(1) + '" y="' + (Fy - 10) + '" text-anchor="middle" class="th">F</text>');
+    } else if (Fx < 14) {
+      parts.push('<text x="14" y="' + (Fy + 4) + '" text-anchor="start" class="ts">← F at d = ' + (state.d >= 0 ? '+' : '−') + Math.abs(state.d).toFixed(2) + ' cm</text>');
+    } else {
+      parts.push('<text x="666" y="' + (Fy + 4) + '" text-anchor="end" class="ts">F at d = ' + (state.d >= 0 ? '+' : '−') + Math.abs(state.d).toFixed(2) + ' cm →</text>');
+    }
+
+    parts.push('<text x="666" y="28" text-anchor="end" class="ts">Laser source →</text>');
+
+    scene.innerHTML = parts.join('');
+  }
+
+  function updateReadouts() {
+    document.getElementById('gamma-val').textContent = state.gamma.toFixed(1) + '°';
+    document.getElementById('focus-val').textContent = (state.d >= 0 ? '+' : '−') + Math.abs(state.d).toFixed(2) + ' cm';
+    document.getElementById('radius-val').textContent = state.R.toFixed(2) + ' cm';
+    document.getElementById('out-f').textContent = (state.d >= 0 ? '+' : '−') + Math.abs(state.d).toFixed(2) + ' cm';
+
+    var s;
+    if (Math.abs(state.d) <= state.R) s = 'F inside capsule';
+    else s = (Math.asin(state.R / Math.abs(state.d)) * 180 / Math.PI).toFixed(1) + '°';
+    document.getElementById('out-crit').textContent = s;
+
+    var gR = state.gamma * Math.PI / 180;
+    var tW = 0, cW = 0;
+    for (var i = 0; i < N_RAYS; i++) {
+      var f = (i - (N_RAYS - 1) / 2) / ((N_RAYS - 1) / 2);
+      var th = f * gR;
+      var w = (state.profile === 'gauss') ? Math.exp(-2 * f * f) : 1.0;
+      tW += w;
+      if (Math.abs(state.d) * Math.abs(Math.sin(th)) <= state.R) cW += w;
+    }
+    document.getElementById('out-couple').textContent = Math.round(100 * cW / tW) + '%';
+  }
+
+  function updateAll() { render(); updateReadouts(); }
+
+  document.getElementById('gamma').addEventListener('input', function(e) { state.gamma = parseFloat(e.target.value); updateAll(); });
+  document.getElementById('focus').addEventListener('input', function(e) { state.d = parseFloat(e.target.value); updateAll(); });
+  document.getElementById('radius').addEventListener('input', function(e) { state.R = parseFloat(e.target.value); updateAll(); });
+
+  window.setProfile = function(p) {
+    state.profile = p;
+    document.getElementById('prof-gauss').classList.toggle('active', p === 'gauss');
+    document.getElementById('prof-unif').classList.toggle('active', p === 'unif');
+    updateAll();
+  };
+
+  window.applyPreset = function(n) {
+    if (n === 'olson') { state.gamma = 3.5; state.d = -2.5; state.R = 0.20; }
+    else if (n === 'pdd22') { state.gamma = 35; state.d = 0.20; state.R = 0.20; }
+    else if (n === 'pdd26') { state.gamma = 15; state.d = 0.20; state.R = 0.20; }
+    else if (n === 'origin') { state.gamma = 10; state.d = 0; state.R = 0.20; }
+    else if (n === 'latetime') { state.gamma = 3.5; state.d = -2.5; state.R = 0.08; }
+    document.getElementById('gamma').value = state.gamma;
+    document.getElementById('focus').value = state.d;
+    document.getElementById('radius').value = state.R;
+    updateAll();
+  };
+
+  updateAll();
+})();
+</script>
+</body>
+</html>

@@ -75,39 +75,19 @@ class ICFRunData:
         # ------------------------------------------------------------------
         self.fusion_power: Optional[np.ndarray] = None            # (n_times, n_zones) — zone-level DT fusion rate
         self.laser_energy_deposited: Optional[np.ndarray] = None  # (n_times, n_zones) J  (time-integrated)
-        self.laser_energy_delivered_cum: Optional[np.ndarray] = None  # (n_times,) J  Helios cumulative integral of LaserEnDeliveredTimeInt
         self.laser_power_source: Optional[np.ndarray] = None      # (n_times, n_zones) W/cm³
         self.laser_power_delivered: Optional[np.ndarray] = None   # (n_times,) W — total laser power on target
         self.laser_power_delivered_per_beam: Optional[np.ndarray] = None  # (n_times, n_beam) W — preserved for multi-beam
         self.electron_density: Optional[np.ndarray] = None        # (n_times, n_zones) cm⁻³
-        self.ion_density: Optional[np.ndarray] = None             # (n_times, n_zones) cm⁻³
-        self.mean_charge: Optional[np.ndarray] = None              # (n_times, n_zones) Z̄
         # Laser intensity reconstruction inputs (raw from EXODUS; cleaned in laser_intensity.py)
         self.laser_attenuation_coeff: Optional[np.ndarray] = None  # (n_times, n_beam, n_bnd) 1/cm
         self.laser_power_on_target: Optional[np.ndarray] = None           # (n_times,) W — total summed across beams
         self.laser_power_on_target_per_beam: Optional[np.ndarray] = None  # (n_times, n_beam) W — preserved for multi-beam
         self.neutron_production_rate: Optional[np.ndarray] = None # (n_times, n_zones)
-        # Exact per-snapshot Helios timestep from EXODUS 'Time step size [sec]'.
-        # NOTE: this is the *instantaneous* sub-step at each output, not the
-        # interval between outputs; K. Keipper's neutronics_output.py weights
-        # the neutron-averaged profiles by it. Optional; used only when a
-        # neutron diagnostic explicitly requests dt_source='exodus'.
-        self.timestep_size_s: Optional[np.ndarray] = None         # (n_times,) s
-        # Per-channel fusion rates (CLAUDE.md §5b: reactions/s/g, mass-specific).
-        # data.fusion_power above is DT (FusionRate_DT_nHe4); these add the
-        # other 5 channels Helios emits. Useful for tritium-lean studies +
-        # neutronics-output / DD-branch analysis. See Kyle's
-        # neutronics_output.py for full per-channel time-averaging pattern.
-        self.fusion_rate_DD_nHe3:   Optional[np.ndarray] = None  # DD -> n + He3
-        self.fusion_rate_DD_pT:     Optional[np.ndarray] = None  # DD -> p + T
-        self.fusion_rate_TT_nnHe4:  Optional[np.ndarray] = None  # TT -> 2n + He4
-        self.fusion_rate_DHe3_pHe4: Optional[np.ndarray] = None  # D-He3 -> p + He4
-        self.fusion_rate_pB11_3He4: Optional[np.ndarray] = None  # p-B11 -> 3 He4
         self.alpha_heating_power: Optional[np.ndarray] = None     # (n_times, n_zones)
         self.alpha_heating_ion: Optional[np.ndarray] = None       # (n_times, n_zones) particle → ion
         self.alpha_heating_ele: Optional[np.ndarray] = None       # (n_times, n_zones) particle → elec
         self.laser_wavelength_um: float = 0.0
-        self.laser_geometry_per_beam: Optional[list] = None
         self.laser_spot_size_cm: float = 0.0
         self.laser_half_cone_angle_deg: float = 0.0
         self.laser_focus_position_cm: float = 0.0
@@ -120,44 +100,18 @@ class ICFRunData:
         self.laser_peak_start_ns: float = 0.0
         self.laser_peak_end_ns: float = 0.0
         self.laser_pulse_duration_ns: float = 0.0
-        self.flux_limiter: float = 0.0              # from .rhw (first-region value, legacy)
-        self.flux_limiter_enabled: bool = False     # from .rhw (any region enabled)
-        self.flux_limiter_per_region: Optional[list] = None  # [{region, enabled, value}, ...]
-        # Active-source counts (May 2026). RHW reports max-array dims for
-        # beams/IDD even when only one is driven; these scalars expose what's
-        # *actually* on. Set by build_run_data + rhw_config propagation.
-        self.n_total_beams:   int = 0
-        self.n_active_beams:  int = 0
-        self.rad_source_rmin_on: bool = False
-        self.rad_source_rmax_on: bool = False
-        self.n_active_idd_sources: int = 0
+        self.flux_limiter: float = 0.0              # from .rhw (Flux limiter mult.)
+        self.flux_limiter_enabled: bool = False     # from .rhw (Use flux limiter)
         self.alpha_deposition_local: bool = False
         self.alpha_deposition_nonlocal: bool = False
         self.eos_models: list = None                              # [{region, type, file}]
         self.dt_neutron_count: Optional[np.ndarray] = None        # time-integrated DT neutron yield
         self.dd_neutron_count: Optional[np.ndarray] = None        # time-integrated DD neutron yield
         self.dt_neutron_count_zone: Optional[np.ndarray] = None   # (n_times, n_zones) zone-resolved
-        # Boundary-tally cumulative quantities — direct EXODUS measurements
-        # used for energy-balance closure (replace inferred fractions).
-        self.radiation_energy_at_boundary_cum: Optional[np.ndarray] = None  # (n_times,) J  cumulative rad through grid boundaries
-        self.particle_energy_escaped_cum: Optional[np.ndarray] = None       # (n_times,) J  cumulative particle (neutron+) escape
         self.scale_length: Optional[np.ndarray] = None            # (n_times, n_zones) cm — derived
         self.region_interfaces_indices: Optional[np.ndarray] = None  # (n_times, n_regions)
         self.material_index: Optional[np.ndarray] = None          # (n_zones,) material ID per zone
         self.region_names: Optional[list] = None                   # list of region name strings
-        # ----- Target classification (for capsule vs halfraum-capsule analysis routing) -----
-        # `target_class` = "capsule" | "halfraum_capsule"
-        #   capsule:           grid contains only the imploding payload (gas + fuel + ablator)
-        #   halfraum_capsule:  grid contains capsule + external structure (gas gap + converter shell)
-        # `n_capsule_regions` = number of regions belonging to the capsule itself.
-        #   For "capsule":           equals the total number of regions
-        #   For "halfraum_capsule":  less than total; outermost (n_total - n_capsule) regions
-        #                            are external structure and excluded from implosion analyses
-        # These fields are auto-populated below from region_names; analyzers use the derived
-        # `capsule_outer_idx` and `fuel_ablator_idx` properties to get the correct ri[:,k]
-        # column for the capsule outer surface and fuel/ablator interface respectively.
-        self.target_class: str = "capsule"
-        self.n_capsule_regions: int = 0
         self.areal_density_vs_time: Optional[np.ndarray] = None  # (n_times, n_zones+1)
 
         # ------------------------------------------------------------------
@@ -193,23 +147,6 @@ class ICFRunData:
         self.ignition_time: float = 0.0            # ns  (when HS ρR crosses 0.3 g/cm²)
         self.ignition_hs_radius: float = 0.0       # cm  (at ignition time)
         self.ignition_hs_pressure: float = 0.0     # Gbar (at ignition time)
-        self.ignition_T_ion_onaxis_keV: float = 0.0  # T_ion at r=0 at ignition;
-                                                     # apples-to-apples with
-                                                     # published-figure central T
-        self.ignition_T_ion_hs_avg_keV: float = 0.0  # mass-averaged T_ion over
-                                                     # T>4.5 keV zones at ignition;
-                                                     # apples-to-apples with
-                                                     # T_ion_hs_at_ignition_*_keV
-                                                     # per-code published values
-        self.ignition_index: int = -1                # timestep index for the
-                                                     # radial-profile CSV writer
-        self.peak_density_at_ignition: float = 0.0   # g/cm³ — max ρ at ignition;
-                                                     # falls back to peak ρ at
-                                                     # stagnation for no-burn runs
-        self.peak_density_at_ignition_is_stagnation: bool = False  # True if the
-                                                     # value above is the no-burn
-                                                     # fallback (used by summary
-                                                     # writer to label the row)
         self.burn_propagation_time: float = 0.0    # ns  (when HS ρR = total ρR)
 
         # Neutron-averaged quantities
@@ -221,14 +158,6 @@ class ICFRunData:
         self.energy_output: float = 0.0    # MJ  (fusion yield)
         self.dt_neutron_yield: float = 0.0 # total DT neutrons produced
         self.laser_energy: float = 0.0     # MJ
-        # Note: data.laser_energy is currently max(absorbed) in MJ -- legacy
-        # naming, see analyze_drive_phase. The two explicit scalars below
-        # disambiguate when both sources are available.
-        self.laser_energy_delivered_MJ: float = 0.0   # max of LaserEnDeliveredTimeInt
-        self.laser_energy_absorbed_MJ:  float = 0.0   # max of EnLaserDepositedTimeIntg
-        # Coupling diagnostics from analyze_drive_phase
-        self.eff_avg_coupling_pct:  float = 0.0       # 100 * E_abs(end) / E_del(end)
-        self.eff_peak_coupling_pct: float = 0.0       # max(E_abs(t)/E_del(t)) after IC
         self.rad_energy: float = 0.0       # MJ  (radiation / IDD deposited)
         self.target_gain: float = 0.0
         self.max_dt_temp: float = 0.0      # keV
@@ -239,176 +168,9 @@ class ICFRunData:
         self.stagnated_fuel_mass: float = 0.0
 
         # Implosion
-        self.peak_implosion_velocity: float = 0.0  # km/s -- legacy: peak inward
-                                                   # zone velocity in shell, pre-bang.
-                                                   # For high-CR HDD-class targets
-                                                   # this is inflated by late-time
-                                                   # shock-convergence spikes; prefer
-                                                   # peak_implosion_velocity_at_cr15
-                                                   # for cross-code comparison.
-        self.peak_implosion_velocity_at_cr15: float = 0.0  # km/s -- mass-avg shell
-                                                   # velocity at CR=1.5 snapshot.
-                                                   # NOTE: empirically reports much
-                                                   # earlier-than-peak velocities;
-                                                   # prefer implosion_velocity_rhino
-                                                   # for cross-tool comparison.
-        self.t_peak_velocity_at_cr15_ns: float = 0.0  # ns
-        self.implosion_velocity_rhino_kms: float = 0.0  # km/s -- RHINO/W.Trickey
-                                                   # convention: shell defined as
-                                                   # rho > rho_peak/e per timestep;
-                                                   # v_shell = sqrt(2*KE_sh/m_sh);
-                                                   # turning point (peak) of
-                                                   # v_shell(t) pre-stagnation.
-                                                   # Apples-to-apples with RHINO's
-                                                   # reported "Implosion velocity".
-        self.t_implosion_velocity_rhino_ns: float = 0.0  # ns
-        self.adiabat_min_rhino: float = 0.0        # dimensionless -- RHINO/W.Trickey
-                                                   # "Min shell adiabat (CR=1.5)".
-                                                   # Trigger = first time the
-                                                   # gas/cold-fuel Lagrangian
-                                                   # boundary radius reaches
-                                                   # R_inner(0)/1.5. Adiabat per
-                                                   # shell zone (rho>peak/e in DT
-                                                   # cold-fuel region) using
-                                                   # standard DT Fermi formula,
-                                                   # min over those zones.
-        self.t_adiabat_min_rhino_ns: float = 0.0   # ns
-        self.r_inner_initial_cm: float = 0.0       # cm (audit)
-        self.r_inner_at_cr15_cm: float = 0.0       # cm (audit)
-        self.t_breakout_rhino_ns: float = 0.0      # ns -- RHINO breakout-time
-                                                   # audit value (peak density
-                                                   # crosses 1%-threshold inner
-                                                   # shell surface at t=0)
-        # ── RHINO diagnostics suite (June 2026) ──────────────────
-        # Seven additional RHINO-convention metrics from
-        # ICFAnalyzer._compute_rhino_diagnostics. See that method for
-        # the algorithmic definitions; all match W. Trickey's RHINO
-        # postprocessor (private repo wtrickey27/RHINO) conventions.
-        self.shell_inner_pos_history_cm: Optional[np.ndarray] = None
-        self.shell_outer_pos_history_cm: Optional[np.ndarray] = None
-        self.shell_thickness_history_cm: Optional[np.ndarray] = None
-        self.shell_mass_history_mg:      Optional[np.ndarray] = None
-        self.shell_velocity_history_kms: Optional[np.ndarray] = None
-        self.cr_inner_history:           Optional[np.ndarray] = None
-        self.t_max_shell_velocity_rhino_ns: float = 0.0
-        self.stag_time_rhino_ns: float = 0.0    # RHINO stagnation_time
-                                                # (shell-velocity minimum;
-                                                # different from this
-                                                # pipeline's stag_time
-                                                # which is HS radius min)
-        self.assembled_mass_rhino_mg: float = 0.0
-        self.burn_fraction_rhino: float = 0.0
-        self.ablation_pressure_at_cr_3p5_Mbar: float = 0.0  # Vulcan HDD
-                                                # design convention
-        self.t_at_cr_3p5_ns: float = 0.0       # audit
-
-        # ── Will list extensions (June 4 2026) ───────────────────
-        # Items from W. Trickey's variable list (June 2026) that were
-        # not previously named scalars. Definitions independent of the
-        # five open convention questions ("shell" / "hotspot" /
-        # hydro-efficiency denominator / stag-time / bang-time-burn-off);
-        # the convention-dependent items wait on Will's response.
-        self.cr_outer: float = 0.0             # outer convergence ratio
-                                               # R_outer(t=0) / R_outer(t_stag)
-                                               # using shell_outer_pos_history_cm
-                                               # (rho > rho_peak/e). RHINO equiv:
-                                               # derivable from sim.shell_outer.
-        self.laser_overlapped_intensity_Wcm2: float = 0.0  # peak power /
-                                               # (4π R0²), where R0 is the
-                                               # initial capsule outer radius.
-                                               # Will's "overlapped intensity".
-        self.shell_mass_at_stagnation_mg: float = 0.0     # shell_mass_history
-                                               # evaluated at stag_time_rhino_ns
-        self.hot_spot_mass_at_stagnation_mg: float = 0.0  # Σ zone_mass[stag,
-                                               # 0:ri[stag, 0]] -- mass inside
-                                               # gas/cold-fuel boundary at stag
-        self.stag_time_areal_density: float = 0.0        # g/cm² -- total ρR
-                                               # at stagnation (parallel to
-                                               # bang_time_areal_density)
-        self.stag_time_fuel_areal_density: float = 0.0   # g/cm² -- cold-fuel ρR
-                                               # at stagnation
-        self.neutron_ave_electron_temperature: float = 0.0  # keV -- mirror of
-                                               # neutron_ave_ion_temperature
-                                               # using elec_temperature in the
-                                               # same neutron-rate-weighted
-                                               # average
-
-        # ── W. Trickey June 2026 shell convention (Phys. Conv. §18b) ──
-        # Inner = 1% pre-breakout / (1/e) post-breakout of peak density.
-        # Outer = first inflection point in ρ(r) going outward from ρ_peak
-        # (d²ρ/dr² = 0). Replaces Lagrangian gas/foam interface because foam
-        # ablates inward during shock breakout, making the Lagrangian
-        # boundary a poor measure of the dense shell.
-        self.shell_inner_will_history_cm:  Optional[np.ndarray] = None  # (n_times,) cm
-        self.shell_outer_will_history_cm:  Optional[np.ndarray] = None  # (n_times,) cm
-        self.shell_thickness_will_history_cm: Optional[np.ndarray] = None
-        self.shell_mass_will_history_mg:   Optional[np.ndarray] = None  # (n_times,) mg
-        self.shell_mass_will_at_stagnation_mg: float = 0.0  # at stag_time_rhino_ns
-        self.adiabat_mass_avg_will_cr15: float = 0.0  # mass-avg adiabat
-                                               # (RHINO partially_ionized
-                                               # formula) over Will-shell at
-                                               # cr_inner = 1.5
-        self.sound_speed_shell_will_cr15_kms: float = 0.0  # mass-avg
-                                               # c_s = sqrt(γP/ρ), γ=5/3
-                                               # (ideal-gas approx for shell
-                                               # conditions), over Will-shell
-                                               # at cr_inner = 1.5
-        self.t_will_shell_cr15_ns: float = 0.0  # audit: timestep at which
-                                               # cr_inner=1.5 was found for
-                                               # the will-shell metrics above
-
-        # ── W. Trickey ignition-product timing (Phys. Conv. §18d/e) ──
-        # Peak hotspot quantities are evaluated at the time the ignition
-        # PRODUCT peaks, not at a fixed kinematic landmark. Two products:
-        #   Lawson:      rhoR_hs(t) × T_i_hs(t)    (volume-avg T_i)
-        #   Confinement: P_hs(t)    × R_hs(t)      (volume-avg P_hs)
-        # The HS region is the Lagrangian gas/cold-fuel interior
-        # (zones [0, ri[t, 0])) per existing convention.
-        self.t_peak_rhoR_Ti_ns: float = 0.0
-        self.peak_rhoR_Ti_gcm2_keV: float = 0.0       # the product value
-        self.rhoR_hs_at_peak_rhoR_Ti_gcm2: float = 0.0
-        self.T_i_volume_avg_at_peak_rhoR_Ti_keV: float = 0.0
-        self.T_i_mass_avg_at_peak_rhoR_Ti_keV: float = 0.0
-
-        self.t_peak_Phs_Rhs_ns: float = 0.0
-        self.peak_Phs_Rhs_Gbar_um: float = 0.0        # the product value
-        self.R_hs_at_peak_Phs_Rhs_um: float = 0.0
-        self.P_hs_volume_avg_at_peak_Phs_Rhs_Gbar: float = 0.0
-        self.P_hs_mass_avg_at_peak_Phs_Rhs_Gbar: float = 0.0
-        # Adiabat using RHINO's fully_ionized_dt convention (n_e = ρ/m_avg_ion
-        # instead of actual electron_density). This is RHINO's default --
-        # matches Will Trickey's RHINO native output. Pure DT zones give
-        # identical results to partially_ionized; multi-material foam zones
-        # diverge because fully_ionized_dt assumes Z̄=1 (under-counts e- in
-        # CD foam).
-        self.adiabat_min_rhino_fully_ionized: float = 0.0
-        self.adiabat_mass_avg_rhino_fully_ionized: float = 0.0
+        self.peak_implosion_velocity: float = 0.0  # km/s
         self.ifar: float = 0.0                      # in-flight aspect ratio at peak v_imp
-        self.adiabat_mass_averaged_ice: float = 0.0  # legacy: at peak velocity
-                                                     # Lindl convention
-                                                     # (potentially shock-inflated
-                                                     # on high-CR targets)
-        self.adiabat_mass_averaged_ice_cr15: float = 0.0  # Thomas/RHINO convention:
-                                                     # at CR=1.5, before late-time
-                                                     # shock pre-heating
-                                                     # Lindl convention
-        self.adiabat_mass_averaged_ice_rhino_formula: float = 0.0  # same selection
-                                                     # as adiabat_mass_averaged_ice
-                                                     # but using proper degenerate
-                                                     # electron gas Fermi pressure
-                                                     # (RHINO partially_ionized).
-                                                     # Typically ~14x larger than
-                                                     # the Lindl value at ICF
-                                                     # densities.
-        self.adiabat_mass_averaged_ice_cr15_rhino_formula: float = 0.0  # at CR=1.5
-                                                     # mass-avg with RHINO Fermi
-                                                     # formula. Cross-tool
-                                                     # comparable to publication
-                                                     # references that use the
-                                                     # physics Fermi (Thomas etc).
-        self.adiabat_at_breakout_rhino_formula: float = 0.0  # base adiabat at
-                                                     # shock breakout, RHINO
-                                                     # Fermi formula.
+        self.adiabat_mass_averaged_ice: float = 0.0
         self.shock_breakout_time_ns: float = 0.0     # ns  (first shock exits DT ice into hot spot)
         self.shock_breakout_pressure_Gbar: float = 0.0  # Gbar (post-shock pressure at breakout)
         self.shock_breakout_mach: float = 0.0        # Mach number at breakout
@@ -429,17 +191,6 @@ class ICFRunData:
         self.shock_velocities: list = []
         self.first_shock: Optional[Dict] = None  # populated by ICFAnalyzer._analyze_first_shock
 
-        # Multi-shock train (populated by ICFAnalyzer._compute_shock_train)
-        self.shock_trajectories: list = []
-        self.shock_coalescence_events: list = []
-        self.shock_breakouts: list = []
-        self.shock_breakout_times_ns: np.ndarray = np.array([], dtype=float)
-        # Consolidated foot/ramp/peak events + class-keyed scalars
-        self.shock_events: list = []
-        self.t_foot_shock_ns: float = float('nan')
-        self.t_ramp_shock_ns: float = float('nan')
-        self.t_peak_shock_ns: float = float('nan')
-
         # ------------------------------------------------------------------
         # 4. Metadata
         # ------------------------------------------------------------------
@@ -447,88 +198,6 @@ class ICFRunData:
         self.rhw_config = None          # RHWConfig dataclass (from rhw_parser)
         self.drive_temperature: Optional[np.ndarray] = None  # eV  (from .rhw file)
         self.drive_time: Optional[np.ndarray] = None         # seconds
-
-    # ------------------------------------------------------------------
-    # Helper properties for region indexing (used by ICFAnalyzer).
-    #
-    # For "capsule" targets (current default behaviour), these reduce to
-    # the historical ri[:, -1] and ri[:, -2] respectively, so existing
-    # call sites that switch to using these properties produce identical
-    # results.
-    #
-    # For "halfraum_capsule" targets where external structure (gas gap +
-    # converter shell) lives outside the capsule, these point to the
-    # capsule outer surface and the fuel/ablator interface within the
-    # capsule rather than the grid edge -- which is what implosion
-    # diagnostics actually want.
-    # ------------------------------------------------------------------
-    @property
-    def capsule_outer_idx(self) -> int:
-        """Column index in region_interfaces_indices for the capsule outer surface.
-        For standard capsules this is the last column (== grid outer); for
-        halfraum-capsule targets it is the inner edge of the first external
-        region (== outer surface of the ablator).
-        """
-        if self.region_interfaces_indices is None:
-            return -1
-        n_total = self.region_interfaces_indices.shape[1]
-        if self.n_capsule_regions <= 0 or self.n_capsule_regions > n_total:
-            return n_total - 1
-        return self.n_capsule_regions - 1
-
-    @property
-    def fuel_ablator_idx(self) -> int:
-        """Column index in region_interfaces_indices for the fuel/ablator interface.
-
-        The interface index is the OUTER edge of the LAST DT-bearing region.
-        Identified by scanning region_names for the first non-DT region (i.e. the
-        first region whose name doesn't contain 'DT'). For targets with multiple
-        ablator layers (e.g. WT_cthomas with 'CD ablator' + 'CD ablator_2'),
-        this correctly returns the inner ablator boundary rather than mistakenly
-        pointing to a boundary inside the ablator stack.
-
-        Backwards-compatible with the legacy n_capsule_regions-2 formula for
-        standard 4-region targets (Olson_PDD_20, VI_6) where there is exactly
-        one ablator region.
-        """
-        if self.region_interfaces_indices is None:
-            return -2
-        n_total = self.region_interfaces_indices.shape[1]
-
-        # Primary: scan region_names for the first region whose name does not
-        # contain 'dt'. The interface immediately INNER to that region is the
-        # fuel/ablator boundary (= outer edge of the last DT region).
-        names = getattr(self, 'region_names', None)
-        if names is not None and len(names) > 0:
-            for i, name in enumerate(names):
-                lower = str(name).lower()
-                if 'dt' in lower:
-                    continue
-                # First non-DT region — interface before it
-                if i > 0:
-                    return i - 1
-                return 0   # entirely ablator from index 0 (unusual)
-            # All regions DT-bearing — no ablator; return outer-most region
-            return max(n_total - 1, 0)
-
-        # Fallback: legacy n_capsule_regions-2 formula
-        if self.n_capsule_regions <= 1 or self.n_capsule_regions > n_total:
-            return max(n_total - 2, 0)
-        return self.n_capsule_regions - 2
-
-    def capsule_outer_node(self, t_idx: int) -> int:
-        """Outermost grid node belonging to the capsule at timestep `t_idx`.
-        For standard capsules this is the grid outer node (n_zones); for
-        halfraum-capsule targets it is the node at the capsule/external boundary.
-        Returns n_zones (or 0 if mass_density not loaded) when ri is unavailable.
-        """
-        if self.mass_density is None:
-            return 0
-        n_zones = self.mass_density.shape[1]
-        if (self.target_class != "halfraum_capsule"
-                or self.region_interfaces_indices is None):
-            return n_zones
-        return int(self.region_interfaces_indices[t_idx, self.capsule_outer_idx])
 
 
 # ============================================================================
@@ -556,38 +225,19 @@ _VARIABLE_MAP = [
     # --- Optional physics arrays ---
     ("fusion_power",          ["FusionRate_DT_nHe4", "fusion_rate_DT",
                                "fusion_power", "neutron_rate"],                   False),
-    ("timestep_size_s",       ["Time step size [sec]", "Time step size",
-                               "time_step_size"],                                False),
     ("laser_energy_deposited", ["EnLaserDepositedTimeIntg",
                                 "laser_energy_deposited"],                        False),
-    # Helios's own cumulative integral of delivered laser power, used as
-    # the authoritative E_delivered(t) for coupling diagnostics. Has the
-    # same time-stepping as EnLaserDepositedTimeIntg so the
-    # E_abs(t) / E_del(t) ratio is self-consistent.
-    ("laser_energy_delivered_cum", ["LaserEnDeliveredTimeInt",
-                                    "laser_energy_delivered_cum"],                False),
     ("laser_power_source",    ["LaserPwrSrc", "laser_power_source",
                                "laser_power"],                                    False),
     ("laser_power_delivered", ["LaserPwrDeliveredForBeam",
                                "laser_power_delivered"],                           False),
     ("electron_density",      ["electron_density", "elec_density", "n_e"],        False),
-    ("ion_density",           ["ion_density", "n_i"],                              False),
-    ("mean_charge",           ["mean_charge", "Zbar", "z_bar"],                    False),
     ("laser_power_on_target", ["LaserPwrOnTargetForBeam",
                                "laser_power_on_target"],                           False),
     ("laser_attenuation_coeff", ["laserAttinuationCoeff",
                                  "laser_attenuation_coeff"],                       False),
     ("neutron_production_rate", ["neutron_production_rate", "neutron_rate",
                                  "FusionRate_DD_nHe3"],                           False),
-    # Per-channel fusion rates (reactions/s/g, mass-specific per CLAUDE.md §5b).
-    # data.fusion_power is the DT channel; these add DD/TT/DHe3/pB11 for
-    # tritium-lean and DD-branch yield analysis. EXODUS names per Kyle's
-    # neutronics_output.py inventory (June 2026).
-    ("fusion_rate_DD_nHe3",   ["FusionRate_DD_nHe3"],                             False),
-    ("fusion_rate_DD_pT",     ["FusionRate_DD_pT"],                               False),
-    ("fusion_rate_TT_nnHe4",  ["FusionRate_TT_nnHe4"],                            False),
-    ("fusion_rate_DHe3_pHe4", ["FusionRate_DHe3_pHe4"],                           False),
-    ("fusion_rate_pB11_3He4", ["FusionRate_pB11_3He4"],                           False),
     ("alpha_heating_power",   ["alpha_heating_power", "alpha_power",
                                "alpha_heating"],                                  False),
     ("alpha_heating_ion",     ["pt_particle_heating_ion"],                         False),
@@ -597,11 +247,6 @@ _VARIABLE_MAP = [
     ("dd_neutron_count",      ["TimeIntFusProd_n_0245",
                                "dd_neutron_count"],                               False),
     ("dt_neutron_count_zone", ["TimeIntFusionProd_n_1406_zone"],                  False),
-    # Boundary-tally cumulative quantities (J, direct measurements)
-    ("radiation_energy_at_boundary_cum",
-                              ["TimeIntRadiationLossAtBds"],                       False),
-    ("particle_energy_escaped_cum",
-                              ["particle_time_int_energy_escaped"],                False),
 ]
 
 
@@ -631,7 +276,7 @@ def _try_load_nc(ds, data, attr_name, nc_var_name, verbose=True):
 def build_run_data(
     run,
     *,
-    time_unit: str = "auto",
+    time_unit: str = "ns",
     compute_derived: bool = True,
     rhw_config=None,
     drive_temperature: Optional[np.ndarray] = None,
@@ -646,10 +291,9 @@ def build_run_data(
     run : HeliosRun
         Open HeliosRun instance (from ``helios_postprocess.core``).
     time_unit : str
-        Unit of ``run.times``.  ``'auto'`` (default) inspects magnitude:
-        max < 1e-3 → seconds (multiplied by 1e9); else assumed ns.
-        ``'s'`` forces seconds→ns; ``'ns'`` forces passthrough.
-        ``data.time`` on the returned container is always in nanoseconds.
+        Unit of ``run.times``.  ``'s'`` → converted to ns;
+        ``'ns'`` → used as-is (Helios default after netCDF read is seconds,
+        but some pipelines have already converted).
     compute_derived : bool
         If True, compute ``zone_centers`` and ``scale_length`` from loaded data.
     rhw_config : object, optional
@@ -675,7 +319,6 @@ def build_run_data(
     data.rhw_config = rhw_config
     if rhw_config is not None:
         data.laser_wavelength_um       = rhw_config.laser_wavelength_um
-        data.laser_geometry_per_beam   = getattr(rhw_config, 'laser_geometry_per_beam', None)
         data.laser_spot_size_cm        = rhw_config.laser_spot_size_cm
         data.laser_half_cone_angle_deg = rhw_config.laser_half_cone_angle_deg
         data.laser_focus_position_cm   = rhw_config.laser_focus_position_cm
@@ -688,18 +331,12 @@ def build_run_data(
         data.laser_peak_start_ns       = rhw_config.laser_peak_start_ns
         data.laser_peak_end_ns         = rhw_config.laser_peak_end_ns
         # Flux limiter (from .rhw)
-        data.flux_limiter            = getattr(rhw_config, 'flux_limiter', 0.0)
-        data.flux_limiter_enabled    = getattr(rhw_config, 'flux_limiter_enabled', False)
-        data.flux_limiter_per_region = getattr(rhw_config, 'flux_limiter_per_region', None)
+        data.flux_limiter         = getattr(rhw_config, 'flux_limiter', 0.0)
+        data.flux_limiter_enabled = getattr(rhw_config, 'flux_limiter_enabled', False)
         data.laser_pulse_duration_ns   = rhw_config.laser_pulse_duration_ns
         data.eos_models                = rhw_config.eos_models
         data.alpha_deposition_local    = rhw_config.alpha_deposition_local
         data.alpha_deposition_nonlocal = rhw_config.alpha_deposition_nonlocal
-        # IDD source flags (rad-source-at-Rmin / Rmax). RHW reports both
-        # booleans even when neither is on; we expose the active count.
-        data.rad_source_rmin_on    = bool(getattr(rhw_config, 'rad_source_rmin_on', False))
-        data.rad_source_rmax_on    = bool(getattr(rhw_config, 'rad_source_rmax_on', False))
-        data.n_active_idd_sources  = int(data.rad_source_rmin_on) + int(data.rad_source_rmax_on)
         
     data.drive_time = drive_time
     data.drive_temperature = drive_temperature
@@ -708,19 +345,12 @@ def build_run_data(
     # Time array
     # ------------------------------------------------------------------
     raw_times = np.asarray(run.times, dtype=np.float64)
-    if time_unit == "auto":
-        # Implosion times are O(1-30) ns; raw seconds put max ~1e-8.
-        # Anything below 1e-3 is unambiguously in seconds.
-        if raw_times.size > 0 and float(np.max(raw_times)) < 1e-3:
-            data.time = raw_times * 1e9
-        else:
-            data.time = raw_times.copy()
-    elif time_unit == "s":
+    if time_unit == "s":
         data.time = raw_times * 1e9          # seconds → nanoseconds
     elif time_unit == "ns":
         data.time = raw_times.copy()
     else:
-        raise ValueError(f"Unknown time_unit: {time_unit!r}  (use 'auto', 's', or 'ns')")
+        raise ValueError(f"Unknown time_unit: {time_unit!r}  (use 's' or 'ns')")
 
     n_times = len(data.time)
     if verbose:
@@ -789,31 +419,6 @@ def build_run_data(
         _collapse_beam_axis(data.laser_power_delivered, "laser_power_delivered")
     data.laser_power_on_target, data.laser_power_on_target_per_beam = \
         _collapse_beam_axis(data.laser_power_on_target, "laser_power_on_target")
-
-    # Count beams that actually carry power. Helios's RHW format always
-    # reports the max array dim (typically 3 beams) even when PDD targets
-    # only drive beam 1. Threshold = 1 W on peak delivered power, well
-    # above any numerical noise; sub-MW beams aren't doing physics.
-    BEAM_POWER_THRESHOLD_W = 1.0
-    pb = data.laser_power_delivered_per_beam
-    if pb is not None and pb.ndim == 2:
-        peak_per_beam = np.max(pb, axis=0)             # (n_beam,)
-        active_mask   = peak_per_beam > BEAM_POWER_THRESHOLD_W
-        data.n_total_beams  = int(pb.shape[1])
-        data.n_active_beams = int(active_mask.sum())
-        if verbose and data.n_total_beams != data.n_active_beams:
-            inactive_idx = np.where(~active_mask)[0]
-            logger.info(
-                f"  ✓ Active beams: {data.n_active_beams}/{data.n_total_beams}  "
-                f"(inactive beam idx: {list(inactive_idx)}, peak <= "
-                f"{BEAM_POWER_THRESHOLD_W:.0e} W)"
-            )
-    elif data.laser_power_delivered is not None:
-        data.n_total_beams  = 1
-        data.n_active_beams = 1
-    else:
-        data.n_total_beams  = 0
-        data.n_active_beams = 0
 
     # ------------------------------------------------------------------
     # rad_pressure: non-ion pressure component
@@ -912,45 +517,6 @@ def build_run_data(
                     logger.info(f"  ✓ {'region_names':30s} ← {data.region_names}")
             except Exception as exc:
                 logger.warning(f"  ✗ Could not read region names: {exc}")
-
-        # ----------- Detect target class from region names ------------
-        # Halfraum/hohlraum-style targets append external structural regions
-        # (low-density gas fill + a high-Z converter shell) outside the capsule.
-        # We scan region names from the OUTSIDE inward and tag regions whose
-        # names match known external-structure keywords; the first non-external
-        # region from the outside marks the capsule outer surface.
-        #
-        # If no external regions are detected the run is treated as a
-        # standard capsule (existing behaviour).
-        _EXTERNAL_REGION_KEYWORDS = (
-            'pseudo void', 'void',
-            'cu shell', 'pb shell', 'au shell', 'u shell', 'ta shell',
-            'hohlraum', 'halfraum',
-            'he fill', 'helium', 'hohlraum gas',
-        )
-        if data.region_names:
-            n_total = len(data.region_names)
-            n_external = 0
-            for name in reversed(data.region_names):
-                name_lc = name.lower().strip()
-                if any(kw in name_lc for kw in _EXTERNAL_REGION_KEYWORDS):
-                    n_external += 1
-                else:
-                    break  # stop at first non-external region from outside
-            data.n_capsule_regions = n_total - n_external
-            if n_external > 0 and data.n_capsule_regions >= 2:
-                data.target_class = "halfraum_capsule"
-                if verbose:
-                    external_names = data.region_names[data.n_capsule_regions:]
-                    capsule_names = data.region_names[:data.n_capsule_regions]
-                    logger.info(f"  ✓ {'target_class':30s} ← halfraum_capsule")
-                    logger.info(f"    capsule  ({data.n_capsule_regions}): {capsule_names}")
-                    logger.info(f"    external ({n_external}): {external_names}")
-            else:
-                data.target_class = "capsule"
-                if verbose:
-                    logger.info(f"  ✓ {'target_class':30s} ← capsule "
-                                f"({data.n_capsule_regions} regions)")
     else:
         logger.warning("  ⚠ No netCDF dataset handle — region/material info unavailable")
 

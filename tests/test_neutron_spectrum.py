@@ -120,8 +120,10 @@ class _BurnRun:
         self.zone_mass = rho * cell_vol
         self.fusion_power = fp
         self.fusion_rate_DD_nHe3 = fp * 0.01
-        # region interfaces: hot-spot(6), fuel/ablator(12), outer(nz)
-        ri = np.tile(np.array([6, 12, nz]), (nt, 1))
+        # region interfaces: hot-spot(6), fuel/ablator(12), grid-edge stored as
+        # a count (nz+1) -- one past the last valid boundary index, as real
+        # Helios runs do; exercises the clip in _interfaces_bang_native.
+        ri = np.tile(np.array([6, 12, nz + 1]), (nt, 1))
         self.region_interfaces_indices = ri
         self.dt_neutron_count = np.cumsum(shape) * 1e17
         self.areal_density_vs_time = np.full(nt, 1.0)
@@ -138,6 +140,31 @@ def test_extract_neutronics_end_to_end_native():
         nd.quicklook["rhoR_emission_gcm2"] / 20.4, rel=1e-6)
     # volumetric-rate channel carried (Kyle schema)
     assert "DT_nHe4" in nd.channel_rates_vol and "TT_nnHe4" in nd.channel_rates_vol
+
+
+def test_resolve_dt_source():
+    t = np.array([0.0, 1.0, 3.0, 6.0])                 # ns, nonuniform
+    grad = np.gradient(t * 1e-9)
+
+    class _D:
+        timestep_size_s = np.array([0.1, 0.2, 0.3, 0.4]) * 1e-9
+
+    class _N:
+        timestep_size_s = None
+
+    assert np.allclose(ns._resolve_dt_s(_D(), t, "gradient"), grad)
+    assert np.allclose(ns._resolve_dt_s(_D(), t, "exodus"),
+                       np.array([0.1, 0.2, 0.3, 0.4]) * 1e-9)
+    assert np.allclose(ns._resolve_dt_s(_N(), t, "exodus"), grad)     # graceful fallback
+    with pytest.raises(ValueError):
+        ns._resolve_dt_s(_D(), t, "bogus")
+
+
+def test_extract_exodus_dt_source_runs():
+    run = _BurnRun()
+    run.timestep_size_s = np.gradient(run.time * 1e-9) * 0.5          # valid shape
+    nd = ns.extract_neutronics(data=run, use_rhino=False, dt_source="exodus")
+    assert nd is not None and nd.avg_results["DT_nHe4"] is not None
 
 
 def test_extract_neutronics_npz_roundtrip(tmp_path):
