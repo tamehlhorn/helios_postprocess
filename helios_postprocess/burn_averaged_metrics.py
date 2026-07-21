@@ -803,11 +803,16 @@ def compare_with_published(sim_metrics: Dict,
         ('Peak velocity at CR=1.5 (km/s)',
          sim_metrics.get('peak_velocity_kms_cr15', 0.0),
          _adi_ref('peak_velocity_kms_cr15'), None, '.1f'),
+        # RHINO shell-velocity (W. Trickey first-local-max convention) is a
+        # different definition from Helios-native peak, so it must NOT fall
+        # back to the generic cluster peak_velocity_kms -- that mixes
+        # conventions and prints a misleading Delta (e.g. RHINO 389 vs cluster
+        # 470 reads -17% when the true RHINO reference, Thomas 410, is -5%).
+        # Mirror the _adi_ref adiabat handling: compare only against a
+        # dedicated peak_velocity_kms_rhino key; render '-' when it's absent.
         ('Implosion velocity RHINO (km/s)',
          sim_metrics.get('implosion_velocity_rhino_kms', 0.0),
-         ('peak_velocity_kms_rhino'
-          if (published_metrics and 'peak_velocity_kms_rhino' in published_metrics)
-          else 'peak_velocity_kms'), None, '.1f'),
+         _adi_ref('peak_velocity_kms_rhino'), None, '.1f'),
         ('Min adiabat RHINO (WT native)',
          sim_metrics.get('adiabat_min_rhino_fully_ionized', 0.0),
          adi_rhino_min_key, None, '.2f'),

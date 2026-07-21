@@ -1466,9 +1466,31 @@ class ICFPlotter:
         else:
             ax.axis('off')
 
+        # Convention caption (for W. Trickey): the proper-Fermi "RHINO formula"
+        # family is NOT directly comparable to Will's RHINO-native headline
+        # adiabat. Spell out the three distinctions so the numbers aren't
+        # cross-read against the wrong reference.
+        wt_native = float(getattr(d, 'adiabat_min_rhino_fully_ionized', 0.0) or 0.0)
+        wt_ref = (f"'RHINO min, WT native' (~{wt_native:.2f}) above" if wt_native > 0
+                  else "'RHINO min, WT native' above")
+        caption = (
+            "Convention note (W. Trickey): the purple 'RHINO formula' family uses the "
+            "proper degenerate-electron-gas Fermi pressure "
+            r"$P_F=\frac{(3\pi^2)^{2/3}}{5}\frac{\hbar^2}{m_e}n_e^{5/3}$ "
+            "(not the Lindl-normalized alpha), mass-averaged over the DT ice "
+            "(not min-over-shell). It therefore reads ~14x the Lindl family, and ~30-40% "
+            "high vs RHINO-native on the same .exo (min-over-shell aggregation-order "
+            "systematic, CLAUDE.md 2026-06-02). For a direct cross-check against Will's "
+            f"RHINO-native value, use the {wt_ref}; use this proper-Fermi family for "
+            "picket-shaping trend/ratio only.")
+
         fig.suptitle(f'Adiabat conventions -- {getattr(d, "filename", "")}',
                      fontsize=12, fontweight='bold')
-        fig.tight_layout(rect=[0, 0, 1, 0.96])
+        fig.text(0.5, 0.015, caption, ha='center', va='bottom', fontsize=7.5,
+                 wrap=True,
+                 bbox=dict(boxstyle='round', facecolor='#fff7e6',
+                           edgecolor='#d9a441', alpha=0.9))
+        fig.tight_layout(rect=[0, 0.12, 1, 0.96])
         pdf.savefig(fig); plt.close(fig)
 
     def _plot_ln_quarter_critical_history(self, pdf):
