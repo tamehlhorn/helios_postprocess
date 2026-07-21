@@ -142,31 +142,6 @@ def test_extract_neutronics_end_to_end_native():
     assert "DT_nHe4" in nd.channel_rates_vol and "TT_nnHe4" in nd.channel_rates_vol
 
 
-def test_resolve_dt_source():
-    t = np.array([0.0, 1.0, 3.0, 6.0])                 # ns, nonuniform
-    grad = np.gradient(t * 1e-9)
-
-    class _D:
-        timestep_size_s = np.array([0.1, 0.2, 0.3, 0.4]) * 1e-9
-
-    class _N:
-        timestep_size_s = None
-
-    assert np.allclose(ns._resolve_dt_s(_D(), t, "gradient"), grad)
-    assert np.allclose(ns._resolve_dt_s(_D(), t, "exodus"),
-                       np.array([0.1, 0.2, 0.3, 0.4]) * 1e-9)
-    assert np.allclose(ns._resolve_dt_s(_N(), t, "exodus"), grad)     # graceful fallback
-    with pytest.raises(ValueError):
-        ns._resolve_dt_s(_D(), t, "bogus")
-
-
-def test_extract_exodus_dt_source_runs():
-    run = _BurnRun()
-    run.timestep_size_s = np.gradient(run.time * 1e-9) * 0.5          # valid shape
-    nd = ns.extract_neutronics(data=run, use_rhino=False, dt_source="exodus")
-    assert nd is not None and nd.avg_results["DT_nHe4"] is not None
-
-
 def test_extract_neutronics_npz_roundtrip(tmp_path):
     out = ns.extract_neutronics(data=_BurnRun(), use_rhino=False,
                                 save_npz=str(tmp_path))

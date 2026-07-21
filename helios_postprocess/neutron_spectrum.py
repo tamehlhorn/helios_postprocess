@@ -448,35 +448,8 @@ class NeutronicsData:
     quicklook: dict = field(default_factory=dict)
 
 
-def _resolve_dt_s(data, time_ns, dt_source: str) -> np.ndarray:
-    """Temporal-weight dt (s) for neutron-averaging.
-
-    ``dt_source='gradient'`` (default) uses ``np.gradient(time)`` — the
-    inter-output interval, which partitions the time axis (sums to the run
-    duration) and is the physically correct weight for a neutron-weighted time
-    average. ``dt_source='exodus'`` uses the exact EXODUS ``Time step size
-    [sec]`` (``data.timestep_size_s``) to *reproduce* K. Keipper's
-    neutronics_output.py bit-for-bit; note that value is the instantaneous
-    Helios sub-step at each output (it does NOT sum to the run duration).
-    Falls back to gradient with a warning if 'exodus' is requested but the
-    field is absent.
-    """
-    grad = np.gradient(np.asarray(time_ns, dtype=float) * 1e-9)
-    if dt_source == "gradient":
-        return grad
-    if dt_source == "exodus":
-        ts = getattr(data, "timestep_size_s", None)
-        if ts is not None and np.asarray(ts).shape == grad.shape:
-            return np.asarray(ts, dtype=float)
-        logger.warning("dt_source='exodus' requested but 'Time step size [sec]' "
-                       "not loaded -- falling back to gradient(time).")
-        return grad
-    raise ValueError(f"dt_source must be 'gradient' or 'exodus', got {dt_source!r}.")
-
-
 def extract_neutronics(data=None, sim_path=None, use_rhino: bool = False,
                        n_r: int = 300, calibration: str = "NIF",
-                       dt_source: str = "gradient",
                        save_npz: Optional[str] = None) -> Optional[NeutronicsData]:
     """Extract transport-ready neutronics data from a Helios run.
 
@@ -513,7 +486,7 @@ def extract_neutronics(data=None, sim_path=None, use_rhino: bool = False,
 
     time_ns = np.asarray(time_ns, dtype=float)
     r_com_cm, cell_volume_cm3 = spherical_com_and_volume(zb)
-    dt_s = _resolve_dt_s(data, time_ns, dt_source)
+    dt_s = np.gradient(time_ns * 1e-9)             # EXODUS cadence approx (Kyle reads exact dt)
 
     # Per-channel per-gram rates from ICFRunData (missing channels -> zeros).
     shape = np.asarray(rho).shape

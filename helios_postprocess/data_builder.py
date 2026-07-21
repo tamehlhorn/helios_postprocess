@@ -87,12 +87,6 @@ class ICFRunData:
         self.laser_power_on_target: Optional[np.ndarray] = None           # (n_times,) W — total summed across beams
         self.laser_power_on_target_per_beam: Optional[np.ndarray] = None  # (n_times, n_beam) W — preserved for multi-beam
         self.neutron_production_rate: Optional[np.ndarray] = None # (n_times, n_zones)
-        # Exact per-snapshot Helios timestep from EXODUS 'Time step size [sec]'.
-        # NOTE: this is the *instantaneous* sub-step at each output, not the
-        # interval between outputs; K. Keipper's neutronics_output.py weights
-        # the neutron-averaged profiles by it. Optional; used only when a
-        # neutron diagnostic explicitly requests dt_source='exodus'.
-        self.timestep_size_s: Optional[np.ndarray] = None         # (n_times,) s
         # Per-channel fusion rates (CLAUDE.md §5b: reactions/s/g, mass-specific).
         # data.fusion_power above is DT (FusionRate_DT_nHe4); these add the
         # other 5 channels Helios emits. Useful for tritium-lean studies +
@@ -556,8 +550,6 @@ _VARIABLE_MAP = [
     # --- Optional physics arrays ---
     ("fusion_power",          ["FusionRate_DT_nHe4", "fusion_rate_DT",
                                "fusion_power", "neutron_rate"],                   False),
-    ("timestep_size_s",       ["Time step size [sec]", "Time step size",
-                               "time_step_size"],                                False),
     ("laser_energy_deposited", ["EnLaserDepositedTimeIntg",
                                 "laser_energy_deposited"],                        False),
     # Helios's own cumulative integral of delivered laser power, used as
