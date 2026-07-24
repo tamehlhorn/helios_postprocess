@@ -163,6 +163,30 @@ def test_neutron_report_graceful_without_nesst(monkeypatch):
     assert "round-trip" not in txt                   # no transport round-trip line
 
 
+def test_apply_absolute_scale_normalises_to_yield(birth):
+    E, S = birth
+    res = nsc.scatter_from_spectrum(E, S, 0.9, **KW)
+    tof = nsc.scattered_tof(res, distance_m=3.0)
+    Y = 3.7e17
+    dsr_before = res["dsr"]["DSR"]
+    f = nsc.apply_absolute_scale(res, tof, Y)
+    assert f > 0 and res["absolute"] is True and tof["absolute"] is True
+    # primary now integrates to the yield; DSR (a ratio) is unchanged
+    assert np.trapezoid(res["primary"], res["energy_MeV"]) == pytest.approx(Y, rel=1e-6)
+    assert res["dsr"]["DSR"] == pytest.approx(dsr_before, rel=1e-9)
+    # solid-angle fraction scales linearly
+    res2 = nsc.scatter_from_spectrum(E, S, 0.9, **KW)
+    nsc.apply_absolute_scale(res2, None, Y, solid_angle_frac=0.5)
+    assert np.trapezoid(res2["primary"], res2["energy_MeV"]) == pytest.approx(0.5 * Y, rel=1e-6)
+
+
+def test_neutron_report_absolute_default(birth):
+    # the pipeline scales to the run's DT yield by default
+    m, txt = nsc.neutron_report(_BurnRun(), n_E=N_E, include_n2n=False)
+    assert m.get("absolute_scale") is True
+    assert m.get("dt_yield", 0) > 0
+
+
 def test_neutron_report_noburn():
     class _NoBurn:
         time = np.array([0.0, 1.0, 2.0])

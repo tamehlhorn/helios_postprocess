@@ -533,7 +533,8 @@ def plot_scatter_tof(scat: Dict, tof: Optional[Dict], out_path: str,
         axL.set_ylim(ymax * 1e-5, ymax * 5)
     axL.set_xlim(1, 16)
     axL.set_xlabel("neutron energy (MeV)")
-    axL.set_ylabel("dN/dE (arb.)")
+    axL.set_ylabel("dN/dE  (neutrons/MeV)" if scat.get("absolute")
+                   else "dN/dE (arb.)")
     dsr_fuel = scat["dsr"]["DSR"]
     if scat.get("dsr_total") is not None:
         title_dsr = (f"DSR {100 * dsr_fuel:.2f}% fuel / "
@@ -551,7 +552,8 @@ def plot_scatter_tof(scat: Dict, tof: Optional[Dict], out_path: str,
         axR.semilogy(t, ypos, "k", lw=1.4)
         axR.axvline(tof["primary"]["t_peak_ns"], color="#1f4e79", ls="--", lw=1)
         axR.set_xlabel("time of flight (ns)")
-        axR.set_ylabel("signal (arb.)")
+        axR.set_ylabel("dN/dt  (neutrons/ns, 4π)" if tof.get("absolute")
+                       else "signal (arb.)")
         axR.set_title(f"synthetic nTOF @ {tof['distance_m']:.1f} m   "
                       f"T_i={tof['primary']['Ti_ntof_keV']:.1f} keV")
         axR.grid(alpha=0.25, which="both")
@@ -562,6 +564,43 @@ def plot_scatter_tof(scat: Dict, tof: Optional[Dict], out_path: str,
     fig.savefig(out_path, dpi=130)
     plt.close(fig)
     return str(out_path)
+
+
+# ---------------------------------------------------------------------------
+# Absolute normalisation: put the spectra on a physical neutron scale
+# ---------------------------------------------------------------------------
+
+def apply_absolute_scale(scat: Dict, tof: Optional[Dict], dt_yield: float,
+                         solid_angle_frac: float = 1.0) -> float:
+    """Rescale a scatter result (and its nTOF) from arbitrary units to an
+    absolute neutron scale, in place.
+
+    The primary birth spectrum is normalised so that it integrates to the run's
+    total DT neutron yield ``dt_yield`` (4π): ``dN/dE`` is then neutrons/MeV and
+    the nTOF ``dN/dt`` is neutrons/ns (4π). Pass ``solid_angle_frac = A_det /
+    (4π d²)`` to get the fluence at a real detector instead of the 4π total.
+    DSR is a ratio, so it is unchanged. Returns the scale factor applied."""
+    E = scat["energy_MeV"]
+    integ = float(trapezoid(scat["primary"], E))
+    if not np.isfinite(integ) or integ <= 0 or not np.isfinite(dt_yield) or dt_yield <= 0:
+        return 1.0
+    f = (dt_yield / integ) * float(solid_angle_frac)
+    for k in ("primary", "scattered", "full", "scattered_fuel", "scattered_C",
+              "scattered_D", "scattered_T"):
+        if scat.get(k) is not None:
+            scat[k] = np.asarray(scat[k], dtype=float) * f
+    if isinstance(scat.get("components"), dict):
+        scat["components"] = {kk: np.asarray(v, dtype=float) * f
+                              for kk, v in scat["components"].items()}
+    scat["absolute"] = True
+    scat["dt_yield"] = float(dt_yield)
+    scat["solid_angle_frac"] = float(solid_angle_frac)
+    if tof:
+        for k in ("signal_ideal", "signal_detector"):
+            if tof.get(k) is not None:
+                tof[k] = np.asarray(tof[k], dtype=float) * f
+        tof["absolute"] = True
+    return f
 
 
 # ---------------------------------------------------------------------------
@@ -586,7 +625,8 @@ def neutron_report(data, frac_D: float = 0.5, frac_T: float = 0.5,
                    distance_m: float = 3.0, n_E: int = 500,
                    include_n2n: bool = True, published: Optional[Dict] = None,
                    plot_path: Optional[str] = None, plot_title: str = "",
-                   rhw_path: Optional[str] = None
+                   rhw_path: Optional[str] = None, absolute: bool = True,
+                   solid_angle_frac: float = 1.0
                    ) -> Tuple[Optional[Dict], str]:
     """Full neutron post-processing block for a Helios run, for the standard
     pipeline (``run_analysis``). Returns ``(metrics, text)``.
@@ -660,6 +700,13 @@ def neutron_report(data, frac_D: float = 0.5, frac_T: float = 0.5,
             tof = scattered_tof(scat, distance_m=distance_m)
             if tof:
                 metrics["Ti_ntof_keV"] = tof["primary"]["Ti_ntof_keV"]
+            # Put the spectra on an absolute neutron scale (integrate to the
+            # run's DT yield); DSR is a ratio so it is unaffected.
+            if absolute and scat is not None:
+                apply_absolute_scale(scat, tof, nd.total_dt_yield,
+                                     solid_angle_frac=solid_angle_frac)
+                metrics["absolute_scale"] = True
+                metrics["dt_yield"] = float(nd.total_dt_yield)
         except Exception as exc:                      # pragma: no cover
             logger.warning("neutron_report: NeSST scatter failed (%s); "
                            "quick-look DSR only.", exc)
