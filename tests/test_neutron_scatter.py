@@ -30,10 +30,10 @@ def birth():
 def test_dsr_increases_and_is_roughly_linear_in_rhoR(birth):
     E, S = birth
     rhoRs = [0.3, 0.6, 0.9, 1.2]
-    dsrs = [nsc.scatter_from_spectrum(E, S, r, **KW)["dsr"]["DSR"] for r in rhoRs]
-    # strictly increasing
-    assert all(b > a for a, b in zip(dsrs, dsrs[1:]))
-    # near-linear: DSR/rhoR (the slope) varies by < 10% across the range
+    # raw single-scatter (no primary depletion) is near-linear in rhoR
+    dsrs = [nsc.scatter_from_spectrum(E, S, r, deplete_primary=False, **KW)["dsr"]["DSR"]
+            for r in rhoRs]
+    assert all(b > a for a, b in zip(dsrs, dsrs[1:]))          # strictly increasing
     slopes = [d / r for d, r in zip(dsrs, rhoRs)]
     assert (max(slopes) - min(slopes)) / np.mean(slopes) < 0.10
 
@@ -102,12 +102,15 @@ def test_scattered_tof_recovers_Ti_and_shows_tail(birth):
 
 def test_full_equals_primary_plus_scattered(birth):
     E, S = birth
-    res = nsc.scatter_from_spectrum(E, S, 0.9, **KW)
-    assert np.allclose(res["full"], res["primary"] + res["scattered"])
-    # yield preserved: primary integral == input yield
     Y_in = np.trapezoid(S, E)
-    Y_out = np.trapezoid(res["primary"], res["energy_MeV"])
-    assert Y_out == pytest.approx(Y_in, rel=0.02)
+    # undepleted: primary integral == input yield (double-counts scatter)
+    res = nsc.scatter_from_spectrum(E, S, 0.9, deplete_primary=False, **KW)
+    assert np.allclose(res["full"], res["primary"] + res["scattered"])
+    assert np.trapezoid(res["primary"], res["energy_MeV"]) == pytest.approx(Y_in, rel=0.02)
+    # depleted, elastic-only: primary attenuated; escaping ~ conserved (~1)
+    res2 = nsc.scatter_from_spectrum(E, S, 0.9, **KW)
+    assert np.trapezoid(res2["primary"], res2["energy_MeV"]) < Y_in
+    assert 0.95 < res2["escaping_fraction"] < 1.06
 
 
 def test_default_path_includes_n2n(birth):
@@ -165,17 +168,18 @@ def test_neutron_report_graceful_without_nesst(monkeypatch):
 
 def test_apply_absolute_scale_normalises_to_yield(birth):
     E, S = birth
-    res = nsc.scatter_from_spectrum(E, S, 0.9, **KW)
+    # undepleted so the birth primary integrates exactly to the yield
+    res = nsc.scatter_from_spectrum(E, S, 0.9, deplete_primary=False, **KW)
     tof = nsc.scattered_tof(res, distance_m=3.0)
     Y = 3.7e17
     dsr_before = res["dsr"]["DSR"]
     f = nsc.apply_absolute_scale(res, tof, Y)
     assert f > 0 and res["absolute"] is True and tof["absolute"] is True
-    # primary now integrates to the yield; DSR (a ratio) is unchanged
+    # birth primary integrates to the yield; DSR (a ratio) is unchanged
     assert np.trapezoid(res["primary"], res["energy_MeV"]) == pytest.approx(Y, rel=1e-6)
     assert res["dsr"]["DSR"] == pytest.approx(dsr_before, rel=1e-9)
     # solid-angle fraction scales linearly
-    res2 = nsc.scatter_from_spectrum(E, S, 0.9, **KW)
+    res2 = nsc.scatter_from_spectrum(E, S, 0.9, deplete_primary=False, **KW)
     nsc.apply_absolute_scale(res2, None, Y, solid_angle_frac=0.5)
     assert np.trapezoid(res2["primary"], res2["energy_MeV"]) == pytest.approx(0.5 * Y, rel=1e-6)
 
@@ -232,3 +236,33 @@ def test_neutron_report_include_tt_leaves_dsr_unchanged():
     assert m1.get("tt_dt_ratio", 0) == pytest.approx(0.01, rel=1e-6)   # 2 x 0.005
     # DSR (10-12/13-15 MeV) is above the TT endpoint -> unchanged
     assert m1["DSR"] == pytest.approx(m0["DSR"], rel=1e-6)
+
+
+# ----------------------- depletion / escaping budget + birth source -----------------------
+
+def test_depletion_gives_physical_escaping_count(birth):
+    E, S = birth
+    r_dep = nsc.scatter_from_spectrum(E, S, 1.0, **KW)                       # depleted (default)
+    r_raw = nsc.scatter_from_spectrum(E, S, 1.0, deplete_primary=False, **KW)
+    Eo = r_dep["energy_MeV"]
+    # depleted primary is attenuated below the raw primary
+    assert np.trapezoid(r_dep["primary"], Eo) < np.trapezoid(r_raw["primary"], Eo)
+    # the un-depleted model over-counts (double counts the scattered neutrons)
+    assert r_raw["escaping_fraction"] > r_dep["escaping_fraction"] + 0.1
+    # (n,2n) multiplication pushes the depleted escaping count above the yield
+    r_n2n = nsc.scatter_from_spectrum(E, S, 1.0, n_E=N_E, include_n2n=True)
+    assert r_n2n["escaping_fraction"] > 1.0
+
+
+def test_birth_source_channel_yields():
+    import test_neutron_spectrum as tns
+    run = tns._BurnRun()
+    run.fusion_rate_TT_nnHe4 = np.asarray(run.fusion_power) * 0.004      # TT ~ DT*0.008 neutrons
+    nd = ns.extract_neutronics(data=run, use_rhino=False)
+    src = nsc.birth_source(nd, run, n_E=1500)
+    assert src["Y_DT"] > 0
+    assert src["Y_TT"] == pytest.approx(src["tt_dt_ratio"] * src["Y_DT"], rel=1e-6)
+    assert src["total_neutrons"] == pytest.approx(src["Y_DT"] + src["Y_DD"] + src["Y_TT"], rel=1e-9)
+    # the source spectrum integrates to the total born neutrons
+    assert np.trapezoid(src["spectrum"], src["energy_MeV"]) == pytest.approx(
+        src["total_neutrons"], rel=0.05)

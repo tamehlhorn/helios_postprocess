@@ -160,6 +160,7 @@ def scattered_spectrum(
     e_hi_MeV: float = 18.0,
     include_n2n: bool = True,
     rhoL_func: Optional[Callable[[np.ndarray], np.ndarray]] = None,
+    deplete_primary: bool = True,
 ) -> Dict:
     """Physically singly-scattered DT neutron spectrum from NeSST.
 
@@ -231,7 +232,15 @@ def scattered_spectrum(
 
     # Restore physical yield and convert 1/eV -> 1/MeV (factor 1e6).
     scale = yield_tot * 1e6
-    primary_out = I_E * scale
+    # Deplete the primary: neutrons that scatter leave the 14 MeV peak (no
+    # double count), so elastic scattering conserves number and only (n,2n) adds.
+    if deplete_primary:
+        lf = rhoL_func if rhoL_func is not None else (lambda x: np.ones_like(x))
+        T = np.asarray(_nesst.DT_transmission(
+            rhoR_gcm2 * G_CM2_TO_KG_M2, E_eV, lf, frac_D, frac_T), dtype=float)
+        primary_out = I_E * np.clip(T, 0.0, 1.0) * scale
+    else:
+        primary_out = I_E * scale
     scattered_out = A_1S * total_shape * scale
     comp = {"nD": nD, "nT": nT, "Dn2n": Dn2n, "Tn2n": Tn2n}
     comp = {k: A_1S * v * scale for k, v in comp.items()}
@@ -245,6 +254,8 @@ def scattered_spectrum(
         "A_1S": A_1S,
         "rhoR_gcm2": float(rhoR_gcm2),
         "frac_D": float(frac_D), "frac_T": float(frac_T),
+        "escaping_fraction": float(trapezoid(primary_out + scattered_out, E_MeV)) / yield_tot,
+        "depleted": bool(deplete_primary), "n2n": bool(include_n2n),
         "yield": yield_tot,
         # original fine-grid birth spectrum, retained so the primary-peak Ti is
         # read at full resolution (the coarse scatter grid broadens the peak).
@@ -345,13 +356,14 @@ def scatter_from_extraction(
 def scatter_from_spectrum(
     energy_MeV: np.ndarray, primary_spectrum: np.ndarray, rhoR_gcm2: float,
     frac_D: float = 0.5, frac_T: float = 0.5, n_E: int = 500,
-    include_n2n: bool = True,
+    include_n2n: bool = True, deplete_primary: bool = True,
     scatter_window_MeV: Tuple[float, float] = DSR_SCATTER_WINDOW_MEV,
     primary_window_MeV: Tuple[float, float] = DSR_PRIMARY_WINDOW_MEV,
 ) -> Dict:
     """Scattered spectrum + DSR + inferred rhoR for a birth spectrum and rhoR."""
     res = scattered_spectrum(energy_MeV, primary_spectrum, rhoR_gcm2,
-                             frac_D, frac_T, n_E=n_E, include_n2n=include_n2n)
+                             frac_D, frac_T, n_E=n_E, include_n2n=include_n2n,
+                             deplete_primary=deplete_primary)
     dsr = downscatter_ratio(res["energy_MeV"], res["full"], res["scattered"],
                             scatter_window_MeV, primary_window_MeV)
     # NeSST first-principles inverse: rhoR from the scattering amplitude.
@@ -372,27 +384,30 @@ def scatter_from_spectrum(
 def multi_material_scatter(
     energy_MeV: np.ndarray, primary_spectrum: np.ndarray,
     rhoR_D_gcm2: float, rhoR_T_gcm2: float, rhoR_C_gcm2: float = 0.0,
-    n_E: int = 900, e_lo_MeV: float = 1.0, e_hi_MeV: float = 18.0,
+    n_E: int = 600, e_lo_MeV: float = 1.0, e_hi_MeV: float = 18.0,
     scatter_window_MeV: Tuple[float, float] = DSR_SCATTER_WINDOW_MEV,
     primary_window_MeV: Tuple[float, float] = DSR_PRIMARY_WINDOW_MEV,
+    include_n2n: bool = True, deplete_primary: bool = True,
 ) -> Dict:
-    """Single-scatter spectrum from *per-species* mass areal densities.
+    """Physically-consistent single-scatter spectrum from *per-species* mass
+    areal densities -- the real escaping neutron spectrum, number-conserved.
 
-    Unlike :func:`scattered_spectrum` (one fuel fraction, D+T only), this takes
-    the D, T and carbon mass areal densities separately -- so it correctly
-    handles a layer-varying target (wetted foam, doped ablator) and includes the
-    ablator / foam **carbon** down-scatter that a detector actually sees.
+    Handles a layer-varying target (wetted foam, doped ablator) and includes the
+    ablator / foam **carbon** (elastic + the 4.4 MeV inelastic level). All
+    physically-realizable channels are on: D/T elastic + (n,2n) (``include_n2n``)
+    and carbon elastic + inelastic.
 
-    D and T go through NeSST's DT machinery (atom fractions derived from
-    ``rhoR_D``/``rhoR_T``); carbon goes through ``init_mat_scatter('C12')``.
-    Each species is scaled by its own NeSST scattering amplitude
-    ``rhoR_2_A1s(rhoR_species)``. Elastic-only (fine grid, low memory).
+    ``deplete_primary`` (default True) attenuates the primary by the straight-
+    line transmission through the areal density (``DT_transmission`` x
+    ``mat_transmission``), so neutrons that scatter **leave** the 14 MeV peak
+    instead of being double-counted. The total then conserves neutron number for
+    elastic scattering and only (n,2n) adds neutrons -- the physical escaping
+    count. (This also puts the DSR on the *measured* attenuated primary, moving
+    the first-principles coefficient onto the empirical NIF 20.4.)
 
-    Returns a dict with the primary, the per-species scattered spectra
-    (``scattered_D/T/C``), the fuel (D+T) and total scattered spectra, the full
-    spectrum, and two DSRs:
-      ``dsr_fuel``  -- fuel-only (the classic diagnostic; matches D+T scatter),
-      ``dsr_total`` -- including carbon (the full down-scattered signal).
+    Returns the primary, per-channel scattered spectra, fuel/total scattered and
+    full spectra, ``dsr_fuel`` / ``dsr_total``, and ``escaping_fraction`` (total
+    escaping neutrons / primary yield).
     """
     _require_nesst()
     from NeSST.core import mat_dict
@@ -405,8 +420,9 @@ def multi_material_scatter(
 
     E_eV = np.linspace(e_lo_MeV, e_hi_MeV, int(n_E)) * 1e6
     E_MeV = E_eV / 1e6
-    _ensure_scatter_matrices(E_eV, include_n2n=False)
+    _ensure_scatter_matrices(E_eV, include_n2n=include_n2n)
     cmat = _ensure_carbon_matrices(E_eV)
+    ones = lambda x: np.ones_like(x)
 
     I_grid = np.interp(E_MeV, energy_MeV, primary_spectrum, left=0.0, right=0.0)
     I_norm = float(trapezoid(I_grid, E_eV))
@@ -421,13 +437,13 @@ def multi_material_scatter(
     nT_a = rhoR_T_gcm2 / 3.016049
     frac_D = nD_a / (nD_a + nT_a) if (nD_a + nT_a) > 0 else 0.5
     frac_T = 1.0 - frac_D
-    dt_shape, _ = _nesst.DT_sym_scatter_spec(I_E, frac_D, frac_T)
+    dt_shape, _ = _nesst.DT_sym_scatter_spec(I_E, frac_D, frac_T)  # elastic + (n,2n)
     A1s_DT = float(_nesst.rhoR_2_A1s(rhoR_fuel * G_CM2_TO_KG_M2, frac_D, frac_T))
     scat_DT = A1s_DT * dt_shape * scale
 
-    # --- carbon (C12) ---
+    # --- carbon (C12): elastic + 4.4 MeV inelastic (both in mat_scatter_spec) ---
     if rhoR_C_gcm2 > 0:
-        c_out = _nesst.mat_scatter_spec(cmat, I_E, lambda x: np.ones_like(x))
+        c_out = _nesst.mat_scatter_spec(cmat, I_E, ones)
         c_shape = c_out[0] if isinstance(c_out, tuple) else c_out
         A1s_C = float(cmat.rhoR_2_A1s(rhoR_C_gcm2 * G_CM2_TO_KG_M2))
         scat_C = A1s_C * np.asarray(c_shape, dtype=float) * scale
@@ -435,32 +451,45 @@ def multi_material_scatter(
         scat_C = np.zeros_like(E_MeV)
         A1s_C = 0.0
 
-    primary_out = I_E * scale
+    # --- deplete the primary: neutrons that scatter LEAVE the peak (no double
+    #     count). Transmission through D+T and carbon along the line of sight. ---
+    if deplete_primary:
+        T = np.asarray(_nesst.DT_transmission(
+            rhoR_fuel * G_CM2_TO_KG_M2, E_eV, ones, frac_D, frac_T), dtype=float)
+        if rhoR_C_gcm2 > 0:
+            T = T * np.asarray(_nesst.mat_transmission(
+                cmat, rhoR_C_gcm2 * G_CM2_TO_KG_M2, E_eV, ones), dtype=float)
+        primary_out = I_E * np.clip(T, 0.0, 1.0) * scale
+    else:
+        primary_out = I_E * scale
+
     scat_fuel = scat_DT
     scat_total = scat_fuel + scat_C
+    full = primary_out + scat_total
     dsr_fuel = downscatter_ratio(E_MeV, primary_out + scat_fuel, scat_fuel,
                                  scatter_window_MeV, primary_window_MeV)
-    dsr_total = downscatter_ratio(E_MeV, primary_out + scat_total, scat_total,
+    dsr_total = downscatter_ratio(E_MeV, full, scat_total,
                                   scatter_window_MeV, primary_window_MeV)
+    escaping = float(trapezoid(full, E_MeV)) / yield_tot   # total / primary yield
 
-    logger.info("multi-material scatter: rhoR D=%.3f T=%.3f C=%.3f g/cm^2 -> "
-                "DSR_fuel=%.3f%% DSR_total=%.3f%% (carbon adds %.1f%% of the "
-                "down-scatter)", rhoR_D_gcm2, rhoR_T_gcm2, rhoR_C_gcm2,
-                100 * dsr_fuel["DSR"], 100 * dsr_total["DSR"],
-                100 * (dsr_total["DSR"] - dsr_fuel["DSR"]) / dsr_total["DSR"]
-                if dsr_total["DSR"] else 0.0)
+    logger.info("multi-material scatter: rhoR D=%.3f T=%.3f C=%.3f -> "
+                "DSR_fuel=%.3f%% DSR_total=%.3f%%; escaping/primary=%.3f "
+                "(n2n=%s, deplete=%s)", rhoR_D_gcm2, rhoR_T_gcm2, rhoR_C_gcm2,
+                100 * dsr_fuel["DSR"], 100 * dsr_total["DSR"], escaping,
+                include_n2n, deplete_primary)
 
     return {
         "energy_MeV": E_MeV,
         "primary": primary_out,
         "scattered_D": None, "scattered_T": None,   # combined below (DT coupled)
         "scattered_fuel": scat_fuel, "scattered_C": scat_C,
-        "scattered": scat_total, "full": primary_out + scat_total,
+        "scattered": scat_total, "full": full,
         "dsr": dsr_fuel, "dsr_fuel": dsr_fuel, "dsr_total": dsr_total,
         "rhoR_D_gcm2": rhoR_D_gcm2, "rhoR_T_gcm2": rhoR_T_gcm2,
         "rhoR_C_gcm2": rhoR_C_gcm2, "rhoR_fuel_gcm2": rhoR_fuel,
         "frac_D": frac_D, "frac_T": frac_T,
-        "A_1S": A1s_DT, "A_1S_C": A1s_C,
+        "A_1S": A1s_DT, "A_1S_C": A1s_C, "escaping_fraction": escaping,
+        "depleted": bool(deplete_primary), "n2n": bool(include_n2n),
         "birth_energy_MeV": energy_MeV, "birth_spectrum": primary_spectrum,
         "yield": yield_tot,
     }
@@ -584,10 +613,14 @@ def apply_absolute_scale(scat: Dict, tof: Optional[Dict], dt_yield: float,
     (4π d²)`` to get the fluence at a real detector instead of the 4π total.
     DSR is a ratio, so it is unchanged. Returns the scale factor applied."""
     E = scat["energy_MeV"]
-    integ = float(trapezoid(scat["primary"], E))
-    if not np.isfinite(integ) or integ <= 0 or not np.isfinite(dt_yield) or dt_yield <= 0:
+    # normalise by the *birth* yield (the un-depleted primary), so a depleted
+    # primary scales to yield x transmission and the full to yield x escaping.
+    birth = scat.get("yield")
+    if birth is None or birth <= 0:
+        birth = float(trapezoid(scat["primary"], E))
+    if not np.isfinite(birth) or birth <= 0 or not np.isfinite(dt_yield) or dt_yield <= 0:
         return 1.0
-    f = (dt_yield / integ) * float(solid_angle_frac)
+    f = (dt_yield / birth) * float(solid_angle_frac)
     for k in ("primary", "scattered", "full", "scattered_fuel", "scattered_C",
               "scattered_D", "scattered_T", "tt"):
         if scat.get(k) is not None:
@@ -653,6 +686,63 @@ def tt_dt_neutron_ratio(data) -> float:
 
 
 # ---------------------------------------------------------------------------
+# Birth source for transport (the physically-correct OpenMC / FLUKA input)
+# ---------------------------------------------------------------------------
+
+def birth_source(nd, data, n_E: int = 3000, e_lo_MeV: float = 0.05,
+                 e_hi_MeV: float = 16.0, tt_model: str = "Brune") -> Dict:
+    """The complete neutron **birth** source emitted by the burn, for transport.
+
+    This is the physically-correct input to OpenMC / FLUKA: the neutrons *born*
+    in the target, with exact yields per channel --
+      DT (14.06 MeV Doppler peak), Y_DT neutrons;
+      DD (2.45 MeV peak),          Y_DD neutrons;
+      TT (R-matrix continuum),     Y_TT = ratio x Y_DT  (2 neutrons per T+T).
+    It carries NO transport -- OpenMC transports it through the target + chamber
+    geometry (whose composition we already parse from the RHW) to get the true
+    escaping spectrum, TBR, and first-wall damage. The single-scatter
+    ``multi_material_scatter`` is the *diagnostic* forward model (nTOF/DSR),
+    not a substitute for that transport.
+
+    Returns energy grid (MeV), the absolute source spectrum (neutrons/MeV) and
+    its DT / DD / TT components, plus the per-channel and total neutron yields.
+    """
+    _require_nesst()
+    from . import neutron_spectrum as ns
+    ql = getattr(nd, "quicklook", None) or {}
+    Y_DT = float(getattr(nd, "total_dt_yield", 0.0) or 0.0)
+    Y_DD = float(getattr(nd, "total_dd_yield", 0.0) or 0.0)
+    ratio = tt_dt_neutron_ratio(data)
+    Y_TT = ratio * Y_DT
+    Ti = float(ql.get("Ti_burn_avg_keV") or ql.get("ntof_tion_keV") or 5.0)
+
+    E = np.linspace(e_lo_MeV, e_hi_MeV, int(n_E))
+
+    def _peak(reaction, yield_n):
+        if yield_n <= 0:
+            return np.zeros_like(E)
+        _, s = ns.synthesize_birth_spectrum(
+            np.array([[1.0]]), np.array([[Ti * 1000.0]]),
+            energy_grid_MeV=E, reaction=reaction)
+        area = float(trapezoid(s, E))
+        return s * (yield_n / area) if area > 0 else np.zeros_like(E)
+
+    dt = _peak("DT", Y_DT)
+    dd = _peak("DD", Y_DD)
+    tt = (tt_spectrum(E, Ti, tt_model) * Y_TT) if Y_TT > 0 else np.zeros_like(E)
+    full = dt + dd + tt
+    total = Y_DT + Y_DD + Y_TT
+    logger.info("birth source: Y_DT=%.3e Y_DD=%.3e Y_TT=%.3e (TT/DT=%.3f) "
+                "total=%.3e neutrons", Y_DT, Y_DD, Y_TT, ratio, total)
+    return {
+        "energy_MeV": E, "spectrum": full,
+        "dt": dt, "dd": dd, "tt": tt,
+        "Y_DT": Y_DT, "Y_DD": Y_DD, "Y_TT": Y_TT, "tt_dt_ratio": ratio,
+        "total_neutrons": total, "Ti_keV": Ti,
+    }
+
+
+# ---------------------------------------------------------------------------
 # Pipeline entry point: full neutron block for run_analysis
 # ---------------------------------------------------------------------------
 
@@ -675,7 +765,7 @@ def neutron_report(data, frac_D: float = 0.5, frac_T: float = 0.5,
                    include_n2n: bool = True, published: Optional[Dict] = None,
                    plot_path: Optional[str] = None, plot_title: str = "",
                    rhw_path: Optional[str] = None, absolute: bool = True,
-                   solid_angle_frac: float = 1.0, include_tt: bool = False,
+                   solid_angle_frac: float = 1.0, include_tt: bool = True,
                    tt_dt_ratio: Optional[float] = None, tt_model: str = "Brune"
                    ) -> Tuple[Optional[Dict], str]:
     """Full neutron post-processing block for a Helios run, for the standard
@@ -811,7 +901,7 @@ def _composition_scatter(nd, data, rhw_path, n_E) -> Optional[Dict]:
         return None
     res = multi_material_scatter(
         energy, primary, sp["rhoR_D_gcm2"], sp["rhoR_T_gcm2"],
-        sp["rhoR_C_gcm2"], n_E=max(int(n_E), 800))
+        sp["rhoR_C_gcm2"], n_E=max(int(n_E), 600))
     res["composition"] = sp
     res["regions_summary"] = tc.summarize_regions(regions)
     return res
