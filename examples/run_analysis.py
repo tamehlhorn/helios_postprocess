@@ -62,7 +62,9 @@ from helios_postprocess.burn_averaged_metrics import (
 )
 
 
-def main(base_path: str, include_contours: bool = False):
+def main(base_path: str, include_contours: bool = False,
+         do_neutronics: bool = True, frac_D: float = 0.5, frac_T: float = 0.5,
+         ntof_distance: float = 3.0):
     """Run full post-processing pipeline."""
     base = Path(base_path).expanduser().resolve()
     name = base.name
@@ -211,6 +213,33 @@ def main(base_path: str, include_contours: bool = False):
     summary_txt = f"{summary_path}_summary.txt"
     _append_metrics_to_summary(summary_txt, name, metrics)
 
+    # ── Step 5b: Neutron diagnostics (birth spectrum -> DSR -> nTOF) ──
+    n_metrics = None
+    if do_neutronics:
+        print("-" * 80)
+        print("STEP 5b: Neutron diagnostics (DSR / nTOF)")
+        print("-" * 80)
+        try:
+            from helios_postprocess import neutron_scatter as nsc
+            neutron_png = base.parent / f"{name}_neutron_spectrum.png"
+            rhw_for_comp = str(rhw_path) if rhw_path.exists() else None
+            n_metrics, n_block = nsc.neutron_report(
+                data, frac_D=frac_D, frac_T=frac_T, distance_m=ntof_distance,
+                published=published_metrics,
+                plot_path=str(neutron_png), plot_title=name,
+                rhw_path=rhw_for_comp)
+            print(n_block)
+            with open(summary_txt, 'a') as f:
+                f.write("\n" + n_block)
+            if n_metrics is not None and n_metrics.get('plot_path'):
+                print(f"  Neutron figure: {neutron_png}")
+            if n_metrics is not None and not nsc.NESST_AVAILABLE:
+                print("  (install NeSST for the first-principles transport DSR"
+                      " + figure: pip install NeSST)")
+        except Exception as e:
+            print(f"  WARNING: neutron diagnostics skipped: {e}")
+        print()
+
     # ── Step 6: Compare with published data (if available) ──
     if published_metrics is not None:
         print("-" * 80)
@@ -231,7 +260,8 @@ def main(base_path: str, include_contours: bool = False):
             # Create comparison PDF
             _create_comparison_pdf(
                 str(comparison_path), name,
-                metrics, published_metrics, pub_laser, histories
+                metrics, published_metrics, pub_laser, histories,
+                neutron_metrics=n_metrics,
             )
             print(f"  Comparison PDF: {comparison_path}")
             print()
@@ -246,6 +276,8 @@ def main(base_path: str, include_contours: bool = False):
     print(f"  Analysis complete: {name}")
     print(f"  Outputs in: {base.parent}")
     outputs = [f"    {name}_report.pdf", f"    {name}_summary.txt", f"    {name}_history.csv"]
+    if n_metrics is not None and n_metrics.get('plot_path'):
+        outputs.append(f"    {name}_neutron_spectrum.png")
     if published_metrics is not None:
         outputs.append(f"    {name}_comparison.pdf")
     print("\n".join(outputs))
@@ -296,7 +328,8 @@ def _append_comparison_to_summary(summary_path: str, table: str):
 
 def _create_comparison_pdf(output_path: str, name: str,
                            metrics: dict, published_metrics: dict,
-                           pub_laser: float, histories: dict):
+                           pub_laser: float, histories: dict,
+                           neutron_metrics: dict = None):
     """Create a PDF with comparison table page and diagnostic bar chart."""
 
     with PdfPages(output_path) as pdf:
@@ -351,6 +384,26 @@ def _create_comparison_pdf(output_path: str, name: str,
             if pv <= 0:
                 continue
             all_rows.append((label, sim_val, pv, pu, fmt))
+
+        # Neutron-diagnostics section (birth spectrum -> DSR -> nTOF)
+        if neutron_metrics:
+            nm = neutron_metrics
+            dsr_pct = 100.0 * nm['DSR'] if nm.get('DSR') is not None else 0.0
+            neutron_defs = [
+                ('DT neutron yield',  nm.get('dt_yield', 0.0) or 0.0,  ['yield_neutrons', 'yield'], '.2e'),
+                ('T_ion nTOF (keV)',  nm.get('Ti_ntof_keV', 0.0) or 0.0, ['Tion', 'T_ion', 'T_DT_keV'], '.1f'),
+                ('DSR (%)',           dsr_pct,                         ['DSR', 'dsr'],              '.2f'),
+                ('Bang time (ns)',    nm.get('bang_time_ns', 0.0) or 0.0, ['bang_time_ns', 'bang_time'], '.2f'),
+            ]
+            for label, sim_val, pub_keys, fmt in neutron_defs:
+                pub_entry = next((published_metrics.get(k) for k in pub_keys
+                                  if published_metrics.get(k) is not None), None)
+                if pub_entry is None:
+                    continue
+                pv, pu = _to_tuple(pub_entry)
+                if pv <= 0 and sim_val <= 0:
+                    continue
+                all_rows.append((label, sim_val, pv, pu, fmt))
 
         # Render table
         if all_rows:
@@ -510,5 +563,15 @@ if __name__ == '__main__':
                         help='Simulation base path (without extension)')
     parser.add_argument('--contours', action='store_true', default=False,
                         help='Include contour plots in PDF report (slower, larger file)')
+    parser.add_argument('--no-neutronics', action='store_true', default=False,
+                        help='Skip the neutron DSR / nTOF diagnostics step')
+    parser.add_argument('--frac-D', type=float, default=0.5,
+                        help='Fuel D atom fraction for the scatter model (default 0.5)')
+    parser.add_argument('--frac-T', type=float, default=0.5,
+                        help='Fuel T atom fraction for the scatter model (default 0.5)')
+    parser.add_argument('--ntof-distance', type=float, default=3.0,
+                        help='Synthetic nTOF detector distance in metres (default 3.0)')
     args = parser.parse_args()
-    main(args.base_path, include_contours=args.contours)
+    main(args.base_path, include_contours=args.contours,
+         do_neutronics=not args.no_neutronics,
+         frac_D=args.frac_D, frac_T=args.frac_T, ntof_distance=args.ntof_distance)
