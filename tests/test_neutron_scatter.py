@@ -197,3 +197,38 @@ def test_neutron_report_noburn():
         fusion_power = np.zeros((3, 4))
     m, txt = nsc.neutron_report(_NoBurn())
     assert m is None and "no-burn" in txt
+
+
+# ----------------------- TT primary spectrum (R-matrix) -----------------------
+
+def test_tt_spectrum_shape_and_endpoint(birth):
+    E = np.linspace(0.1, 12.0, 2000)
+    tt = nsc.tt_spectrum(E, 10.0, model="Brune")
+    assert np.trapezoid(tt, E) == pytest.approx(1.0, rel=1e-6)   # normalised
+    # broad continuum peaking a few MeV, endpoint below the 10 MeV DSR window
+    assert 2.0 < E[np.argmax(tt)] < 6.0
+    assert E[tt > 0.01 * tt.max()].max() < 10.0
+
+
+def test_tt_dt_neutron_ratio_two_per_reaction():
+    from types import SimpleNamespace
+    nt, nz = 5, 4
+    zm = np.ones((nt, nz)); t = np.linspace(0, 4, nt)
+    dtr = np.ones((nt, nz)); ttr = dtr * 0.01           # TT rate 1% of DT
+    run = SimpleNamespace(time=t, zone_mass=zm, fusion_power=dtr,
+                          fusion_rate_TT_nnHe4=ttr)
+    # 2 neutrons per TT reaction -> ratio = 2 * 0.01
+    assert nsc.tt_dt_neutron_ratio(run) == pytest.approx(0.02, rel=1e-6)
+
+
+def test_neutron_report_include_tt_leaves_dsr_unchanged():
+    from types import SimpleNamespace
+    import test_neutron_spectrum as tns
+    base = tns._BurnRun()
+    # give the burn run a TT channel (~1% of DT rate)
+    base.fusion_rate_TT_nnHe4 = np.asarray(base.fusion_power) * 0.005
+    m0, _ = nsc.neutron_report(base, n_E=N_E, include_n2n=False)
+    m1, txt = nsc.neutron_report(base, n_E=N_E, include_n2n=False, include_tt=True)
+    assert m1.get("tt_dt_ratio", 0) == pytest.approx(0.01, rel=1e-6)   # 2 x 0.005
+    # DSR (10-12/13-15 MeV) is above the TT endpoint -> unchanged
+    assert m1["DSR"] == pytest.approx(m0["DSR"], rel=1e-6)

@@ -527,6 +527,9 @@ def plot_scatter_tof(scat: Dict, tof: Optional[Dict], out_path: str,
         if scat.get("scattered_C") is not None and float(np.max(scat["scattered_C"])) > 0:
             axL.semilogy(E, scat["scattered_C"], color="#b26a00", lw=1.2,
                          label="carbon scatter")
+    if scat.get("tt") is not None and float(np.max(scat["tt"])) > 0:
+        axL.semilogy(E, scat["tt"], color="#7030a0", lw=1.2, ls="-.",
+                     label="TT (T+T→α+2n)")
     axL.axvspan(10, 12, color="#cccccc", alpha=0.4)
     ymax = float(np.max(scat["full"]))
     if ymax > 0:
@@ -586,7 +589,7 @@ def apply_absolute_scale(scat: Dict, tof: Optional[Dict], dt_yield: float,
         return 1.0
     f = (dt_yield / integ) * float(solid_angle_frac)
     for k in ("primary", "scattered", "full", "scattered_fuel", "scattered_C",
-              "scattered_D", "scattered_T"):
+              "scattered_D", "scattered_T", "tt"):
         if scat.get(k) is not None:
             scat[k] = np.asarray(scat[k], dtype=float) * f
     if isinstance(scat.get("components"), dict):
@@ -601,6 +604,52 @@ def apply_absolute_scale(scat: Dict, tof: Optional[Dict], dt_yield: float,
                 tof[k] = np.asarray(tof[k], dtype=float) * f
         tof["absolute"] = True
     return f
+
+
+# ---------------------------------------------------------------------------
+# TT primary spectrum (T+T -> alpha + 2n) via NeSST's R-matrix model
+# ---------------------------------------------------------------------------
+
+def tt_spectrum(energy_MeV: np.ndarray, Tion_keV: float,
+                model: str = "Brune") -> np.ndarray:
+    """Normalised TT neutron birth spectrum (integrates to 1) from NeSST's
+    fitted R-matrix model (Appelbe et al. HEDP 2016; ``model`` one of
+    'Brune', 'Eriksson', 'Gatu-Johnson-{low,mid,high}').
+
+    T+T -> alpha + 2n gives a broad continuum peaking ~4 MeV with a ~9.4 MeV
+    endpoint -- entirely **below** the 10-12 MeV DSR window, so TT is a soft
+    background to the down-scatter, not part of the DSR ratio."""
+    _require_nesst()
+    E_eV = np.asarray(energy_MeV, dtype=float) * 1e6
+    shape = np.asarray(_nesst.dNdE_TT(E_eV, float(Tion_keV) * 1e3, model=model),
+                       dtype=float)
+    integ = float(trapezoid(shape, np.asarray(energy_MeV, dtype=float)))
+    return shape / integ if integ > 0 else shape
+
+
+def tt_dt_neutron_ratio(data) -> float:
+    """TT / DT neutron-yield ratio from the run's fusion rates.
+
+    Uses the burn-integrated reaction counts (rate[reactions/s/g] x zone_mass x
+    dt) for the DT and TT channels; T+T -> alpha + 2n emits **2** neutrons per
+    reaction. Returns 0.0 if TT is absent. For a D-enhanced (T-poor) target TT
+    is strongly suppressed."""
+    zm = getattr(data, "zone_mass", None)
+    t = getattr(data, "time", None)
+    if zm is None or t is None:
+        return 0.0
+    zm = np.asarray(zm, dtype=float)
+    dt = np.gradient(np.asarray(t, dtype=float))
+
+    def reactions(attr):
+        a = getattr(data, attr, None)
+        if a is None:
+            return 0.0
+        return float(np.sum(np.asarray(a, dtype=float) * zm * dt[:, None]))
+
+    dt_r = reactions("fusion_power")              # FusionRate_DT_nHe4
+    tt_r = reactions("fusion_rate_TT_nnHe4")
+    return (2.0 * tt_r / dt_r) if dt_r > 0 else 0.0
 
 
 # ---------------------------------------------------------------------------
@@ -626,7 +675,8 @@ def neutron_report(data, frac_D: float = 0.5, frac_T: float = 0.5,
                    include_n2n: bool = True, published: Optional[Dict] = None,
                    plot_path: Optional[str] = None, plot_title: str = "",
                    rhw_path: Optional[str] = None, absolute: bool = True,
-                   solid_angle_frac: float = 1.0
+                   solid_angle_frac: float = 1.0, include_tt: bool = False,
+                   tt_dt_ratio: Optional[float] = None, tt_model: str = "Brune"
                    ) -> Tuple[Optional[Dict], str]:
     """Full neutron post-processing block for a Helios run, for the standard
     pipeline (``run_analysis``). Returns ``(metrics, text)``.
@@ -697,6 +747,20 @@ def neutron_report(data, frac_D: float = 0.5, frac_T: float = 0.5,
                     if dsr else float("nan"),
                     "dsr_source": "NeSST single-scatter D+T (ENDF/B-VIII.0)",
                 })
+            # TT continuum (T+T -> alpha + 2n) added to the birth spectrum, so
+            # it flows through the scatter + nTOF. TT (< 9.4 MeV) is below the
+            # DSR window, so the DSR is unchanged -- it is a soft background.
+            if include_tt and scat is not None:
+                ratio = (tt_dt_ratio if tt_dt_ratio is not None
+                         else tt_dt_neutron_ratio(data))
+                if ratio and ratio > 0:
+                    Ti_tt = metrics.get("Ti_burn_avg_keV") or 5.0
+                    prim_int = float(trapezoid(scat["primary"], scat["energy_MeV"]))
+                    scat["tt"] = tt_spectrum(scat["energy_MeV"], Ti_tt, tt_model) \
+                        * (ratio * prim_int)
+                    scat["full"] = scat["full"] + scat["tt"]
+                    metrics["tt_dt_ratio"] = float(ratio)
+
             tof = scattered_tof(scat, distance_m=distance_m)
             if tof:
                 metrics["Ti_ntof_keV"] = tof["primary"]["Ti_ntof_keV"]
