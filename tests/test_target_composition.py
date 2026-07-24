@@ -95,6 +95,24 @@ def test_multi_material_report(rhw):
     assert "auto-detected" in txt
 
 
+def test_plot_scatter_tof_handles_both_shapes(tmp_path):
+    """Regression: the figure helper must accept the multi-material dict
+    (scattered_fuel/scattered_C) as well as the single-material one
+    (components) -- previously it KeyError'd on 'components'."""
+    from helios_postprocess import neutron_scatter as nsc
+    from helios_postprocess import neutron_spectrum as ns
+    E, S = ns.synthesize_birth_spectrum(np.array([[1.0]]), np.array([[5000.0]]),
+            energy_grid_MeV=np.linspace(1.0, 18.0, 1600), reaction="DT")
+    mm = nsc.multi_material_scatter(E, S, 0.36, 0.54, 0.15, n_E=700)   # no "components"
+    out = tmp_path / "mm.png"
+    nsc.plot_scatter_tof(mm, nsc.scattered_tof(mm), str(out))
+    assert out.exists() and out.stat().st_size > 0
+    sm = nsc.scatter_from_spectrum(E, S, 0.9, n_E=700, include_n2n=False)  # has "components"
+    out2 = tmp_path / "sm.png"
+    nsc.plot_scatter_tof(sm, nsc.scattered_tof(sm), str(out2))
+    assert out2.exists() and out2.stat().st_size > 0
+
+
 def test_multi_material_fuel_matches_dt_only(rhw):
     from helios_postprocess import neutron_scatter as nsc
     from helios_postprocess import neutron_spectrum as ns

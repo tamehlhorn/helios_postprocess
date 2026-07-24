@@ -514,8 +514,19 @@ def plot_scatter_tof(scat: Dict, tof: Optional[Dict], out_path: str,
     E = scat["energy_MeV"]
     axL.semilogy(E, scat["full"], "k", lw=1.7, label="full")
     axL.semilogy(E, scat["primary"], "--", color="#1f4e79", lw=1.2, label="primary")
-    axL.semilogy(E, scat["components"]["nT"], color="#2e7d32", lw=1.2, label="n+T")
-    axL.semilogy(E, scat["components"]["nD"], color="#b26a00", lw=1.2, label="n+D")
+    comp = scat.get("components")
+    if comp is not None:
+        # single-material D+T path: per-species elastic components
+        axL.semilogy(E, comp["nT"], color="#2e7d32", lw=1.2, label="n+T")
+        axL.semilogy(E, comp["nD"], color="#b26a00", lw=1.2, label="n+D")
+    else:
+        # multi-material path: fuel (D+T combined) and carbon scatter
+        if scat.get("scattered_fuel") is not None:
+            axL.semilogy(E, scat["scattered_fuel"], color="#2e7d32", lw=1.2,
+                         label="D+T scatter")
+        if scat.get("scattered_C") is not None and float(np.max(scat["scattered_C"])) > 0:
+            axL.semilogy(E, scat["scattered_C"], color="#b26a00", lw=1.2,
+                         label="carbon scatter")
     axL.axvspan(10, 12, color="#cccccc", alpha=0.4)
     ymax = float(np.max(scat["full"]))
     if ymax > 0:
@@ -523,7 +534,13 @@ def plot_scatter_tof(scat: Dict, tof: Optional[Dict], out_path: str,
     axL.set_xlim(1, 16)
     axL.set_xlabel("neutron energy (MeV)")
     axL.set_ylabel("dN/dE (arb.)")
-    axL.set_title(f"scattered spectrum   DSR={100 * scat['dsr']['DSR']:.2f}%")
+    dsr_fuel = scat["dsr"]["DSR"]
+    if scat.get("dsr_total") is not None:
+        title_dsr = (f"DSR {100 * dsr_fuel:.2f}% fuel / "
+                     f"{100 * scat['dsr_total']['DSR']:.2f}% +C")
+    else:
+        title_dsr = f"DSR={100 * dsr_fuel:.2f}%"
+    axL.set_title(f"scattered spectrum   {title_dsr}")
     axL.legend(fontsize=8)
     axL.grid(alpha=0.25, which="both")
 
