@@ -118,7 +118,8 @@ def test_multi_material_fuel_matches_dt_only(rhw):
     from helios_postprocess import neutron_spectrum as ns
     E, S = ns.synthesize_birth_spectrum(np.array([[1.0]]), np.array([[5000.0]]),
             energy_grid_MeV=np.linspace(1.0, 18.0, 1600), reaction="DT")
-    mm = nsc.multi_material_scatter(E, S, 0.36, 0.54, 0.0, n_E=700)
+    # same settings on both paths (elastic-only, depleted) so they must agree
+    mm = nsc.multi_material_scatter(E, S, 0.36, 0.54, 0.0, n_E=700, include_n2n=False)
     dt = nsc.scatter_from_spectrum(E, S, 0.9, frac_D=mm["frac_D"],
                                    frac_T=mm["frac_T"], n_E=700, include_n2n=False)
     # zero carbon -> fuel DSR identical to the D+T-only path
