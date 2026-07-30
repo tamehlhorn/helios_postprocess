@@ -245,3 +245,115 @@ def fuel_atom_fractions(regions: List[RegionComposition]) -> Dict[str, float]:
         return {"frac_D": 0.5, "frac_T": 0.5}
     fD = nD / (nD + nT)
     return {"frac_D": fD, "frac_T": 1.0 - fD}
+
+
+# ---------------------------------------------------------------------------
+# Method-2 traversed areal density (emission-weighted, angle-averaged)
+# ---------------------------------------------------------------------------
+# _rhoR_from_profile (neutron_spectrum) gives the CENTER-TO-EDGE column
+# int_0^R rho dr -- the classic areal-density metric (Kyle Method 1).  For the
+# down-scatter a distributed, isotropically-emitted neutron population actually
+# experiences, the relevant quantity is the emission-weighted, 4-pi angle-
+# averaged chord integral (Kyle Method 2):
+#
+#     rhoR_sp = < (1/2) int_{-1}^{1} dmu int_0^{l_exit} rho_sp(r(l,mu,r_s)) dl >_S
+#     r(l,mu,r_s) = sqrt(r_s^2 + l^2 + 2 l r_s mu)
+#
+# The Abu-Shawareb NIF paper states the areal density is "emission weighted to
+# larger radii" and therefore decreases as yield increases -- i.e. DSR tracks
+# the traversed (Method-2) rhoR, not center-to-edge.  These functions compute
+# it directly from the Helios profile so we can hand NeSST the DSR-relevant
+# rhoR.  NeSST itself is unchanged.
+
+def _method2_chord_rhoR(r_out: np.ndarray, rho_sp_shell: np.ndarray,
+                        Sprod: np.ndarray, n_mu: int = 48) -> float:
+    """Emission-weighted, isotropic 4-pi angle-averaged chord integral of a
+    per-shell density profile (g/cm^2).  Piecewise-constant rho per shell.
+
+    Validated limits: central point source in a uniform sphere -> rho*R exactly;
+    uniform-volume source -> ~0.75*rho*R."""
+    r_out = np.asarray(r_out, dtype=float)
+    e = np.concatenate([[0.0], r_out])
+    dr = np.diff(e)
+    R0 = float(r_out[-1])
+    rho_sp = np.asarray(rho_sp_shell, dtype=float)
+    Sp = np.clip(np.asarray(Sprod, dtype=float), 0.0, None)
+    _trap = getattr(np, "trapezoid", None) or np.trapz
+    ctr = 0.5 * (e[:-1] + e[1:])
+    m = Sp > 0
+    r_s = ctr[m] if m.any() else ctr
+    wS = Sp[m] if m.any() else np.ones_like(ctr)
+    mu = np.linspace(-1.0, 1.0, int(n_mu))            # isotropic -> uniform in mu
+    pos = dr[dr > 0]
+    dl = max(min(pos.min() * 0.5, R0 / 6000.0), 1e-6) if pos.size else R0 / 6000.0
+    l = np.arange(0.0, 2.0 * R0 + dl, dl)
+    acc = wsum = 0.0
+    for rs, wt in zip(r_s, wS):
+        R = np.sqrt(np.clip(rs * rs + l[:, None] ** 2
+                            + 2.0 * l[:, None] * rs * mu[None, :], 0.0, None))
+        idx = np.clip(np.searchsorted(e, R, side="right") - 1, 0, len(rho_sp) - 1)
+        rr = rho_sp[idx]
+        rr[R > R0] = 0.0
+        acc += wt * float(_trap(rr, l, axis=0).mean())
+        wsum += wt
+    return float(acc / wsum) if wsum > 0 else float("nan")
+
+
+def traversed_species_areal_densities(data, regions: List[RegionComposition],
+                                      bang_index: Optional[int] = None,
+                                      n_mu: int = 48) -> Optional[Dict]:
+    """Per-species D/T/C areal densities that a neutron actually TRAVERSES
+    (Kyle Method 2), computed straight from the bang-time Helios profile.
+
+    Unlike :func:`species_areal_densities` (which splits the center-to-edge
+    ``rhoR_emission`` by composition), each species' areal density here is the
+    independent emission-weighted, angle-averaged chord integral -- so carbon in
+    an outer shell is weighted by the chords that cross it, not by a fuel ratio.
+    Returns a dict of areal densities (g/cm^2), or ``None`` if geometry is
+    unavailable."""
+    zb = getattr(data, "zone_boundaries", None)
+    rho = getattr(data, "mass_density", None)
+    if zb is None or rho is None or not regions:
+        return None
+    zb = np.asarray(zb, dtype=float)
+    rho = np.asarray(rho, dtype=float)
+    t = _bang_index(data) if bang_index is None else int(bang_index)
+    t = max(0, min(t, rho.shape[0] - 1))
+
+    r_out = zb[t][1:].astype(float)
+    rho_t = rho[t].astype(float)
+    zidx = assign_zones_to_regions(zb, regions)
+    wD, wT, wC = zone_mass_fractions(zidx, regions)
+
+    fp = getattr(data, "fusion_power", None)
+    zm = getattr(data, "zone_mass", None)
+    if fp is not None:
+        fp_t = np.asarray(fp, dtype=float)
+        fp_t = fp_t[t] if fp_t.ndim == 2 else fp_t
+        if zm is not None:
+            zm_a = np.asarray(zm, dtype=float)
+            zm_t = zm_a[t] if zm_a.ndim == 2 else zm_a
+            S = fp_t * zm_t
+        else:
+            S = fp_t
+    else:
+        S = np.ones_like(rho_t)
+    S = np.clip(np.asarray(S, dtype=float), 0.0, None)
+
+    keep = (rho_t > 0.0) & (r_out > 0.0)
+    r_out, rho_t = r_out[keep], rho_t[keep]
+    wD, wT, wC, S = wD[keep], wT[keep], wC[keep], S[keep]
+    incr = np.concatenate([[True], np.diff(r_out) > 0.0])
+    r_out, rho_t = r_out[incr], rho_t[incr]
+    wD, wT, wC, S = wD[incr], wT[incr], wC[incr], S[incr]
+    if r_out.size < 2:
+        return None
+
+    rD = _method2_chord_rhoR(r_out, rho_t * wD, S, n_mu)
+    rT = _method2_chord_rhoR(r_out, rho_t * wT, S, n_mu)
+    rC = _method2_chord_rhoR(r_out, rho_t * wC, S, n_mu)
+    return {
+        "rhoR_D_gcm2": rD, "rhoR_T_gcm2": rT, "rhoR_C_gcm2": rC,
+        "rhoR_fuel_gcm2": rD + rT, "method": "traversed-Method2",
+        "bang_index": t,
+    }

@@ -876,10 +876,22 @@ def neutron_report(data, frac_D: float = 0.5, frac_T: float = 0.5,
     return metrics, _format_neutron_block(metrics, published)
 
 
-def _composition_scatter(nd, data, rhw_path, n_E) -> Optional[Dict]:
+def _composition_scatter(nd, data, rhw_path, n_E,
+                         rhoR_mode: str = "traversed") -> Optional[Dict]:
     """Multi-material scatter from an RHW: per-layer composition -> per-species
     areal densities -> D+T+C scatter. Returns the scatter dict, or None if the
-    RHW / composition / geometry is unavailable (caller falls back to D+T)."""
+    RHW / composition / geometry is unavailable (caller falls back to D+T).
+
+    ``rhoR_mode`` selects which areal density feeds the DSR:
+      "traversed" (default) -- emission-weighted, angle-averaged rhoR a neutron
+          population actually traverses (Kyle Method 2).  This is the
+          DSR-relevant quantity: the Abu-Shawareb NIF paper states the areal
+          density is "emission weighted to larger radii", so DSR tracks the
+          traversed rhoR, not the center-to-edge column.
+      "center_to_edge" -- the classic int_0^R rho dr (Kyle Method 1), i.e. the
+          previous behaviour, kept for comparison.
+    Both areal-density sets are always returned (``composition_traversed`` /
+    ``composition_center_to_edge``).  NeSST itself is unchanged either way."""
     try:
         from . import target_composition as tc
     except Exception:                                 # pragma: no cover
@@ -896,13 +908,20 @@ def _composition_scatter(nd, data, rhw_path, n_E) -> Optional[Dict]:
     regions = tc.parse_rhw_regions(rhw_path)
     if not regions:
         return None
-    sp = tc.species_areal_densities(data, regions, float(rhoR_fuel))
+
+    sp_cte = tc.species_areal_densities(data, regions, float(rhoR_fuel))
+    sp_tr = tc.traversed_species_areal_densities(data, regions)
+    sp = sp_tr if (rhoR_mode == "traversed" and sp_tr is not None) else sp_cte
     if sp is None:
         return None
+
     res = multi_material_scatter(
         energy, primary, sp["rhoR_D_gcm2"], sp["rhoR_T_gcm2"],
-        sp["rhoR_C_gcm2"], n_E=max(int(n_E), 600))
+        sp["rhoR_C_gcm2"], n_E=max(int(n_E), 800))
     res["composition"] = sp
+    res["composition_center_to_edge"] = sp_cte
+    res["composition_traversed"] = sp_tr
+    res["rhoR_mode"] = rhoR_mode if sp is sp_tr else "center_to_edge"
     res["regions_summary"] = tc.summarize_regions(regions)
     return res
 
