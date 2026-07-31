@@ -285,7 +285,7 @@ def _method2_chord_rhoR(r_out: np.ndarray, rho_sp_shell: np.ndarray,
     wS = Sp[m] if m.any() else np.ones_like(ctr)
     mu = np.linspace(-1.0, 1.0, int(n_mu))            # isotropic -> uniform in mu
     pos = dr[dr > 0]
-    dl = max(min(pos.min() * 0.5, R0 / 6000.0), 1e-6) if pos.size else R0 / 6000.0
+    dl = max(R0 / 4000.0, 1e-6)
     l = np.arange(0.0, 2.0 * R0 + dl, dl)
     acc = wsum = 0.0
     for rs, wt in zip(r_s, wS):
