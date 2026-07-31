@@ -815,14 +815,34 @@ def neutron_report(data, frac_D: float = 0.5, frac_T: float = 0.5,
                 if rhw_path else None
             if comp is not None:
                 scat = comp
+                # Self-consistent DSR<->rhoR coefficient: use the SAME areal-
+                # density convention on both sides.  The DSR is derived from the
+                # traversed (Method-2) rhoR, so the coefficient divides the
+                # traversed rhoR -- not the center-to-edge hydro column -- by that
+                # DSR.  Total (D+T+C) traversed rhoR / total DSR is the quantity
+                # the empirical NIF 20.4 g/cm^2-per-DSR calibrates.
+                _cmp = (scat.get("composition_traversed")
+                        or scat.get("composition") or {})
+                _rD = float(_cmp.get("rhoR_D_gcm2", float("nan")))
+                _rT = float(_cmp.get("rhoR_T_gcm2", float("nan")))
+                _rC = float(_cmp.get("rhoR_C_gcm2", 0.0))
+                _rhoR_tr_fuel = _rD + _rT
+                _rhoR_tr_tot = _rhoR_tr_fuel + _rC
+                _dsr_fuel = scat["dsr_fuel"]["DSR"]
+                _dsr_tot = scat["dsr_total"]["DSR"]
                 metrics.update({
-                    "DSR": scat["dsr_fuel"]["DSR"],
-                    "DSR_total": scat["dsr_total"]["DSR"],
+                    "DSR": _dsr_fuel,
+                    "DSR_total": _dsr_tot,
                     "rhoR_C_gcm2": scat["rhoR_C_gcm2"],
                     "frac_D": scat["frac_D"], "frac_T": scat["frac_T"],
-                    "coeff_gcm2_per_DSR": (metrics["rhoR_hydro_gcm2"]
-                                           / scat["dsr_fuel"]["DSR"])
-                    if scat["dsr_fuel"]["DSR"] else float("nan"),
+                    "rhoR_traversed_fuel_gcm2": _rhoR_tr_fuel,
+                    "rhoR_traversed_total_gcm2": _rhoR_tr_tot,
+                    "coeff_gcm2_per_DSR": (_rhoR_tr_tot / _dsr_tot)
+                    if _dsr_tot else float("nan"),
+                    "coeff_fuel_gcm2_per_DSR": (_rhoR_tr_fuel / _dsr_fuel)
+                    if _dsr_fuel else float("nan"),
+                    "coeff_convention":
+                        "traversed Method-2; total (D+T+C) rhoR / total DSR",
                     "dsr_source": "NeSST multi-material (D+T+C, ENDF/B-VIII.0)",
                     "composition_source": "RHW",
                 })
@@ -959,6 +979,12 @@ def _format_neutron_block(m: Dict, pub: Optional[Dict] = None) -> str:
     if m.get("coeff_gcm2_per_DSR") is not None:
         L.append(f"  first-principles coeff {m['coeff_gcm2_per_DSR']:.2f}"
                  " g/cm^2 per DSR   (empirical NIF 20.4)")
+        conv = m.get("coeff_convention")
+        if conv:
+            L.append(f"                         [{conv}]")
+        if m.get("coeff_fuel_gcm2_per_DSR") is not None:
+            L.append(f"  first-principles coeff {m['coeff_fuel_gcm2_per_DSR']:.2f}"
+                     " g/cm^2 per DSR_fuel   (fuel D+T only, self-consistent)")
     src = m.get("composition_source")
     auto = "  (fuel D:T auto-detected from RHW)" if src == "RHW" else ""
     L.append(f"  fuel D:T = {m['frac_D']:.2f}:{m['frac_T']:.2f}"
