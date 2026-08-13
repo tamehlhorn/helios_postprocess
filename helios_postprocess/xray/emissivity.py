@@ -228,7 +228,8 @@ def build_emissivity(data,
                      E_eV: np.ndarray,
                      *,
                      zone_slice: Optional[slice] = None,
-                     include_absorption: bool = True) -> EmissivityCube:
+                     include_absorption: bool = True,
+                     rho_floor: Optional[float] = None) -> EmissivityCube:
     """
     Build the Level 0 emissivity / absorption cube for one Helios time index.
 
@@ -246,6 +247,16 @@ def build_emissivity(data,
     include_absorption : bool
         If True, compute ``kappa_E`` from Kirchhoff (LTE continuum).
         If False, ``kappa_E`` is zeros and the chord solver runs optically thin.
+    rho_floor : float, optional
+        Mass density [g/cm^3] below which a zone is treated as non-emitting.
+        The outermost Lagrangian zones of an expanding corona carry negligible
+        mass but can reach tens of keV; because their emission falls off as
+        exp(-E/kTe) with a very large kTe, they contribute almost nothing at
+        low photon energy yet can dominate the hard tail, where the bulk
+        capsule is exponentially suppressed. A floor removes them.
+        This is a MASK, not physics: always report results with and without
+        it, and treat a hard-channel result that depends on the floor as
+        unconverged rather than as a measurement.
 
     Returns
     -------
@@ -265,6 +276,17 @@ def build_emissivity(data,
         stop = len(r_bnd) - 1 if zone_slice.stop is None else zone_slice.stop
         r_bnd = r_bnd[start:stop + 1]
 
+    rho = np.asarray(data.mass_density, float)[it]
+    if zone_slice is not None:
+        rho = rho[zone_slice]
+
+    emit_mask = None
+    if rho_floor is not None:
+        emit_mask = rho >= float(rho_floor)
+        if not np.any(emit_mask):
+            logger.warning(f"xray: rho_floor={rho_floor:g} g/cm^3 excludes "
+                           f"every zone at t index {it}")
+
     Te = np.maximum(Te, _T_FLOOR_EV)
     T_K = Te * EV_TO_K
 
@@ -281,11 +303,17 @@ def build_emissivity(data,
     j_E = j_nu / (4.0 * np.pi) / H_PLANCK_EVS
 
     j_E = np.nan_to_num(j_E, nan=0.0, posinf=0.0, neginf=0.0)
+    if emit_mask is not None:
+        j_E = j_E * emit_mask[:, None]
 
     B_E = planck_E(Ez, Tz)
     if include_absorption:
         kappa_E = np.where(B_E > 0.0, j_E / np.maximum(B_E, 1.0e-300), 0.0)
         kappa_E = np.nan_to_num(kappa_E, nan=0.0, posinf=0.0, neginf=0.0)
+        if emit_mask is not None:
+            # A masked zone must not absorb either, or it would still shape
+            # the emergent spectrum after being declared non-emitting.
+            kappa_E = kappa_E * emit_mask[:, None]
     else:
         kappa_E = np.zeros_like(j_E)
 

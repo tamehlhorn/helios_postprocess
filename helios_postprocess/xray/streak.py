@@ -74,6 +74,10 @@ class StreakConfig:
     zone_slice : slice, optional
         Restrict emission to a zone range.  Essential for halfraum targets:
         the Cu converter and He fill would otherwise dominate the signal.
+    rho_floor_g_cc : float, optional
+        Treat zones below this density as non-emitting.  Suppresses the
+        massless-and-very-hot outer corona zones that can manufacture a
+        spurious hard tail and a spurious emission halo outside the limb.
     """
     t_start_ns: Optional[float] = None
     t_stop_ns: Optional[float] = None
@@ -88,6 +92,7 @@ class StreakConfig:
     optically_thin: bool = True
     r_max_cm: Optional[float] = None
     zone_slice: Optional[slice] = None
+    rho_floor_g_cc: Optional[float] = None
 
 
 @dataclass
@@ -164,7 +169,8 @@ def build_radiance_cube(data, cfg: StreakConfig,
     for k, it in enumerate(sel):
         cube = build_emissivity(data, int(it), E,
                                 zone_slice=cfg.zone_slice,
-                                include_absorption=not cfg.optically_thin)
+                                include_absorption=not cfg.optically_thin,
+                                rho_floor=cfg.rho_floor_g_cc)
         res: ChordResult = integrate(cube, p, optically_thin=cfg.optically_thin)
         I[k] = res.I
         tau[k] = res.tau
@@ -173,6 +179,7 @@ def build_radiance_cube(data, cfg: StreakConfig,
             logger.info(f"  [xray] {k + 1}/{n_t}  t = {t[it]:.3f} ns")
 
     meta = dict(optically_thin=cfg.optically_thin,
+                rho_floor_g_cc=cfg.rho_floor_g_cc,
                 r_max_cm=r_max,
                 zone_slice=str(cfg.zone_slice),
                 n_helios_steps=int(n_t))

@@ -162,6 +162,8 @@ def make_report(cube, imgs, spec, stem, pdf_path):
                       f"  min I/I_thin = {rep['min_I_over_I_thin']:.3g}"]
         else:
             lines += ["OPTICAL DEPTH DIAGNOSTIC", "  run was optically thin"]
+        floor = cube.meta.get("rho_floor_g_cc")
+        lines += ["", f"rho floor: {'none' if floor is None else f'{floor:g} g/cc'}"]
         lines += ["", "Level 0 = free-free continuum only.",
                   "No free-bound edges, no lines, no non-LTE.",
                   "Filter response is the ANCHORED POWER LAW model -",
@@ -204,6 +206,11 @@ def main() -> int:
                          "4000,8000 8000,20000. Default channels are cut for "
                          "a softer OMEGA-class spectrum; check with "
                          "examples/xray_emission_provenance.py first.")
+    ap.add_argument("--rho-floor", type=float, default=None,
+                    metavar="G_PER_CC",
+                    help="treat zones below this density as non-emitting; "
+                         "suppresses the massless very-hot outer corona. "
+                         "ALWAYS run with and without and compare.")
     ap.add_argument("--out", default=None)
     args = ap.parse_args()
 
@@ -246,7 +253,8 @@ def main() -> int:
                        n_energy=args.n_energy,
                        time_resolution_ps=args.time_res_ps,
                        optically_thin=args.thin,
-                       zone_slice=zslice)
+                       zone_slice=zslice,
+                       rho_floor_g_cc=args.rho_floor)
 
     log.info("[xray] building radiance cube ...")
     cube = build_radiance_cube(data, cfg)

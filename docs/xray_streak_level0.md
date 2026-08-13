@@ -82,8 +82,10 @@ helios_postprocess/xray/
     streak.py        radiance cube, sweep/IRF/MTF, observable extraction
     spect3d_io.py    profile export + SPECT3D reader onto the same contract
 examples/
-    xray_run_recon.py          pre-flight: fields, regions, window, tau
-    xray_streak_synthetic.py   runner, 3-page PDF + .npz cube
+    xray_run_recon.py            pre-flight: fields, regions, window, tau
+    xray_emission_provenance.py  which zones make the light; band selection
+    xray_streak_synthetic.py     runner, 3-page PDF + .npz cube
+    patch_xray_variables.py    wires mean_charge / ion_density into data_builder
 tests/
     test_xray_level0.py        14 tests, no .exo required
 ```
@@ -104,10 +106,9 @@ is a diff rather than a re-implementation.
    adequate for absolute comparison to measured data. Replace with CXRO/Henke
    tables (`load_henke_file`) before any photometric claim.
 2. **Zbar.** Free-free scales as Zbar², so `mean_charge` matters more here
-   than anywhere else in the pipeline. It is present in `_VARIABLE_MAP`
-   alongside `ion_density`, so both load natively. If either is ever
-   dropped, the module falls back (`n_e/n_i`, or Zbar = 1) and warns
-   loudly -- treat that warning as a hard stop, not a nuisance.
+   than anywhere else in the pipeline. It is not currently in
+   `_VARIABLE_MAP`; run `examples/patch_xray_variables.py` first. Without it
+   the module falls back to `n_e/n_i` and warns.
 3. **Te vs Ti.** Coronal emission is set by Te. Falling back to Ti (which the
    module will do, loudly) makes the drive-phase signal wrong.
 4. **Non-uniform Helios time base.** EXODUS clusters timesteps around
@@ -118,7 +119,19 @@ is a diff rather than a re-implementation.
    emission. Use `--capsule-only` / `zone_slice`, or the streak is a picture
    of the halfraum, not the capsule. Detection keys off region names; if they
    fail to decode, set the boundary by hand with `--zone-stop N`.
-6. **Hydro dump cadence.** The synthetic camera cannot resolve anything
+6. **Outer-boundary zones.** The outermost Lagrangian zones carry little
+   mass but can reach very high Te, and their contribution grows as
+   `exp(E/kT_bulk)` with photon energy, so they can take over the hard tail.
+   Whether they do is controlled by coronal *density*, not temperature — the
+   `n²` penalty is severe and a very hot outer zone is not by itself evidence
+   of contamination. Run `xray_emission_provenance.py` to decide empirically;
+   mitigate with `--rho-floor`, and always report with and without it. Full
+   write-up in `docs/claude_xray_outer_zone_emission.md`.
+7. **Channel placement.** `default_channels()` is cut for a softer,
+   OMEGA-class direct-drive spectrum. On a harder target most of the signal
+   lands in one channel and the hard/soft ratio stops working as a Te proxy.
+   Use `--bands`/`channels_from_edges` guided by the provenance percentiles.
+8. **Hydro dump cadence.** The synthetic camera cannot resolve anything
    faster than the EXODUS output interval. If the dump interval exceeds the
    requested IRF the model warns, and any bang-time or FWHM number inherits
    the hydro cadence as its real resolution limit.
