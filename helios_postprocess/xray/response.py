@@ -283,6 +283,31 @@ class Channel:
         return float(np.trapezoid(w * E_eV, E_eV) / denom)
 
 
+def channels_from_edges(bands, cathode: Optional[Photocathode] = None,
+                        filters: Sequence[Filter] = ()) -> Dict[str, Channel]:
+    """
+    Build channels from explicit (E_lo, E_hi) pairs in eV.
+
+    These are IDEALIZED rectangular bands, optionally multiplied by a common
+    filter stack and photocathode. They are the right tool for scoping which
+    part of the spectrum carries information; they are NOT a model of a real
+    filtered channel, whose band is defined by the filter's own transmission
+    edge and whose response has long tails on both sides. Move to explicit
+    ``Filter`` stacks before designing hardware.
+
+    Example
+    -------
+    >>> chs = channels_from_edges([(2000, 4000), (4000, 8000), (8000, 20000)])
+    """
+    cathode = cathode or Photocathode()
+    out: Dict[str, Channel] = {}
+    for lo, hi in bands:
+        name = f"{lo / 1000:.3g}-{hi / 1000:.3g}keV"
+        out[name] = Channel(name, filters=tuple(filters), cathode=cathode,
+                            E_min_eV=float(lo), E_max_eV=float(hi))
+    return out
+
+
 def default_channels() -> Dict[str, Channel]:
     """
     A conventional three-channel filtered XRSC set for direct-drive

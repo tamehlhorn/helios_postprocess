@@ -32,7 +32,7 @@ from .emissivity import (EmissivityCube, build_emissivity, gaunt_ff, planck_E,
 from .chords import (ChordResult, integrate, integrate_thin, integrate_formal,
                      make_impact_grid, spatially_integrate)
 from .response import (Channel, Filter, Photocathode, HenkeTable,
-                       load_henke_file, default_channels,
+                       load_henke_file, default_channels, channels_from_edges,
                        be_filter, al_filter, ch_filter, kapton_filter,
                        ti_filter, mu_over_rho_element, mu_over_rho_compound)
 from .streak import (StreakConfig, RadianceCube, StreakImage,
@@ -49,7 +49,7 @@ __all__ = [
     "ChordResult", "integrate", "integrate_thin", "integrate_formal",
     "make_impact_grid", "spatially_integrate",
     "Channel", "Filter", "Photocathode", "HenkeTable", "load_henke_file",
-    "default_channels", "be_filter", "al_filter", "ch_filter",
+    "default_channels", "channels_from_edges", "be_filter", "al_filter", "ch_filter",
     "kapton_filter", "ti_filter", "mu_over_rho_element", "mu_over_rho_compound",
     "StreakConfig", "RadianceCube", "StreakImage", "BurnHistoryMetrics",
     "build_radiance_cube", "make_imaging_streak", "make_spectral_streak",

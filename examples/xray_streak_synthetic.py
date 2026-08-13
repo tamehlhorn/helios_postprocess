@@ -36,7 +36,8 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from helios_postprocess.xray import (StreakConfig, build_radiance_cube,
                                      make_imaging_streak, make_spectral_streak,
-                                     default_channels, burn_metrics,
+                                     default_channels, channels_from_edges,
+                                     burn_metrics,
                                      emission_edge_trajectory, emission_history,
                                      opacity_report)
 
@@ -197,6 +198,12 @@ def main() -> int:
     ap.add_argument("--time-res-ps", type=float, default=15.0)
     ap.add_argument("--time-unit", choices=["auto", "s", "ns"], default="auto",
                     help="unit of time_whole in the .exo (Helios writes 's')")
+    ap.add_argument("--bands", nargs="+", default=None,
+                    metavar="E_LO,E_HI",
+                    help="channel bands in eV, e.g. --bands 2000,4000 "
+                         "4000,8000 8000,20000. Default channels are cut for "
+                         "a softer OMEGA-class spectrum; check with "
+                         "examples/xray_emission_provenance.py first.")
     ap.add_argument("--out", default=None)
     args = ap.parse_args()
 
@@ -244,7 +251,12 @@ def main() -> int:
     log.info("[xray] building radiance cube ...")
     cube = build_radiance_cube(data, cfg)
 
-    channels = default_channels()
+    if args.bands:
+        edges = [tuple(float(x) for x in b.split(",")) for b in args.bands]
+        channels = channels_from_edges(edges)
+        log.info(f"[xray] channels: {list(channels)}")
+    else:
+        channels = default_channels()
     imgs = {k: make_imaging_streak(cube, ch, cfg) for k, ch in channels.items()}
     spec = make_spectral_streak(cube, cfg)
 
