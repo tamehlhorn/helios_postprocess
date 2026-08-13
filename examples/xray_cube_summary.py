@@ -38,7 +38,9 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from helios_postprocess.xray import (RadianceCube, StreakConfig,
                                      make_imaging_streak, make_spectral_streak,
                                      channels_from_edges, burn_metrics,
-                                     emission_edge_trajectory, opacity_report)
+                                     emission_edge_trajectory,
+                                     encircled_radius, radial_profile,
+                                     opacity_report)
 
 
 def _hdr(t: str) -> None:
@@ -55,6 +57,10 @@ def main() -> int:
                     metavar="E_LO,E_HI")
     ap.add_argument("--time-res-ps", type=float, default=15.0)
     ap.add_argument("--n-time", type=int, default=600)
+    ap.add_argument("--profiles", nargs="*", type=float, default=None,
+                    metavar="T_NS",
+                    help="dump normalized radial profiles at these times "
+                         "(no values = 5 spread across the window)")
     ap.add_argument("--cathode", action="store_true",
                     help="include photocathode QE (default: bare bands)")
     args = ap.parse_args()
@@ -131,6 +137,53 @@ def main() -> int:
             print("    OUTSIDE the transparent channel's. That is the tau = 1")
             print("    photosphere standing off the emitting fuel, not a")
             print("    disagreement about where the shell is.")
+
+    # ------------------------------------------- threshold vs encircled radius
+    _hdr("RADIUS DEFINITION: 50% THRESHOLD vs ENCIRCLED ENERGY (um)")
+    print(" A threshold edge takes the outermost 50%-of-peak crossing and is")
+    print(" sensitive to shallow shoulders; encircled energy integrates the")
+    print(" flux. Large disagreement means the emission is not a compact")
+    print(" core, and any quoted radius must name its definition.\n")
+    print(f" {'t (ns)':>9s}" + "".join(f"{n[:6]+' thr':>13s}{n[:6]+' R50':>13s}"
+                                        f"{n[:6]+' R90':>13s}" for n in imgs))
+    enc50 = {n: encircled_radius(img, 0.5) for n, img in imgs.items()}
+    enc90 = {n: encircled_radius(img, 0.9) for n, img in imgs.items()}
+    for tp in probe_t:
+        row = f" {tp:9.4f}"
+        for n, img in imgs.items():
+            j = int(np.argmin(np.abs(img.t_ns - tp)))
+            for arr in (traj[n], enc50[n], enc90[n]):
+                v = arr[j]
+                row += f"{v * 1e4:13.1f}" if np.isfinite(v) else f"{'--':>13s}"
+        print(row)
+
+    n0 = list(imgs)[0]
+    good = np.isfinite(traj[n0]) & np.isfinite(enc50[n0])
+    if good.any():
+        ratio = np.nanmedian(traj[n0][good] / enc50[n0][good])
+        print(f"\n median threshold-edge / R50 in {n0}: {ratio:.2f}x")
+        if ratio > 2.0:
+            print(" -> The threshold edge sits far outside the flux-weighted")
+            print("    radius. The profile has a broad low-level halo, so the")
+            print("    threshold trajectory is tracking that halo, not the")
+            print("    emitting core. Prefer R50/R90 for trajectory work.")
+
+    # ------------------------------------------------------------- profiles
+    if args.profiles is not None:
+        times = (args.profiles if len(args.profiles) > 0
+                 else list(np.linspace(cube.t_ns[0], cube.t_ns[-1], 5)))
+        _hdr("NORMALIZED RADIAL PROFILES")
+        for tp in times:
+            print(f"\n t = {tp:.4f} ns")
+            for n, img in imgs.items():
+                pax, prof = radial_profile(img, tp)
+                keep = pax <= min(pax[-1], 3.0 * np.nanmax(
+                    [enc90[n][int(np.argmin(np.abs(img.t_ns - tp)))], 1e-4]))
+                idx = np.linspace(0, keep.sum() - 1, 12).astype(int)
+                vals = " ".join(f"{prof[keep][i]:6.3f}" for i in idx)
+                rads = " ".join(f"{pax[keep][i] * 1e4:6.0f}" for i in idx)
+                print(f"   {n:>10s} r(um): {rads}")
+                print(f"   {'':>10s} I/Imax: {vals}")
 
     # ----------------------------------------------------- escape fraction
     _hdr("ESCAPE FRACTION vs PHOTON ENERGY (power-weighted)")

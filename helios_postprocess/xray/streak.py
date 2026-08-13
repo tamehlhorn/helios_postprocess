@@ -400,6 +400,45 @@ def emission_edge_trajectory(img: StreakImage,
     return out
 
 
+def encircled_radius(img: StreakImage, frac: float = 0.5) -> np.ndarray:
+    """
+    Radius enclosing ``frac`` of the chord-integrated flux, per time.
+
+    Robust alternative to :func:`emission_edge_trajectory`. A threshold
+    crossing takes the OUTERMOST point where the normalized profile falls
+    through 50% of its own peak, so a shallow shoulder -- a hot low-density
+    halo, say -- can move it hundreds of microns for a small change in
+    profile shape. Encircled energy integrates instead of thresholding, and
+    is what x-ray imaging analysis normally reports.
+
+    The two disagreeing is informative, not a bug: it means the emission
+    profile has significant flux outside a compact bright core, and any
+    "radius" quoted from this diagnostic has to say which definition it used.
+
+    Returns (n_time,) in the units of ``img.axis`` (cm for imaging streaks).
+    """
+    p = img.axis
+    w = 2.0 * np.pi * p
+    out = np.full(img.t_ns.size, np.nan)
+    for i, row in enumerate(img.signal):
+        integrand = row * w
+        c = np.concatenate([[0.0], np.cumsum(0.5 * (integrand[1:]
+                                                    + integrand[:-1])
+                                             * np.diff(p))])
+        if c[-1] <= 0:
+            continue
+        out[i] = float(np.interp(frac, c / c[-1], p))
+    return out
+
+
+def radial_profile(img: StreakImage, t_ns: float) -> Tuple[np.ndarray, np.ndarray]:
+    """Normalized radial profile at the nearest sample to ``t_ns``."""
+    j = int(np.argmin(np.abs(img.t_ns - float(t_ns))))
+    row = img.signal[j]
+    m = row.max()
+    return img.axis, (row / m if m > 0 else row)
+
+
 @dataclass
 class BurnHistoryMetrics:
     """X-ray emission history metrics from a streak record."""
