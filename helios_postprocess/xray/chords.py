@@ -158,18 +158,22 @@ def integrate_formal(cube, p_cm: np.ndarray) -> ChordResult:
         dtau = (kap * ds_a[:, None])[order]              # (2m, n_E)
         S = src[order]
 
-        tau_out[i] = dtau.sum(axis=0)
+        dtau = np.clip(dtau, 0.0, 7.0e2)
+        tau_tot = dtau.sum(axis=0)
+        tau_out[i] = tau_tot
 
-        # March.  2m is at most ~700 for a 350-zone run; the inner op is a
-        # length-n_E vector, so this stays cheap.
-        I = np.zeros(n_E, dtype=float)
-        for k in range(dtau.shape[0]):
-            dt = np.clip(dtau[k], 0.0, 7.0e2)
-            att = np.exp(-dt)
-            # -expm1(-dt) == 1 - exp(-dt) without the catastrophic
-            # cancellation that costs ~3 digits when dt < 1e-12.
-            I = I * att + S[k] * (-np.expm1(-dt))
-        I_out[i] = I
+        # Closed form of the sequential march, vectorized over segments:
+        #   I = sum_k S_k (1 - e^{-dtau_k}) e^{-tau_ahead_k}
+        # where tau_ahead_k is the optical depth between segment k and the
+        # observer.  Identical to marching segment by segment, but without
+        # the Python loop over ~2*n_zone segments -- the difference is a
+        # factor of several hundred in wall time on a 200-zone run, which
+        # matters once the sweep window covers a few hundred time steps.
+        # -expm1(-dt) avoids the cancellation that costs ~3 digits at
+        # dt < 1e-12.
+        tau_ahead = tau_tot[None, :] - np.cumsum(dtau, axis=0)
+        I_out[i] = np.sum(S * (-np.expm1(-dtau))
+                          * np.exp(-np.clip(tau_ahead, 0.0, 7.0e2)), axis=0)
 
     return ChordResult(p_cm=p_cm, E_eV=cube.E_eV, I=I_out,
                        tau=tau_out, I_thin=I_thin)

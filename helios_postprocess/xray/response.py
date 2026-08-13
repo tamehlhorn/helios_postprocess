@@ -283,7 +283,10 @@ class Channel:
         return float(np.trapezoid(w * E_eV, E_eV) / denom)
 
 
-def channels_from_edges(bands, cathode: Optional[Photocathode] = None,
+_DEFAULT_CATHODE = object()
+
+
+def channels_from_edges(bands, cathode=_DEFAULT_CATHODE,
                         filters: Sequence[Filter] = ()) -> Dict[str, Channel]:
     """
     Build channels from explicit (E_lo, E_hi) pairs in eV.
@@ -299,7 +302,11 @@ def channels_from_edges(bands, cathode: Optional[Photocathode] = None,
     -------
     >>> chs = channels_from_edges([(2000, 4000), (4000, 8000), (8000, 20000)])
     """
-    cathode = cathode or Photocathode()
+    # Pass cathode=None explicitly for a pure band study with no detector
+    # weighting -- useful above ~10 keV, where the CsI QE model rolls off
+    # hard and would otherwise hide the signal you are trying to scope.
+    if cathode is _DEFAULT_CATHODE:
+        cathode = Photocathode()
     out: Dict[str, Channel] = {}
     for lo, hi in bands:
         name = f"{lo / 1000:.3g}-{hi / 1000:.3g}keV"

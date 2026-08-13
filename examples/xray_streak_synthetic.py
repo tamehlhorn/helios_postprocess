@@ -34,6 +34,7 @@ from matplotlib.colors import LogNorm
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
+from helios_postprocess.xray.response import _DEFAULT_CATHODE
 from helios_postprocess.xray import (StreakConfig, build_radiance_cube,
                                      make_imaging_streak, make_spectral_streak,
                                      default_channels, channels_from_edges,
@@ -206,6 +207,14 @@ def main() -> int:
                          "4000,8000 8000,20000. Default channels are cut for "
                          "a softer OMEGA-class spectrum; check with "
                          "examples/xray_emission_provenance.py first.")
+    ap.add_argument("--e-range", nargs=2, type=float, default=None,
+                    metavar=("E_MIN_EV", "E_MAX_EV"),
+                    help="photon energy grid range (default 200-15000 eV, "
+                         "auto-expanded to cover --bands)")
+    ap.add_argument("--no-cathode", action="store_true",
+                    help="omit photocathode QE from the channel response; "
+                         "use for pure band studies above ~10 keV where the "
+                         "QE model rolls off and hides the signal")
     ap.add_argument("--rho-floor", type=float, default=None,
                     metavar="G_PER_CC",
                     help="treat zones below this density as non-emitting; "
@@ -247,8 +256,26 @@ def main() -> int:
         else:
             log.warning("[xray] --capsule-only requested but region info absent")
 
+    band_edges = None
+    if args.bands:
+        band_edges = [tuple(float(x) for x in b.split(",")) for b in args.bands]
+
+    e_min, e_max = (args.e_range if args.e_range else (200.0, 15000.0))
+    if band_edges:
+        lo = min(b[0] for b in band_edges)
+        hi = max(b[1] for b in band_edges)
+        # A band outside the grid would silently integrate to zero, so widen
+        # the grid to cover it rather than returning an empty channel.
+        if lo < e_min or hi > e_max:
+            new_min, new_max = min(e_min, lo * 0.9), max(e_max, hi * 1.05)
+            log.warning(f"[xray] widening energy grid "
+                        f"{e_min:.0f}-{e_max:.0f} -> "
+                        f"{new_min:.0f}-{new_max:.0f} eV to cover --bands")
+            e_min, e_max = new_min, new_max
+
     t0, t1 = (args.window if args.window else (None, None))
     cfg = StreakConfig(t_start_ns=t0, t_stop_ns=t1,
+                       E_min_eV=e_min, E_max_eV=e_max,
                        n_time=args.n_time, n_impact=args.n_impact,
                        n_energy=args.n_energy,
                        time_resolution_ps=args.time_res_ps,
@@ -259,10 +286,11 @@ def main() -> int:
     log.info("[xray] building radiance cube ...")
     cube = build_radiance_cube(data, cfg)
 
-    if args.bands:
-        edges = [tuple(float(x) for x in b.split(",")) for b in args.bands]
-        channels = channels_from_edges(edges)
-        log.info(f"[xray] channels: {list(channels)}")
+    if band_edges:
+        channels = channels_from_edges(
+            band_edges, cathode=None if args.no_cathode else _DEFAULT_CATHODE)
+        log.info(f"[xray] channels: {list(channels)}"
+                 f"{' (no cathode)' if args.no_cathode else ''}")
     else:
         channels = default_channels()
     imgs = {k: make_imaging_streak(cube, ch, cfg) for k, ch in channels.items()}
