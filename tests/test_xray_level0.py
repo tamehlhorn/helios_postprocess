@@ -373,3 +373,47 @@ def test_rho_floor_propagates_through_config(mock):
     cube = build_radiance_cube(mock, cfg, verbose=False)
     assert cube.meta["rho_floor_g_cc"] == cfg.rho_floor_g_cc
     assert np.all(np.isfinite(cube.I))
+
+
+def test_impact_grid_is_dense_at_center():
+    """The stretch must concentrate samples near p = 0, not near r_max."""
+    p = make_impact_grid(1.0, 64)
+    d = np.diff(p)
+    assert d[0] < d[-1]
+    assert np.all(d > 0)
+    assert p[0] == 0.0 and np.isclose(p[-1], 1.0)
+
+
+def test_rmax_bounded_by_emission_not_mesh():
+    """
+    A tenuous halo far outside the emitting region must not set the impact
+    grid extent -- otherwise the whole grid is spent on vacuum and the
+    extracted flash radius quantizes onto grid nodes.
+    """
+    from helios_postprocess.xray import StreakConfig, build_radiance_cube
+
+    class HaloMock:
+        def __init__(self):
+            n_core, n_halo = 60, 20
+            rb = np.concatenate([np.linspace(0.0, 0.02, n_core + 1),
+                                 np.linspace(0.02, 2.0, n_halo + 1)[1:]])
+            self.time = np.array([0.0, 1.0])
+            self.zone_boundaries = np.tile(rb, (2, 1))
+            rho = np.concatenate([np.full(n_core, 5.0),
+                                  np.full(n_halo, 1.0e-9)])
+            Te = np.concatenate([np.full(n_core, 2.0e3),
+                                 np.full(n_halo, 2.0e3)])
+            zbar = np.full(n_core + n_halo, 2.0)
+            ni = rho / (2.5 * 1.6726e-24)
+            self.mass_density = np.tile(rho, (2, 1))
+            self.elec_temperature = np.tile(Te, (2, 1))
+            self.ion_temperature = self.elec_temperature
+            self.ion_density = np.tile(ni, (2, 1))
+            self.electron_density = np.tile(ni * zbar, (2, 1))
+            self.mean_charge = np.tile(zbar, (2, 1))
+
+    cfg = StreakConfig(n_time=20, n_impact=64, n_energy=12)
+    cube = build_radiance_cube(HaloMock(), cfg, verbose=False)
+    # Emission is confined inside 0.02 cm; the mesh runs to 2.0 cm.
+    assert cube.p_cm[-1] < 0.1, f"r_max ran away to {cube.p_cm[-1]} cm"
+    assert cube.p_cm[-1] > 0.015

@@ -215,6 +215,10 @@ def main() -> int:
                     help="omit photocathode QE from the channel response; "
                          "use for pure band studies above ~10 keV where the "
                          "QE model rolls off and hides the signal")
+    ap.add_argument("--r-max-um", type=float, default=None,
+                    help="outer extent of the impact-parameter grid. Default "
+                         "is bounded by where the emission is, not by the "
+                         "mesh outer boundary.")
     ap.add_argument("--rho-floor", type=float, default=None,
                     metavar="G_PER_CC",
                     help="treat zones below this density as non-emitting; "
@@ -281,7 +285,9 @@ def main() -> int:
                        time_resolution_ps=args.time_res_ps,
                        optically_thin=args.thin,
                        zone_slice=zslice,
-                       rho_floor_g_cc=args.rho_floor)
+                       rho_floor_g_cc=args.rho_floor,
+                       r_max_cm=(args.r_max_um * 1e-4
+                                 if args.r_max_um else None))
 
     log.info("[xray] building radiance cube ...")
     cube = build_radiance_cube(data, cfg)

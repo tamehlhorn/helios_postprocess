@@ -95,6 +95,61 @@ class StreakConfig:
     rho_floor_g_cc: Optional[float] = None
 
 
+def _emission_bounded_rmax(data, sel, cfg, enclose: float = 0.99,
+                           margin: float = 2.0) -> float:
+    """
+    Choose the impact-parameter extent from where the light actually is.
+
+    Using the mesh outer boundary is the obvious choice and the wrong one: a
+    tenuous corona can sit at tens of mm while every emitting zone is inside
+    a few hundred um, which spends the entire impact grid on vacuum and
+    quantizes the extracted flash radius onto grid nodes.
+
+    The bound is the largest radius, over the sweep window, enclosing
+    ``enclose`` of a bremsstrahlung-like emission proxy (rho^2 sqrt(Te) dV),
+    times ``margin``.
+    """
+    rho = np.asarray(data.mass_density, float)
+    rb = np.asarray(data.zone_boundaries, float)
+    Te = np.asarray(getattr(data, "elec_temperature",
+                            data.ion_temperature), float)
+    vol = (4.0 / 3.0) * np.pi * (rb[:, 1:] ** 3 - rb[:, :-1] ** 3)
+
+    sl = cfg.zone_slice if cfg.zone_slice is not None else slice(None)
+    stop = (len(rb[0]) - 1 if cfg.zone_slice is None
+            or cfg.zone_slice.stop is None else cfg.zone_slice.stop)
+
+    best = 0.0
+    step = max(1, sel.size // 60)
+    for it in sel[::step]:
+        w = (rho[it, sl] ** 2) * np.sqrt(np.maximum(Te[it, sl], 1e-3)) * vol[it, sl]
+        tot = w.sum()
+        if tot <= 0:
+            continue
+        c = np.cumsum(w) / tot
+        k = int(np.searchsorted(c, enclose))
+        k = min(k, w.size - 1)
+        best = max(best, float(rb[it, sl.start or 0:stop + 1][k + 1]))
+
+    hard_cap = float(rb[sel[0], stop])
+    if best <= 0.0:
+        logger.warning("  [xray] emission-bounded r_max found no emission; "
+                       "falling back to the mesh outer boundary. Set "
+                       "r_max_cm / --r-max-um explicitly.")
+        return hard_cap
+
+    chosen = min(best * margin, hard_cap)
+    if chosen >= 0.99 * hard_cap:
+        logger.warning(
+            f"  [xray] emission-bounded r_max hit the mesh outer boundary "
+            f"({hard_cap * 1e4:.0f} um). Either the corona genuinely emits "
+            f"out there, or the {enclose:.0%} enclosure tail is being set by "
+            f"a tenuous halo. Impact-grid resolution on the capsule will be "
+            f"poor -- set --r-max-um explicitly (a few times the largest "
+            f"emission-edge radius in the window).")
+    return chosen
+
+
 @dataclass
 class RadianceCube:
     """
@@ -153,12 +208,7 @@ def build_radiance_cube(data, cfg: StreakConfig,
 
     r_max = cfg.r_max_cm
     if r_max is None:
-        rb0 = np.asarray(data.zone_boundaries[sel[0]], float)
-        if cfg.zone_slice is not None:
-            stop = len(rb0) - 1 if cfg.zone_slice.stop is None else cfg.zone_slice.stop
-            r_max = float(rb0[stop])
-        else:
-            r_max = float(rb0[-1])
+        r_max = _emission_bounded_rmax(data, sel, cfg)
     p = make_impact_grid(r_max, cfg.n_impact)
 
     n_t, n_p, n_E = sel.size, p.size, E.size
@@ -178,9 +228,16 @@ def build_radiance_cube(data, cfg: StreakConfig,
         if verbose and (k % max(1, n_t // 10) == 0):
             logger.info(f"  [xray] {k + 1}/{n_t}  t = {t[it]:.3f} ns")
 
+    # Effective spatial sampling near the object, which is what limits the
+    # extracted flash radius and edge trajectory.
+    dp_min = float(np.min(np.diff(p))) if p.size > 1 else float("nan")
+    dp_at_half = float(np.diff(p)[max(0, p.size // 2 - 1)]) if p.size > 2 else np.nan
+
     meta = dict(optically_thin=cfg.optically_thin,
                 rho_floor_g_cc=cfg.rho_floor_g_cc,
                 r_max_cm=r_max,
+                dp_min_um=dp_min * 1e4,
+                dp_mid_um=dp_at_half * 1e4,
                 zone_slice=str(cfg.zone_slice),
                 n_helios_steps=int(n_t))
 
@@ -188,6 +245,11 @@ def build_radiance_cube(data, cfg: StreakConfig,
     # cadence.  If the EXODUS output is coarser than the requested IRF the
     # temporal resolution is set by the simulation output interval, not by the
     # instrument, and any FWHM or bang-time claim inherits that limit.
+    if cfg.r_max_cm is None:
+        logger.info(f"  [xray] impact grid bounded by emission: "
+                    f"r_max = {r_max * 1e4:.0f} um, spacing "
+                    f"{dp_min * 1e4:.2f}-{dp_at_half * 1e4:.1f} um")
+
     if n_t > 1:
         dt_ps = float(np.median(np.diff(t[sel]))) * 1.0e3
         meta["median_dump_dt_ps"] = dt_ps

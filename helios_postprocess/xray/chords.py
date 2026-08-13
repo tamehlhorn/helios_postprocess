@@ -59,18 +59,25 @@ class ChordResult:
 
 
 def make_impact_grid(r_max: float, n_p: int = 128,
-                     oversample_limb: bool = True) -> np.ndarray:
+                     concentrate_center: bool = True) -> np.ndarray:
     """
     Impact-parameter grid from 0 to ``r_max``.
 
-    The emission profile of an imploding capsule is limb-brightened and has a
-    sharp edge at the ablation front, so a uniform grid wastes samples in the
-    interior and under-resolves the very feature the streak camera measures.
-    ``oversample_limb`` bunches points toward large p with a sqrt stretch.
+    With ``concentrate_center`` the stretch ``u -> 1 - sqrt(1 - u^2)`` places
+    points densely near p = 0 and sparsely near p = r_max, which is what an
+    imploding capsule needs: the object shrinks toward the axis while the
+    mesh outer boundary stays far away.
+
+    CAUTION: the resolution near the object scales with ``r_max``. If
+    ``r_max`` is set by a tenuous corona at tens of mm while the emitting
+    region is a few hundred um, most samples land on empty space and the
+    extracted flash radius quantizes onto grid nodes. Bound ``r_max`` to the
+    emitting region -- ``build_radiance_cube`` does this automatically when
+    ``StreakConfig.r_max_cm`` is not given.
     """
     u = np.linspace(0.0, 1.0, int(n_p))
-    if oversample_limb:
-        u = 1.0 - np.sqrt(1.0 - u ** 2)      # dense near u -> 1
+    if concentrate_center:
+        u = 1.0 - np.sqrt(1.0 - u ** 2)      # dense near u -> 0
         u = u / u[-1]
     return u * float(r_max)
 
