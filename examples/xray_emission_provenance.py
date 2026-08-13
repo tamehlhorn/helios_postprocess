@@ -73,7 +73,8 @@ def main() -> int:
 
     from helios_postprocess.core import HeliosRun
     from helios_postprocess.data_builder import build_run_data
-    from helios_postprocess.xray import build_emissivity, resolve_Te
+    from helios_postprocess.xray import (build_emissivity, resolve_Te,
+                                         integrate_formal, make_impact_grid)
 
     exo = _find_exo(Path(args.base_path).expanduser())
     run = HeliosRun(str(exo))
@@ -201,12 +202,63 @@ def main() -> int:
         print(" -> Outer zones are not driving the spectrum. The band is set")
         print("    by the bulk of the capsule.")
 
+    # ------------------------------------------- emitted vs emergent spectrum
+    _hdr("EMITTED vs EMERGENT SPECTRUM (self-absorption)")
+    print(" The zone-by-zone decomposition above is optically thin: it answers")
+    print(" WHICH ZONES MAKE THE LIGHT. It is not what the camera records.")
+    print(" Photons still have to escape, and self-absorption is strongly")
+    print(" energy-dependent, so the emergent spectrum can be much harder than")
+    print(" the emitted one. Channel bands must be cut on the EMERGENT")
+    print(" spectrum.\n")
+
+    cube_abs = build_emissivity(data, it, E, zone_slice=zslice,
+                                include_absorption=True)
+    p_grid = make_impact_grid(cube_abs.r_bnd[-1], 96)
+    res = integrate_formal(cube_abs, p_grid)
+    wgt = 2.0 * np.pi * p_grid
+    P_out = 4.0 * np.pi * np.trapezoid(res.I * wgt[:, None], p_grid, axis=0)
+    P_thin = 4.0 * np.pi * np.trapezoid(res.I_thin * wgt[:, None], p_grid,
+                                        axis=0)
+
+    e10, e50, e90 = pct(P_out)
+    tot_thin = np.trapezoid(P_thin, E)
+    tot_out = np.trapezoid(P_out, E)
+    escape = tot_out / tot_thin if tot_thin > 0 else np.nan
+
+    print(f" emitted  (thin)    : 10/50/90 = {f10:7.0f} / {f50:7.0f} / "
+          f"{f90:7.0f} eV")
+    print(f" emergent (absorbed): 10/50/90 = {e10:7.0f} / {e50:7.0f} / "
+          f"{e90:7.0f} eV")
+    print(f" band-integrated escape fraction : {escape * 100:.2f}%")
+    print(f" median hardening factor         : "
+          f"{(e50 / f50) if f50 > 0 else float('nan'):.2f}x")
+
+    with np.errstate(divide="ignore", invalid="ignore"):
+        f_esc = np.where(P_thin > 0, P_out / P_thin, np.nan)
+    for probe in (500.0, 1000.0, 3000.0, 6000.0, 12000.0):
+        if E[0] <= probe <= E[-1]:
+            print(f"   escape fraction at {probe:6.0f} eV : "
+                  f"{np.interp(probe, E, f_esc) * 100:6.2f}%")
+
+    if escape < 0.5 or (e50 / max(f50, 1.0)) > 1.5:
+        print("\n -> SELF-ABSORPTION IS LOAD-BEARING. The escaping spectrum is")
+        print("    materially harder than the emitted one, so SPECT3D Level 1")
+        print("    (real opacities) can move the answer, and the optically-thin")
+        print("    rung is diagnostic only. Note the volume fraction of (p,E)")
+        print("    with tau > 0.3 UNDERSTATES this: what matters is how much")
+        print("    POWER sits where tau is large, not how much (p,E) space.")
+    else:
+        print("\n -> Self-absorption is a modest correction at this time.")
+
     # ------------------------------------------------------- band suggestion
-    _hdr("BAND SUGGESTION")
+    _hdr("BAND SUGGESTION (cut on the emergent spectrum)")
     use_trim = massless_and_bright or shift > 10.0
-    lo, mid, hi = (t10, t50, t90) if use_trim else (f10, f50, f90)
+    lo, mid, hi = (e10, e50, e90)
+    if use_trim:
+        print(" note: outer-zone artifact suspected; bands below still use the")
+        print("       emergent spectrum, but re-run with --zone-stop first.")
     e1, e2, e3, e4 = lo * 0.8, mid * 0.7, mid * 1.6, hi * 1.3
-    print(f" 90% of the emitted power lies between {lo:.0f} and {hi:.0f} eV.")
+    print(f" 90% of the EMERGENT power lies between {lo:.0f} and {hi:.0f} eV.")
     print(" Three channels spanning that range:")
     print(f"   --bands {e1:.0f},{e2:.0f} {e2:.0f},{e3:.0f} {e3:.0f},{e4:.0f}")
     print("\n The default channels (0.8-2 / 2-4 / >4 keV) are cut for a")

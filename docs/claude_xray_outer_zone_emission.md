@@ -109,6 +109,20 @@ free 82%, published 97%). If the outer zones do prove to carry the hard tail,
 this diagnostic inherits that sensitivity, and any hard-channel result would
 have to be quoted against a stated boundary condition.
 
+## Resolution on the 4 MJ Vulcan run
+
+Provenance at peak emission (16.80 ns) closed the question: the outermost
+five zones carry **0.000% of the band-integrated power** against 0.223% of
+the mass, and trimming them shifts the 90th percentile by **0.00%**. Those
+zones sit at r = 15-21 mm with rho = 1e-6 to 1e-7 g/cm3 and Te = 1784 eV —
+tenuous, but nowhere near hot enough for the exponential to overcome the n^2
+penalty at that density. No artifact. No floor needed on this run.
+
+The 80 keV reading that raised the alarm is the DT gas region (power-weighted
+<Te> = 39.8 keV), which is the hot spot, not the boundary — dense (22.9
+g/cm3) and physical. The alarm was raised on the right criterion and answered
+the right way.
+
 ## Next step
 
 Run the provenance script on the Vulcan target and read the mass share, not
