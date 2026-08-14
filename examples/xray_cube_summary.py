@@ -171,6 +171,53 @@ def main() -> int:
             row += f"{v * 1e4:13.1f}" if np.isfinite(v) else f"{'--':>13s}"
             print(row)
 
+    enc50 = {n: encircled_radius(img, 0.5) for n, img in imgs.items()}
+    enc90 = {n: encircled_radius(img, 0.9) for n, img in imgs.items()}
+
+    # ------------------------------------------------------ turnaround times
+    if "r_peak_rho_cm" in d:
+        _hdr("TURNAROUND TIMES (minimum radius, full time resolution)")
+        print(" Sampled over every step, not the coarse probe grid above.")
+        print(" A spread between the inner and outer markers means the shell")
+        print(" is decompressing on the outside while the core still")
+        print(" converges.\n")
+
+        rows = []
+        r_reg = d["r_region_cm"] if "r_region_cm" in d else None
+        rnames = ([str(x) for x in d["region_names"]]
+                  if "region_names" in d else None)
+        if r_reg is not None:
+            for k in range(r_reg.shape[1]):
+                lbl = (rnames[k] if rnames and k < len(rnames) else f"region {k}")
+                col = r_reg[:, k]
+                j = int(np.argmin(col))
+                rows.append((f"{lbl} outer", cube.t_ns[j], col[j] * 1e4))
+
+        jp = int(np.argmin(d["r_peak_rho_cm"]))
+        rows.append(("peak-rho radius", cube.t_ns[jp],
+                     d["r_peak_rho_cm"][jp] * 1e4))
+
+        for n, img in imgs.items():
+            a = traj[n]
+            good = np.isfinite(a)
+            if good.any():
+                j = int(np.nanargmin(np.where(good, a, np.inf)))
+                rows.append((f"edge {n}", img.t_ns[j], a[j] * 1e4))
+            e = enc50[n]
+            goode = np.isfinite(e)
+            if goode.any():
+                j = int(np.nanargmin(np.where(goode, e, np.inf)))
+                rows.append((f"R50 {n}", img.t_ns[j], e[j] * 1e4))
+
+        print(f" {'marker':>24s} {'t_min (ns)':>12s} {'r_min (um)':>12s}")
+        for lbl, tm, rm in rows:
+            print(f" {lbl:>24s} {tm:12.4f} {rm:12.1f}")
+
+        print("\n CAVEAT: the peak-rho radius is argmax over zones, not a")
+        print(" Lagrangian marker. It can jump discontinuously when the")
+        print(" density maximum moves between layers, so a region interface")
+        print(" is the reliable material reference.")
+
     # ------------------------------------------- threshold vs encircled radius
     _hdr("RADIUS DEFINITION: 50% THRESHOLD vs ENCIRCLED ENERGY (um)")
     print(" A threshold edge takes the outermost 50%-of-peak crossing and is")
@@ -179,8 +226,6 @@ def main() -> int:
     print(" core, and any quoted radius must name its definition.\n")
     print(f" {'t (ns)':>9s}" + "".join(f"{n[:6]+' thr':>13s}{n[:6]+' R50':>13s}"
                                         f"{n[:6]+' R90':>13s}" for n in imgs))
-    enc50 = {n: encircled_radius(img, 0.5) for n, img in imgs.items()}
-    enc90 = {n: encircled_radius(img, 0.9) for n, img in imgs.items()}
     for tp in probe_t:
         row = f" {tp:9.4f}"
         for n, img in imgs.items():
