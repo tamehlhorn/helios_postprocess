@@ -307,10 +307,39 @@ def main() -> int:
     make_report(cube, imgs, spec, stem, pdf_path)
     log.info(f"[xray] wrote {pdf_path}")
 
+    # Hydro reference radii on the same time base as the cube.  Without
+    # these the emission edge cannot be told apart from a material surface:
+    # an emissivity contour can sweep outward through stationary material
+    # just as easily as the material can move.
+    extras = {}
+    t_all = np.asarray(data.time, float)
+    sel = np.searchsorted(t_all, cube.t_ns)
+    sel = np.clip(sel, 0, t_all.size - 1)
+    rb_all = np.asarray(data.zone_boundaries, float)
+    rho_all = np.asarray(data.mass_density, float)
+
+    zlim = zslice.stop if zslice is not None else rho_all.shape[1]
+    extras["r_peak_rho_cm"] = np.array(
+        [0.5 * (rb_all[i, :-1] + rb_all[i, 1:])[:zlim][
+            int(np.argmax(rho_all[i, :zlim]))] for i in sel])
+
+    rii = getattr(data, "region_interfaces_indices", None)
+    if rii is not None:
+        ri = np.asarray(rii).astype(int)
+        extras["r_region_cm"] = np.array(
+            [[rb_all[i, min(int(b), rb_all.shape[1] - 1)] for b in ri[i]]
+             for i in sel])
+        names = getattr(data, "region_names", None)
+        if names:
+            # Fixed-width unicode, not dtype=object: object arrays require
+            # allow_pickle on load, which we do not want to turn on.
+            extras["region_names"] = np.array([str(n) for n in names],
+                                              dtype="U64")
+
     npz_path = outdir / f"{stem}_xray_cube_level0.npz"
     np.savez_compressed(npz_path, t_ns=cube.t_ns, p_cm=cube.p_cm,
                         E_eV=cube.E_eV, I=cube.I, tau=cube.tau,
-                        I_thin=cube.I_thin)
+                        I_thin=cube.I_thin, **extras)
     log.info(f"[xray] wrote {npz_path}")
     return 0
 

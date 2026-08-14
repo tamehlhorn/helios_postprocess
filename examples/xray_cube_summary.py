@@ -128,15 +128,48 @@ def main() -> int:
     names = list(imgs)
     if len(names) >= 2:
         a, b = traj[names[0]], traj[names[-1]]
-        good = np.isfinite(a) & np.isfinite(b)
-        if good.any():
-            diff = (a[good] - b[good]) * 1e4
-            print(f"\n {names[0]} minus {names[-1]}: "
-                  f"mean {diff.mean():+.1f} um, max {diff.max():+.1f} um")
+        # Quote the offset AT BANG TIME, not averaged over the window: early
+        # in the sweep the profile is an extended corona rather than a disk,
+        # and averaging across that regime change produces a number that
+        # describes neither.
+        img0 = imgs[names[0]]
+        jb = int(np.argmin(np.abs(img0.t_ns - metrics[names[0]].bang_time_ns)))
+        if np.isfinite(a[jb]) and np.isfinite(b[jb]):
+            print(f"\n at bang time, {names[0]} minus {names[-1]}: "
+                  f"{(a[jb] - b[jb]) * 1e4:+.1f} um")
             print(" -> A positive offset means the opaque channel's edge sits")
-            print("    OUTSIDE the transparent channel's. That is the tau = 1")
-            print("    photosphere standing off the emitting fuel, not a")
-            print("    disagreement about where the shell is.")
+            print("    OUTSIDE the transparent channel's: the tau = 1 surface")
+            print("    standing off the emitting fuel.")
+
+    # -------------------------------------------------------- hydro overlay
+    if "r_peak_rho_cm" in d:
+        _hdr("EMISSION EDGE vs HYDRO RADII (um)")
+        print(" An emission edge is not a material surface. An emissivity")
+        print(" contour can sweep outward through stationary material as")
+        print(" easily as the material can move, so the edge must be read")
+        print(" against Lagrangian radii before it is called a trajectory.\n")
+        r_pk = d["r_peak_rho_cm"]
+        r_reg = d["r_region_cm"] if "r_region_cm" in d else None
+        rnames = ([str(x) for x in d["region_names"]]
+                  if "region_names" in d else None)
+        hdr = f" {'t (ns)':>9s} {'peak rho':>10s}"
+        if r_reg is not None:
+            for k in range(r_reg.shape[1]):
+                lbl = (rnames[k][:9] if rnames and k < len(rnames)
+                       else f"reg{k}")
+                hdr += f"{lbl:>11s}"
+        hdr += f"{'edge ' + names[0][:6]:>13s}"
+        print(hdr)
+        for tp in probe_t:
+            i = int(np.argmin(np.abs(cube.t_ns - tp)))
+            row = f" {tp:9.4f} {r_pk[i] * 1e4:10.1f}"
+            if r_reg is not None:
+                for k in range(r_reg.shape[1]):
+                    row += f"{r_reg[i, k] * 1e4:11.1f}"
+            j = int(np.argmin(np.abs(imgs[names[0]].t_ns - tp)))
+            v = traj[names[0]][j]
+            row += f"{v * 1e4:13.1f}" if np.isfinite(v) else f"{'--':>13s}"
+            print(row)
 
     # ------------------------------------------- threshold vs encircled radius
     _hdr("RADIUS DEFINITION: 50% THRESHOLD vs ENCIRCLED ENERGY (um)")
