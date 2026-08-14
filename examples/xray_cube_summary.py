@@ -61,6 +61,10 @@ def main() -> int:
                     metavar="T_NS",
                     help="dump normalized radial profiles at these times "
                          "(no values = 5 spread across the window)")
+    ap.add_argument("--shell-interfaces", nargs=2, type=int, default=(0, 1),
+                    metavar=("I_INNER", "I_OUTER"),
+                    help="region-interface indices whose separation is "
+                         "reported as shell thickness (default 0 1)")
     ap.add_argument("--cathode", action="store_true",
                     help="include photocathode QE (default: bare bands)")
     args = ap.parse_args()
@@ -212,6 +216,34 @@ def main() -> int:
         print(f" {'marker':>24s} {'t_min (ns)':>12s} {'r_min (um)':>12s}")
         for lbl, tm, rm in rows:
             print(f" {lbl:>24s} {tm:12.4f} {rm:12.1f}")
+
+        # ---- shell thickness between two material interfaces ----
+        if r_reg is not None and r_reg.shape[1] >= 2:
+            i_in = int(args.shell_interfaces[0])
+            i_out = int(args.shell_interfaces[1])
+            if 0 <= i_in < r_reg.shape[1] and 0 <= i_out < r_reg.shape[1]:
+                lbl_in = (rnames[i_in] if rnames and i_in < len(rnames)
+                          else f"region {i_in}")
+                lbl_out = (rnames[i_out] if rnames and i_out < len(rnames)
+                           else f"region {i_out}")
+                thick = r_reg[:, i_out] - r_reg[:, i_in]
+                jt = int(np.argmin(thick))
+                j_in = int(np.argmin(r_reg[:, i_in]))
+                print(f"\n SHELL THICKNESS  ({lbl_out} outer minus "
+                      f"{lbl_in} outer)")
+                print(f"   minimum          : {thick[jt] * 1e4:8.1f} um "
+                      f"at t = {cube.t_ns[jt]:.4f} ns")
+                print(f"   at inner turnaround: {thick[j_in] * 1e4:8.1f} um "
+                      f"at t = {cube.t_ns[j_in]:.4f} ns")
+                growth = (thick[j_in] / thick[jt]) if thick[jt] > 0 else np.nan
+                lead = (cube.t_ns[j_in] - cube.t_ns[jt]) * 1e3
+                print(f"   growth over that interval: {growth:.2f}x "
+                      f"in {lead:.1f} ps")
+                if lead > 20.0 and growth > 1.3:
+                    print("   -> The shell is decompressing while the core is")
+                    print("      still converging. The outer surface turns")
+                    print("      around first and the layer thickens through")
+                    print("      final deceleration.")
 
         print("\n CAVEAT: the peak-rho radius is argmax over zones, not a")
         print(" Lagrangian marker. It can jump discontinuously when the")
