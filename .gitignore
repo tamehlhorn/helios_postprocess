@@ -28,3 +28,4 @@ comparisons/hdd_design_comparison.png
 comparisons/pdd_design_comparison.png
 notebooks/hdd_scan_results.csv
 notebooks/pdd_scan_results.csv
+.DS_Store
