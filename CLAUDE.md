@@ -3246,3 +3246,11 @@ calibration numbers as "fixed":
 - `examples/apply_geomcorr_to_rhw.py` is text-format only. Needs a
   JSON sibling when a 11.1.0 anchor actually motivates a geomcorr
   round-trip. Park until then.
+## Paths & workflow (learned this session)
+- BOTH repos are under ~/Sims/: working repo ~/Sims/apbar-icf,
+  client clone ~/Sims/tachyon-all. Always `pwd` after cd before cp/branch.
+- FLUKA at ~/Codes/fluka4-5.2. rfluka needs ABSOLUTE deck paths.
+- tachyon-all: I own physics/apbar-icf-mecs/ — can commit there directly,
+  no PR review needed. Never touch files outside that subfolder; pull before push.
+- Reference PDFs (references/*.pdf) are copyrighted: PRIVATE repo only.
+  Share references.md to tachyon-all, never the PDFs.
